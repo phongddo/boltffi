@@ -1,7 +1,8 @@
 [package]
 name = "mobiFFI_core"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+authors = ["Ali A. Hilal <me@alihilal.com>"]
 
 [lib]
 crate-type = ["cdylib", "staticlib", "rlib"]
