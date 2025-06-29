@@ -2,7 +2,7 @@
 
 pub mod types;
 
-pub use types::{FfiBuf, FfiSlice};
+pub use types::{FfiBuf, FfiSlice, FfiString};
 
 pub const VERSION_MAJOR: u32 = 0;
 pub const VERSION_MINOR: u32 = 1;
