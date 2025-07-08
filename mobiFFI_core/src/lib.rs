@@ -1,8 +1,10 @@
 #![allow(unused)]
 
+pub mod safety;
 pub mod status;
 pub mod types;
 
+pub use safety::catch_ffi_panic;
 pub use status::FfiStatus;
 pub use types::{FfiBuf, FfiSlice, FfiString};
 
