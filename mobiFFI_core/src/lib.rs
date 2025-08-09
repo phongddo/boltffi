@@ -7,7 +7,7 @@ pub mod types;
 
 pub use handle::HandleBox;
 pub use safety::catch_ffi_panic;
-pub use status::FfiStatus;
+pub use status::{clear_last_error, set_last_error, take_last_error, FfiStatus};
 pub use types::{FfiBuf, FfiOption, FfiSlice, FfiString};
 
 unsafe fn read_input_str<'a>(ptr: *const u8, len: usize) -> Option<&'a str> {
@@ -48,18 +48,46 @@ pub extern "C" fn mffi_free_string(string: FfiString) {
 }
 
 #[unsafe(no_mangle)]
+pub extern "C" fn mffi_last_error_message(out: *mut FfiString) -> FfiStatus {
+    if out.is_null() {
+        return FfiStatus::NULL_POINTER;
+    }
+    
+    match take_last_error() {
+        Some(message) => {
+            unsafe { *out = FfiString::from(message) };
+            FfiStatus::OK
+        }
+        None => {
+            unsafe { *out = FfiString::from("") };
+            FfiStatus::OK
+        }
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_clear_last_error() {
+    clear_last_error();
+}
+
+fn fail_with_error(status: FfiStatus, message: impl Into<String>) -> FfiStatus {
+    set_last_error(message);
+    status
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn mffi_greeting(
     name_ptr: *const u8,
     name_len: usize,
     out: *mut FfiString,
 ) -> FfiStatus {
     if out.is_null() {
-        return FfiStatus::NULL_POINTER;
+        return fail_with_error(FfiStatus::NULL_POINTER, "output pointer is null");
     }
 
     let name = match read_input_str(name_ptr, name_len) {
         Some(name) => name,
-        None => return FfiStatus::INVALID_ARG,
+        None => return fail_with_error(FfiStatus::INVALID_ARG, "name is not valid UTF-8"),
     };
 
     let greeting = format!("Hello, {}!", name);
@@ -77,17 +105,17 @@ pub unsafe extern "C" fn mffi_concat(
     out: *mut FfiString,
 ) -> FfiStatus {
     if out.is_null() {
-        return FfiStatus::NULL_POINTER;
+        return fail_with_error(FfiStatus::NULL_POINTER, "output pointer is null");
     }
 
     let first = match read_input_str(first_ptr, first_len) {
         Some(string) => string,
-        None => return FfiStatus::INVALID_ARG,
+        None => return fail_with_error(FfiStatus::INVALID_ARG, "first string is not valid UTF-8"),
     };
 
     let second = match read_input_str(second_ptr, second_len) {
         Some(string) => string,
-        None => return FfiStatus::INVALID_ARG,
+        None => return fail_with_error(FfiStatus::INVALID_ARG, "second string is not valid UTF-8"),
     };
 
     let result = format!("{}{}", first, second);

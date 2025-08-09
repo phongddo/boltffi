@@ -174,4 +174,46 @@ if testConcat() {
     exit(1)
 }
 
+print("\n--- Testing error messages ---")
+
+func testErrorMessage() -> Bool {
+    var result = FfiString(ptr: nil, len: 0, cap: 0)
+    
+    let invalidUtf8: [UInt8] = [0xFF, 0xFE, 0x00]
+    let status = invalidUtf8.withUnsafeBufferPointer { ptr in
+        mffi_greeting(ptr.baseAddress, UInt(invalidUtf8.count), &result)
+    }
+    
+    guard status.code != 0 else {
+        print("FAILED: Expected error for invalid UTF-8")
+        return false
+    }
+    
+    print("Got expected error, status code: \(status.code)")
+    
+    var errorMsg = FfiString(ptr: nil, len: 0, cap: 0)
+    let msgStatus = mffi_last_error_message(&errorMsg)
+    
+    guard msgStatus.code == 0 else {
+        print("FAILED: Could not get error message")
+        return false
+    }
+    
+    let data = Data(bytes: errorMsg.ptr, count: Int(errorMsg.len))
+    let message = String(data: data, encoding: .utf8) ?? ""
+    
+    print("Error message: \(message)")
+    
+    mffi_free_string(errorMsg)
+    
+    return message.contains("UTF-8")
+}
+
+if testErrorMessage() {
+    print("SUCCESS: Error messages work!")
+} else {
+    print("FAILED: Error message test failed")
+    exit(1)
+}
+
 print("\n=== ALL TESTS PASSED ===")

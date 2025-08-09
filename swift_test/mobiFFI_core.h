@@ -35,6 +35,8 @@ typedef struct FfiStatus {
 #define FfiStatus_NULL_POINTER (FfiStatus){ .code = 1 }
 #define FfiStatus_BUFFER_TOO_SMALL (FfiStatus){ .code = 2 }
 #define FfiStatus_INVALID_ARG (FfiStatus){ .code = 3 }
+#define FfiStatus_CANCELLED (FfiStatus){ .code = 4 }
+#define FfiStatus_INTERNAL_ERROR (FfiStatus){ .code = 100 }
 
 typedef struct DataPoint {
   double x;
@@ -53,6 +55,10 @@ uint32_t mffi_version_patch(void);
 void mffi_free_buf_u8(struct FfiBuf_u8 buf);
 
 void mffi_free_string(struct FfiString string);
+
+struct FfiStatus mffi_last_error_message(struct FfiString *out);
+
+void mffi_clear_last_error(void);
 
 struct FfiStatus mffi_greeting(const uint8_t *name_ptr, uintptr_t name_len, struct FfiString *out);
 
