@@ -558,4 +558,51 @@ if isSuccess {
     exit(1)
 }
 
+print("\n--- Testing async with completion callback ---")
+
+import Dispatch
+
+class AsyncContext {
+    var completed = false
+    var status: Int32 = -1
+    var result: Int32 = 0
+    let semaphore = DispatchSemaphore(value: 0)
+}
+
+let asyncCtx = AsyncContext()
+let asyncCtxPtr = Unmanaged.passUnretained(asyncCtx).toOpaque()
+
+let asyncCallback: ComputeCallback = { userData, status, result in
+    guard let ptr = userData else { return }
+    let ctx = Unmanaged<AsyncContext>.fromOpaque(ptr).takeUnretainedValue()
+    ctx.status = status.code
+    ctx.result = result
+    ctx.completed = true
+    ctx.semaphore.signal()
+}
+
+let pending = mffi_compute_heavy_async(21, asyncCtxPtr, asyncCallback)
+print("Started async computation with pending handle: \(pending != nil)")
+
+let waitResult = asyncCtx.semaphore.wait(timeout: .now() + 5.0)
+if waitResult == .timedOut {
+    print("FAILED: Async operation timed out")
+    mffi_pending_cancel(pending)
+    mffi_pending_free(pending)
+    exit(1)
+}
+
+print("Async result: status=\(asyncCtx.status), result=\(asyncCtx.result)")
+
+if asyncCtx.status == 0 && asyncCtx.result == 42 {
+    print("SUCCESS: Async computation works! (21 * 2 = 42)")
+} else {
+    print("FAILED: Expected status=0, result=42")
+    mffi_pending_free(pending)
+    exit(1)
+}
+
+mffi_pending_free(pending)
+print("Freed pending handle")
+
 print("\n=== ALL TESTS PASSED ===")

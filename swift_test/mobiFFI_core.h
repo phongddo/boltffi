@@ -12,6 +12,8 @@
 
 #define VERSION_PATCH 0
 
+typedef struct PendingHandle PendingHandle;
+
 typedef struct FfiBuf_u8 {
   uint8_t *ptr;
   uintptr_t len;
@@ -34,6 +36,8 @@ typedef struct FfiStatus {
 #define FfiStatus_CANCELLED (FfiStatus){ .code = 4 }
 #define FfiStatus_INTERNAL_ERROR (FfiStatus){ .code = 100 }
 
+typedef void (*ComputeCallback)(void *user_data, struct FfiStatus status, int32_t result);
+
 #define PANIC_STATUS (FfiStatus){ .code = 10 }
 
 uint32_t mffi_version_major(void);
@@ -49,6 +53,14 @@ void mffi_free_string(struct FfiString string);
 struct FfiStatus mffi_last_error_message(struct FfiString *out);
 
 void mffi_clear_last_error(void);
+
+struct PendingHandle *mffi_compute_heavy_async(int32_t input,
+                                               void *user_data,
+                                               ComputeCallback callback);
+
+void mffi_pending_cancel(struct PendingHandle *handle);
+
+void mffi_pending_free(struct PendingHandle *handle);
 
 
 /* Macro-generated types and exports */

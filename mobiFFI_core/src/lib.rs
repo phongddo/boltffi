@@ -1,12 +1,14 @@
 #![allow(unused)]
 
 pub mod handle;
+pub mod pending;
 pub mod safety;
 pub mod status;
 pub mod types;
 
 pub use handle::HandleBox;
 pub use mobiFFI_macros::{FfiType, ffi_class, ffi_export};
+pub use pending::{CancellationToken, PendingHandle};
 pub use safety::catch_ffi_panic;
 pub use status::{FfiStatus, clear_last_error, set_last_error, take_last_error};
 pub use types::{FfiBuf, FfiOption, FfiSlice, FfiString};
@@ -279,4 +281,44 @@ pub fn process_value(value: i32) -> ApiResult {
 #[ffi_export]
 pub fn api_result_is_success(result: ApiResult) -> bool {
     matches!(result, ApiResult::Success)
+}
+
+pub fn compute_heavy(input: i32) -> i32 {
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    input * 2
+}
+
+type ComputeCallback = extern "C" fn(user_data: *mut core::ffi::c_void, status: FfiStatus, result: i32);
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_compute_heavy_async(
+    input: i32,
+    user_data: *mut core::ffi::c_void,
+    callback: ComputeCallback,
+) -> *mut PendingHandle {
+    let pending = Box::new(PendingHandle::new());
+    let token = pending.cancellation_token();
+    let pending_ptr = Box::into_raw(pending);
+
+    let user_data = user_data as usize;
+    std::thread::spawn(move || {
+        if token.is_cancelled() {
+            let cb_user_data = user_data as *mut core::ffi::c_void;
+            callback(cb_user_data, FfiStatus::CANCELLED, 0);
+            return;
+        }
+
+        let result = compute_heavy(input);
+
+        if token.is_cancelled() {
+            let cb_user_data = user_data as *mut core::ffi::c_void;
+            callback(cb_user_data, FfiStatus::CANCELLED, 0);
+            return;
+        }
+
+        let cb_user_data = user_data as *mut core::ffi::c_void;
+        callback(cb_user_data, FfiStatus::OK, result);
+    });
+
+    pending_ptr
 }
