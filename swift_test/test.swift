@@ -806,4 +806,107 @@ if let (status, result) = pollUntilReady(
     exit(1)
 }
 
+print("\n--- Testing streaming with ring buffer ---")
+
+let subscription = mffi_test_events_subscribe(64)
+print("Created subscription with capacity 64")
+
+var pushSuccessCount = 0
+for eventIndex in Int32(0)..<Int32(10) {
+    if mffi_test_events_push(subscription, eventIndex, Int64(eventIndex * 100)) {
+        pushSuccessCount += 1
+    }
+}
+print("Pushed \(pushSuccessCount) events")
+
+if pushSuccessCount != 10 {
+    print("FAILED: Expected to push 10 events")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+
+var eventBuffer = [TestEvent](repeating: TestEvent(eventId: 0, value: 0), count: 4)
+let batchCount1 = eventBuffer.withUnsafeMutableBufferPointer { buffer in
+    mffi_test_events_pop_batch(subscription, buffer.baseAddress, UInt(buffer.count))
+}
+print("Popped first batch: \(batchCount1) events")
+
+if batchCount1 != 4 {
+    print("FAILED: Expected to pop 4 events, got \(batchCount1)")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+
+var allCorrect = true
+for index in 0..<Int(batchCount1) {
+    let expected_id = Int32(index)
+    let expected_value = Int64(index * 100)
+    if eventBuffer[index].eventId != expected_id || eventBuffer[index].value != expected_value {
+        print("FAILED: Event \(index) mismatch: got id=\(eventBuffer[index].eventId), value=\(eventBuffer[index].value)")
+        allCorrect = false
+    }
+}
+
+if allCorrect {
+    print("SUCCESS: Ring buffer batch pop works with correct FIFO order!")
+} else {
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+
+let batchCount2 = eventBuffer.withUnsafeMutableBufferPointer { buffer in
+    mffi_test_events_pop_batch(subscription, buffer.baseAddress, UInt(buffer.count))
+}
+print("Popped second batch: \(batchCount2) events")
+
+let batchCount3 = eventBuffer.withUnsafeMutableBufferPointer { buffer in
+    mffi_test_events_pop_batch(subscription, buffer.baseAddress, UInt(buffer.count))
+}
+print("Popped third batch: \(batchCount3) events (drained all)")
+
+let waitResultTimeout = mffi_test_events_wait(subscription, 10)
+print("Wait with empty buffer (10ms timeout): \(waitResultTimeout) (0=Timeout)")
+
+if waitResultTimeout != 0 {
+    print("FAILED: Expected timeout (0), got \(waitResultTimeout)")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+print("SUCCESS: Wait timeout works!")
+
+mffi_test_events_push(subscription, 999, 9999)
+let waitResultAvailable = mffi_test_events_wait(subscription, 1000)
+print("Wait with events available: \(waitResultAvailable) (1=EventsAvailable)")
+
+if waitResultAvailable != 1 {
+    print("FAILED: Expected events available (1), got \(waitResultAvailable)")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+print("SUCCESS: Wait with events works!")
+
+mffi_test_events_unsubscribe(subscription)
+let pushAfterUnsubscribe = mffi_test_events_push(subscription, 1000, 10000)
+print("Push after unsubscribe: \(pushAfterUnsubscribe) (should be false)")
+
+if pushAfterUnsubscribe {
+    print("FAILED: Push should fail after unsubscribe")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+print("SUCCESS: Unsubscribe stops new pushes!")
+
+let waitAfterUnsubscribe = mffi_test_events_wait(subscription, 100)
+print("Wait after unsubscribe: \(waitAfterUnsubscribe) (-1=Unsubscribed)")
+
+if waitAfterUnsubscribe != -1 {
+    print("FAILED: Expected unsubscribed (-1), got \(waitAfterUnsubscribe)")
+    mffi_test_events_free(subscription)
+    exit(1)
+}
+print("SUCCESS: Wait returns unsubscribed after unsubscribe!")
+
+mffi_test_events_free(subscription)
+print("Freed subscription")
+
 print("\n=== ALL TESTS PASSED ===")

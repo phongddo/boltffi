@@ -2,17 +2,21 @@
 
 pub mod handle;
 pub mod pending;
+pub mod ringbuffer;
 pub mod rustfuture;
 pub mod safety;
 pub mod status;
+pub mod subscription;
 pub mod types;
 
 pub use handle::HandleBox;
 pub use mobiFFI_macros::{FfiType, ffi_class, ffi_export};
 pub use pending::{CancellationToken, PendingHandle};
+pub use ringbuffer::SpscRingBuffer;
 pub use rustfuture::{RustFuture, RustFutureContinuationCallback, RustFutureHandle, RustFuturePoll};
 pub use safety::catch_ffi_panic;
 pub use status::{FfiStatus, clear_last_error, set_last_error, take_last_error};
+pub use subscription::{EventSubscription, SubscriptionHandle, WaitResult};
 pub use types::{FfiBuf, FfiOption, FfiSlice, FfiString};
 
 #[unsafe(no_mangle)]
@@ -351,4 +355,51 @@ pub async fn async_fetch_numbers(id: i32) -> Result<Vec<i32>, &'static str> {
     }
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TestEvent {
+    pub event_id: i32,
+    pub value: i64,
+}
 
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_subscribe(capacity: usize) -> SubscriptionHandle {
+    subscription::subscription_new::<TestEvent>(capacity)
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_push(
+    handle: SubscriptionHandle,
+    event_id: i32,
+    value: i64,
+) -> bool {
+    let event = TestEvent { event_id, value };
+    unsafe { subscription::subscription_push(handle, event) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_pop_batch(
+    handle: SubscriptionHandle,
+    output_ptr: *mut TestEvent,
+    output_capacity: usize,
+) -> usize {
+    unsafe { subscription::subscription_pop_batch(handle, output_ptr, output_capacity) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_wait(
+    handle: SubscriptionHandle,
+    timeout_milliseconds: u32,
+) -> i32 {
+    unsafe { subscription::subscription_wait::<TestEvent>(handle, timeout_milliseconds) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_unsubscribe(handle: SubscriptionHandle) {
+    unsafe { subscription::subscription_unsubscribe::<TestEvent>(handle) }
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn mffi_test_events_free(handle: SubscriptionHandle) {
+    unsafe { subscription::subscription_free::<TestEvent>(handle) }
+}

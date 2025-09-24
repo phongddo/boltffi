@@ -75,6 +75,26 @@ struct FfiEnum {
     variants: Vec<EnumVariant>,
 }
 
+fn parse_discriminant_expr(expr: &syn::Expr) -> Option<i64> {
+    match expr {
+        syn::Expr::Lit(lit) => {
+            if let syn::Lit::Int(int_lit) = &lit.lit {
+                int_lit.base10_parse().ok()
+            } else {
+                None
+            }
+        }
+        syn::Expr::Unary(unary) => {
+            if matches!(unary.op, syn::UnOp::Neg(_)) {
+                parse_discriminant_expr(&unary.expr).map(|value| -value)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
 fn collect_repr_c_structs(src_dir: &PathBuf) -> Vec<FfiStruct> {
     let mut structs = Vec::new();
 
@@ -186,11 +206,7 @@ fn collect_ffi_enums(src_dir: &PathBuf) -> Vec<FfiEnum> {
 
                 for variant in &e.variants {
                     if let Some((_, expr)) = &variant.discriminant {
-                        if let syn::Expr::Lit(lit) = expr {
-                            if let syn::Lit::Int(int_lit) = &lit.lit {
-                                next_value = int_lit.base10_parse().unwrap_or(next_value);
-                            }
-                        }
+                        next_value = parse_discriminant_expr(expr).unwrap_or(next_value);
                     }
 
                     let data = match &variant.fields {

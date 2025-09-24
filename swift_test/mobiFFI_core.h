@@ -47,6 +47,13 @@ typedef struct FfiStatus {
 #define FfiStatus_CANCELLED (FfiStatus){ .code = 4 }
 #define FfiStatus_INTERNAL_ERROR (FfiStatus){ .code = 100 }
 
+typedef void *SubscriptionHandle;
+
+typedef struct TestEvent {
+  int32_t eventId;
+  int64_t value;
+} TestEvent;
+
 #define PANIC_STATUS (FfiStatus){ .code = 10 }
 
 void mffi_free_buf_i32(struct FfiBuf_i32 buf);
@@ -66,6 +73,20 @@ void mffi_free_string(struct FfiString string);
 struct FfiStatus mffi_last_error_message(struct FfiString *out);
 
 void mffi_clear_last_error(void);
+
+SubscriptionHandle mffi_test_events_subscribe(uintptr_t capacity);
+
+bool mffi_test_events_push(SubscriptionHandle handle, int32_t event_id, int64_t value);
+
+uintptr_t mffi_test_events_pop_batch(SubscriptionHandle handle,
+                                     struct TestEvent *output_ptr,
+                                     uintptr_t output_capacity);
+
+int32_t mffi_test_events_wait(SubscriptionHandle handle, uint32_t timeout_milliseconds);
+
+void mffi_test_events_unsubscribe(SubscriptionHandle handle);
+
+void mffi_test_events_free(SubscriptionHandle handle);
 
 void mffi_pending_cancel(struct PendingHandle *handle);
 
@@ -89,6 +110,11 @@ typedef struct ApiResult {
 #define ApiResult_TAG_Success 0
 #define ApiResult_TAG_ErrorCode 1
 #define ApiResult_TAG_ErrorWithData 2
+
+typedef int32_t WaitResult;
+#define WaitResult_EventsAvailable 1
+#define WaitResult_Timeout 0
+#define WaitResult_Unsubscribed -1
 
 typedef int8_t RustFuturePoll;
 #define RustFuturePoll_Ready 0
