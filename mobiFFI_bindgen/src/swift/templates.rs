@@ -1,6 +1,6 @@
 use askama::Template;
 
-use crate::model::{Class, Enumeration, Method, Module, Record, StreamMethod};
+use crate::model::{Class, Enumeration, Method, Module, Record, StreamMethod, StreamMode};
 
 use super::body::BodyRenderer;
 use super::names::NamingConvention;
@@ -172,7 +172,13 @@ impl ClassTemplate {
                 .map(|stream| StreamView {
                     doc: stream.doc.clone(),
                     swift_name: NamingConvention::method_name(&stream.name),
+                    swift_name_pascal: NamingConvention::class_name(&stream.name),
                     item_type: TypeMapper::map_type(&stream.item_type),
+                    mode: match stream.mode {
+                        StreamMode::Async => StreamModeView::Async,
+                        StreamMode::Batch => StreamModeView::Batch,
+                        StreamMode::Callback => StreamModeView::Callback,
+                    },
                     body: BodyRenderer::stream(stream, class, module),
                 })
                 .collect(),
@@ -225,21 +231,31 @@ pub struct MethodView {
 pub struct StreamView {
     pub doc: Option<String>,
     pub swift_name: String,
+    pub swift_name_pascal: String,
     pub item_type: String,
+    pub mode: StreamModeView,
     pub body: String,
 }
 
+#[derive(Clone, Copy, PartialEq)]
+pub enum StreamModeView {
+    Async,
+    Batch,
+    Callback,
+}
+
 #[derive(Template)]
-#[template(path = "swift/stream_body.txt", escape = "none")]
-pub struct StreamBodyTemplate {
+#[template(path = "swift/stream_async.txt", escape = "none")]
+pub struct StreamAsyncBodyTemplate {
     pub item_type: String,
     pub subscribe_fn: String,
     pub pop_batch_fn: String,
     pub wait_fn: String,
+    pub unsubscribe_fn: String,
     pub free_fn: String,
 }
 
-impl StreamBodyTemplate {
+impl StreamAsyncBodyTemplate {
     pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
         let class_prefix = class.ffi_prefix(&module.ffi_prefix());
         Self {
@@ -247,6 +263,55 @@ impl StreamBodyTemplate {
             subscribe_fn: stream.ffi_subscribe(&class_prefix),
             pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
             wait_fn: stream.ffi_wait(&class_prefix),
+            unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
+            free_fn: stream.ffi_free(&class_prefix),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_batch.txt", escape = "none")]
+pub struct StreamBatchBodyTemplate {
+    pub class_name: String,
+    pub method_name_pascal: String,
+    pub subscribe_fn: String,
+}
+
+impl StreamBatchBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_callback.txt", escape = "none")]
+pub struct StreamCallbackBodyTemplate {
+    pub item_type: String,
+    pub class_name: String,
+    pub method_name_pascal: String,
+    pub subscribe_fn: String,
+    pub pop_batch_fn: String,
+    pub wait_fn: String,
+    pub unsubscribe_fn: String,
+    pub free_fn: String,
+}
+
+impl StreamCallbackBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            item_type: TypeMapper::map_type(&stream.item_type),
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+            pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
+            wait_fn: stream.ffi_wait(&class_prefix),
+            unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
             free_fn: stream.ffi_free(&class_prefix),
         }
     }

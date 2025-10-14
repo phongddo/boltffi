@@ -1,0 +1,27 @@
+AsyncStream<{{ item_type }}> { continuation in
+    let subscription = {{ subscribe_fn }}(self.handle)
+    
+    continuation.onTermination = { @Sendable _ in
+        {{ unsubscribe_fn }}(subscription)
+        {{ free_fn }}(subscription)
+    }
+    
+    Task {
+        let buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: 1)
+        defer { buffer.deallocate() }
+        
+        while true {
+            let waitResult = {{ wait_fn }}(subscription, 1000)
+            
+            if waitResult < 0 { break }
+            if waitResult == 0 { continue }
+            
+            let count = {{ pop_batch_fn }}(subscription, buffer, 1)
+            if count > 0 {
+                continuation.yield(buffer.pointee)
+            }
+        }
+        
+        continuation.finish()
+    }
+}

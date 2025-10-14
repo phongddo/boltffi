@@ -1,0 +1,23 @@
+let subscription = {{ subscribe_fn }}(self.handle)
+
+Task {
+    let buffer = UnsafeMutablePointer<{{ item_type }}>.allocate(capacity: 64)
+    defer { buffer.deallocate() }
+    
+    while true {
+        let waitResult = {{ wait_fn }}(subscription, 1000)
+        if waitResult < 0 { break }
+        if waitResult == 0 { continue }
+        
+        let count = {{ pop_batch_fn }}(subscription, buffer, 64)
+        for index in 0..<Int(count) {
+            callback(buffer[index])
+        }
+    }
+    
+    {{ free_fn }}(subscription)
+}
+
+return {{ class_name }}{{ method_name_pascal }}Cancellable {
+    {{ unsubscribe_fn }}(subscription)
+}

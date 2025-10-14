@@ -4,7 +4,7 @@ pub mod swift;
 
 pub use model::{
     Class, Constructor, ConstructorParam, Deprecation, Enumeration, Function, Method, Module,
-    Parameter, Primitive, Receiver, Record, RecordField, StreamMethod, Type, Variant,
+    Parameter, Primitive, Receiver, Record, RecordField, StreamMethod, StreamMode, Type, Variant,
 };
 
 pub use kotlin::Kotlin;

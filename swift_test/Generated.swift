@@ -89,23 +89,27 @@ public final class SensorMonitor {
         AsyncStream<SensorReading> { continuation in
     let subscription = mffi_sensormonitor_readings(self.handle)
     
+    continuation.onTermination = { @Sendable _ in
+        mffi_sensormonitor_readings_unsubscribe(subscription)
+        mffi_sensormonitor_readings_free(subscription)
+    }
+    
     Task {
-        let bufferCapacity: UInt = 64
-        let buffer = UnsafeMutablePointer<SensorReading>.allocate(capacity: Int(bufferCapacity))
+        let buffer = UnsafeMutablePointer<SensorReading>.allocate(capacity: 1)
         defer { buffer.deallocate() }
         
         while true {
-            let waitResult = mffi_sensormonitor_readings_wait(subscription, 100)
+            let waitResult = mffi_sensormonitor_readings_wait(subscription, 1000)
+            
             if waitResult < 0 { break }
+            if waitResult == 0 { continue }
             
-            let count = mffi_sensormonitor_readings_pop_batch(subscription, buffer, bufferCapacity)
-            
-            for index in 0..<Int(count) {
-                continuation.yield(buffer[index])
+            let count = mffi_sensormonitor_readings_pop_batch(subscription, buffer, 1)
+            if count > 0 {
+                continuation.yield(buffer.pointee)
             }
         }
         
-        mffi_sensormonitor_readings_free(subscription)
         continuation.finish()
     }
 }

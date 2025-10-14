@@ -40,9 +40,23 @@ public final class {{ class_name }} {
 {%- if let Some(doc) = stream.doc %}
     /// {{ doc }}
 {%- endif %}
+{%- match stream.mode %}
+{%- when StreamModeView::Async %}
 
     public func {{ stream.swift_name }}() -> AsyncStream<{{ stream.item_type }}> {
         {{ stream.body }}
     }
+{%- when StreamModeView::Batch %}
+
+    public func {{ stream.swift_name }}() -> {{ class_name }}{{ stream.swift_name_pascal }}Subscription {
+        {{ stream.body }}
+    }
+{%- when StreamModeView::Callback %}
+
+    @discardableResult
+    public func {{ stream.swift_name }}(callback: @escaping ({{ stream.item_type }}) -> Void) -> {{ class_name }}{{ stream.swift_name_pascal }}Cancellable {
+        {{ stream.body }}
+    }
+{%- endmatch %}
 {%- endfor %}
 }

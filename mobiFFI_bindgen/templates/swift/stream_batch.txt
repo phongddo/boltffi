@@ -1,0 +1,1 @@
+{{ class_name }}{{ method_name_pascal }}Subscription(handle: {{ subscribe_fn }}(self.handle))

@@ -51,10 +51,24 @@ struct FfiExport {
     return_kind: FfiReturnKind,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum StreamMode {
+    Async,
+    Batch,
+    Callback,
+}
+
+impl Default for StreamMode {
+    fn default() -> Self {
+        StreamMode::Async
+    }
+}
+
 struct FfiStreamExport {
     class_name: String,
     method_name: String,
     item_type: String,
+    mode: StreamMode,
 }
 
 struct FfiStruct {
@@ -317,22 +331,31 @@ fn to_snake_case(name: &str) -> String {
     name.to_ascii_lowercase()
 }
 
-fn extract_ffi_stream_item(attrs: &[syn::Attribute]) -> Option<String> {
+fn extract_ffi_stream_info(attrs: &[syn::Attribute]) -> Option<(String, StreamMode)> {
     attrs.iter().find_map(|attr| {
         if !attr.path().is_ident("ffi_stream") {
             return None;
         }
 
         let mut item_type: Option<String> = None;
+        let mut mode = StreamMode::default();
+        
         let _ = attr.parse_nested_meta(|meta| {
             if meta.path.is_ident("item") {
                 let ty: syn::Type = meta.value()?.parse()?;
                 item_type = rust_type_to_c(&ty);
+            } else if meta.path.is_ident("mode") {
+                let mode_str: syn::LitStr = meta.value()?.parse()?;
+                mode = match mode_str.value().as_str() {
+                    "batch" => StreamMode::Batch,
+                    "callback" => StreamMode::Callback,
+                    _ => StreamMode::Async,
+                };
             }
             Ok(())
         });
 
-        item_type
+        item_type.map(|ty| (ty, mode))
     })
 }
 
@@ -382,11 +405,12 @@ fn parse_ffi_class(impl_block: &syn::ItemImpl) -> (Vec<FfiExport>, Vec<FfiStream
                 continue;
             }
 
-            if let Some(item_type) = extract_ffi_stream_item(&method.attrs) {
+            if let Some((item_type, mode)) = extract_ffi_stream_info(&method.attrs) {
                 stream_exports.push(FfiStreamExport {
                     class_name: snake_name.clone(),
                     method_name: method_name.clone(),
                     item_type,
+                    mode,
                 });
                 continue;
             }
