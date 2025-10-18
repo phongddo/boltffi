@@ -31,6 +31,44 @@ public final class Counter {
 }
 
 
+public final class DataStore {
+    let handle: OpaquePointer
+
+    private init(handle: OpaquePointer) {
+        self.handle = handle
+    }
+
+    public convenience init() {
+        let ptr = mffi_datastore_new()!
+        self.init(handle: ptr)
+    }
+
+    deinit {
+        _ = mffi_datastore_free(handle)
+    }
+
+    public func add(point: DataPoint) {
+        mffi_datastore_add(handle, point)
+    }
+
+    public func len() -> UInt {
+        return mffi_datastore_len(handle)
+    }
+
+    public func copyInto() -> UInt {
+        return mffi_datastore_copy_into(handle)
+    }
+
+    public func foreach() {
+        mffi_datastore_foreach(handle)
+    }
+
+    public func sum() -> Double {
+        return mffi_datastore_sum(handle)
+    }
+}
+
+
 public final class Accumulator {
     let handle: OpaquePointer
 

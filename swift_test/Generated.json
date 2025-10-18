@@ -1,0 +1,432 @@
+{
+  "name": "mobiFFI_core",
+  "classes": [
+    {
+      "name": "Counter",
+      "doc": null,
+      "deprecated": null,
+      "constructors": [
+        {
+          "inputs": [],
+          "doc": null
+        }
+      ],
+      "methods": [
+        {
+          "name": "set",
+          "receiver": "RefMut",
+          "inputs": [
+            {
+              "name": "value",
+              "param_type": {
+                "Primitive": "U64"
+              }
+            }
+          ],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "increment",
+          "receiver": "RefMut",
+          "inputs": [],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "get",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "U64"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        }
+      ],
+      "streams": []
+    },
+    {
+      "name": "DataStore",
+      "doc": null,
+      "deprecated": null,
+      "constructors": [
+        {
+          "inputs": [],
+          "doc": null
+        }
+      ],
+      "methods": [
+        {
+          "name": "add",
+          "receiver": "RefMut",
+          "inputs": [
+            {
+              "name": "point",
+              "param_type": {
+                "Record": "DataPoint"
+              }
+            }
+          ],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "len",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "Usize"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "copy_into",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "Usize"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "foreach",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "sum",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "F64"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        }
+      ],
+      "streams": []
+    },
+    {
+      "name": "Accumulator",
+      "doc": null,
+      "deprecated": null,
+      "constructors": [
+        {
+          "inputs": [],
+          "doc": null
+        }
+      ],
+      "methods": [
+        {
+          "name": "add",
+          "receiver": "RefMut",
+          "inputs": [
+            {
+              "name": "amount",
+              "param_type": {
+                "Primitive": "I64"
+              }
+            }
+          ],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "get",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "I64"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "reset",
+          "receiver": "RefMut",
+          "inputs": [],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        }
+      ],
+      "streams": []
+    },
+    {
+      "name": "SensorMonitor",
+      "doc": null,
+      "deprecated": null,
+      "constructors": [
+        {
+          "inputs": [],
+          "doc": null
+        }
+      ],
+      "methods": [
+        {
+          "name": "emit_reading",
+          "receiver": "Ref",
+          "inputs": [
+            {
+              "name": "sensor_id",
+              "param_type": {
+                "Primitive": "I32"
+              }
+            },
+            {
+              "name": "timestamp_ms",
+              "param_type": {
+                "Primitive": "I64"
+              }
+            },
+            {
+              "name": "value",
+              "param_type": {
+                "Primitive": "F64"
+              }
+            }
+          ],
+          "output": null,
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        },
+        {
+          "name": "subscriber_count",
+          "receiver": "Ref",
+          "inputs": [],
+          "output": {
+            "Primitive": "Usize"
+          },
+          "error": null,
+          "is_async": false,
+          "doc": null,
+          "deprecated": null
+        }
+      ],
+      "streams": [
+        {
+          "name": "readings",
+          "item_type": {
+            "Record": "SensorReading"
+          },
+          "mode": "Async",
+          "doc": null,
+          "deprecated": null
+        }
+      ]
+    }
+  ],
+  "records": [
+    {
+      "name": "FfiBuf",
+      "fields": [
+        {
+          "name": "len",
+          "field_type": {
+            "Primitive": "Usize"
+          },
+          "doc": null
+        },
+        {
+          "name": "cap",
+          "field_type": {
+            "Primitive": "Usize"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "FfiOption",
+      "fields": [
+        {
+          "name": "is_some",
+          "field_type": {
+            "Primitive": "Bool"
+          },
+          "doc": null
+        },
+        {
+          "name": "value",
+          "field_type": {
+            "Record": "MaybeUninit"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "FfiSlice",
+      "fields": [
+        {
+          "name": "len",
+          "field_type": {
+            "Primitive": "Usize"
+          },
+          "doc": null
+        },
+        {
+          "name": "_marker",
+          "field_type": {
+            "Record": "PhantomData"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "FfiString",
+      "fields": [
+        {
+          "name": "len",
+          "field_type": {
+            "Primitive": "Usize"
+          },
+          "doc": null
+        },
+        {
+          "name": "cap",
+          "field_type": {
+            "Primitive": "Usize"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "DataPoint",
+      "fields": [
+        {
+          "name": "x",
+          "field_type": {
+            "Primitive": "F64"
+          },
+          "doc": null
+        },
+        {
+          "name": "y",
+          "field_type": {
+            "Primitive": "F64"
+          },
+          "doc": null
+        },
+        {
+          "name": "timestamp",
+          "field_type": {
+            "Primitive": "I64"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "TestEvent",
+      "fields": [
+        {
+          "name": "event_id",
+          "field_type": {
+            "Primitive": "I32"
+          },
+          "doc": null
+        },
+        {
+          "name": "value",
+          "field_type": {
+            "Primitive": "I64"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "SensorReading",
+      "fields": [
+        {
+          "name": "sensor_id",
+          "field_type": {
+            "Primitive": "I32"
+          },
+          "doc": null
+        },
+        {
+          "name": "timestamp_ms",
+          "field_type": {
+            "Primitive": "I64"
+          },
+          "doc": null
+        },
+        {
+          "name": "value",
+          "field_type": {
+            "Primitive": "F64"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    },
+    {
+      "name": "FfiStatus",
+      "fields": [
+        {
+          "name": "code",
+          "field_type": {
+            "Primitive": "I32"
+          },
+          "doc": null
+        }
+      ],
+      "doc": null,
+      "deprecated": null
+    }
+  ],
+  "enums": [],
+  "functions": []
+}

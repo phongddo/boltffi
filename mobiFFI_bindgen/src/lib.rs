@@ -1,5 +1,6 @@
 pub mod model;
 pub mod kotlin;
+pub mod scan;
 pub mod swift;
 
 pub use model::{
@@ -8,6 +9,7 @@ pub use model::{
 };
 
 pub use kotlin::Kotlin;
+pub use scan::{scan_crate, SourceScanner};
 pub use swift::Swift;
 
 #[cfg(test)]
