@@ -25,7 +25,7 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
             return handle
         }{% for method in methods %},
         {{ method.ffi_name }}: { handle{% for param in method.params %}, {{ param.ffi_name }}{% endfor %}{% if method.has_out_param %}, outPtr{% endif %}{% if !method.is_async %}, statusPtr{% endif %}{% if method.is_async %}, callback, callbackData{% endif %} in
-            guard handle != 0 else { {% if !method.is_async %}statusPtr?.pointee = FfiStatus(code: 1){% endif %}; return }
+            guard handle != 0 else { {% if !method.is_async %}statusPtr?.pointee = FfiStatus(code: 1); {% endif %}return }
             let wrapper = Unmanaged<{{ wrapper_class }}>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
 {%- if method.is_async %}
             Task {

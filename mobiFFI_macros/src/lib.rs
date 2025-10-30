@@ -1722,13 +1722,97 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
                     )
                 });
 
-                let impl_body = if has_return {
+                let impl_body = if let Some(ref ret_ty) = return_type {
                     quote! {
-                        unimplemented!("Async trait methods not yet supported in Foreign wrapper")
+                        use std::sync::Arc;
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        
+                        struct AsyncContext<T> {
+                            result: std::cell::UnsafeCell<Option<T>>,
+                            completed: AtomicBool,
+                            waker: std::cell::UnsafeCell<Option<std::task::Waker>>,
+                        }
+                        unsafe impl<T> Send for AsyncContext<T> {}
+                        unsafe impl<T> Sync for AsyncContext<T> {}
+                        
+                        let ctx = Arc::new(AsyncContext::<#ret_ty> {
+                            result: std::cell::UnsafeCell::new(None),
+                            completed: AtomicBool::new(false),
+                            waker: std::cell::UnsafeCell::new(None),
+                        });
+                        
+                        extern "C" fn callback<T: Copy>(data: u64, result: T, _status: crate::FfiStatus) {
+                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<T>) };
+                            unsafe { *ctx.result.get() = Some(result) };
+                            ctx.completed.store(true, Ordering::Release);
+                            if let Some(waker) = unsafe { (*ctx.waker.get()).take() } {
+                                waker.wake();
+                            }
+                        }
+                        
+                        let ctx_ptr = Arc::into_raw(ctx.clone()) as u64;
+                        unsafe {
+                            ((*self.vtable).#method_name_snake)(
+                                self.handle,
+                                #(#call_args,)*
+                                callback::<#ret_ty>,
+                                ctx_ptr
+                            );
+                        }
+                        
+                        std::future::poll_fn(move |cx| {
+                            if ctx.completed.load(Ordering::Acquire) {
+                                let result = unsafe { (*ctx.result.get()).take().unwrap() };
+                                std::task::Poll::Ready(result)
+                            } else {
+                                unsafe { *ctx.waker.get() = Some(cx.waker().clone()) };
+                                std::task::Poll::Pending
+                            }
+                        }).await
                     }
                 } else {
                     quote! {
-                        unimplemented!("Async trait methods not yet supported in Foreign wrapper")
+                        use std::sync::Arc;
+                        use std::sync::atomic::{AtomicBool, Ordering};
+                        
+                        struct AsyncContext {
+                            completed: AtomicBool,
+                            waker: std::cell::UnsafeCell<Option<std::task::Waker>>,
+                        }
+                        unsafe impl Send for AsyncContext {}
+                        unsafe impl Sync for AsyncContext {}
+                        
+                        let ctx = Arc::new(AsyncContext {
+                            completed: AtomicBool::new(false),
+                            waker: std::cell::UnsafeCell::new(None),
+                        });
+                        
+                        extern "C" fn callback(data: u64, _status: crate::FfiStatus) {
+                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
+                            ctx.completed.store(true, Ordering::Release);
+                            if let Some(waker) = unsafe { (*ctx.waker.get()).take() } {
+                                waker.wake();
+                            }
+                        }
+                        
+                        let ctx_ptr = Arc::into_raw(ctx.clone()) as u64;
+                        unsafe {
+                            ((*self.vtable).#method_name_snake)(
+                                self.handle,
+                                #(#call_args,)*
+                                callback,
+                                ctx_ptr
+                            );
+                        }
+                        
+                        std::future::poll_fn(move |cx| {
+                            if ctx.completed.load(Ordering::Acquire) {
+                                std::task::Poll::Ready(())
+                            } else {
+                                unsafe { *ctx.waker.get() = Some(cx.waker().clone()) };
+                                std::task::Poll::Pending
+                            }
+                        }).await
                     }
                 };
 

@@ -168,20 +168,19 @@ typedef struct ForeignDataProvider {
 void mffi_register_data_provider_vtable(const struct DataProviderVTable *vtable);
 struct ForeignDataProvider *mffi_create_data_provider(uint64_t handle);
 
-typedef struct NavigationObserverVTable {
+typedef struct AsyncDataFetcherVTable {
   void (*free)(uint64_t handle);
   uint64_t (*clone)(uint64_t handle);
-  void (*on_location_updated)(uint64_t handle, double lat, double lon, struct FfiStatus *status);
-  void (*on_route_changed)(uint64_t handle, uint32_t route_id, struct FfiStatus *status);
-} NavigationObserverVTable;
+  void (*fetch_value)(uint64_t handle, uint32_t key, void (*callback)(uint64_t, uint64_t, struct FfiStatus), uint64_t callback_data);
+} AsyncDataFetcherVTable;
 
-typedef struct ForeignNavigationObserver {
-  const struct NavigationObserverVTable *vtable;
+typedef struct ForeignAsyncDataFetcher {
+  const struct AsyncDataFetcherVTable *vtable;
   uint64_t handle;
-} ForeignNavigationObserver;
+} ForeignAsyncDataFetcher;
 
-void mffi_register_navigation_observer_vtable(const struct NavigationObserverVTable *vtable);
-struct ForeignNavigationObserver *mffi_create_navigation_observer(uint64_t handle);
+void mffi_register_async_data_fetcher_vtable(const struct AsyncDataFetcherVTable *vtable);
+struct ForeignAsyncDataFetcher *mffi_create_async_data_fetcher(uint64_t handle);
 
 struct FfiStatus mffi_greeting(const uint8_t* name_ptr, uintptr_t name_len, struct FfiString *out);
 struct FfiStatus mffi_concat(const uint8_t* first_ptr, uintptr_t first_len, const uint8_t* second_ptr, uintptr_t second_len, struct FfiString *out);

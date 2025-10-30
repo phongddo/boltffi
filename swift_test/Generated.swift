@@ -269,57 +269,52 @@ public enum DataProviderBridge {
 }
 
 
-public protocol NavigationObserverProtocol: AnyObject {
-    func onLocationUpdated(lat: Double, lon: Double)
-    func onRouteChanged(routeId: UInt32)
+public protocol AsyncDataFetcherProtocol: AnyObject {
+    func fetchValue(key: UInt32) async -> UInt64
 }
 
-private class NavigationObserverWrapper {
-    let impl_: NavigationObserverProtocol
-    init(_ impl_: NavigationObserverProtocol) { self.impl_ = impl_ }
+private class AsyncDataFetcherWrapper {
+    let impl_: AsyncDataFetcherProtocol
+    init(_ impl_: AsyncDataFetcherProtocol) { self.impl_ = impl_ }
 }
 
-private var navigationObserverVTableInstance: NavigationObserverVTable = {
-    NavigationObserverVTable(
+private var asyncDataFetcherVTableInstance: AsyncDataFetcherVTable = {
+    AsyncDataFetcherVTable(
         free: { handle in
             guard handle != 0 else { return }
-            Unmanaged<NavigationObserverWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).release()
+            Unmanaged<AsyncDataFetcherWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).release()
         },
         clone: { handle in
             guard handle != 0 else { return 0 }
-            let wrapper = Unmanaged<NavigationObserverWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!)
+            let wrapper = Unmanaged<AsyncDataFetcherWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!)
             _ = wrapper.retain()
             return handle
         },
-        on_location_updated: { handle, lat, lon, statusPtr in
-            guard handle != 0 else { statusPtr?.pointee = FfiStatus(code: 1); return }
-            let wrapper = Unmanaged<NavigationObserverWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
-            wrapper.impl_.onLocationUpdated(lat: lat, lon: lon)
-            statusPtr?.pointee = FfiStatus(code: 0)
-        },
-        on_route_changed: { handle, route_id, statusPtr in
-            guard handle != 0 else { statusPtr?.pointee = FfiStatus(code: 1); return }
-            let wrapper = Unmanaged<NavigationObserverWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
-            wrapper.impl_.onRouteChanged(routeId: route_id)
-            statusPtr?.pointee = FfiStatus(code: 0)
+        fetch_value: { handle, key, callback, callbackData in
+            guard handle != 0 else { return }
+            let wrapper = Unmanaged<AsyncDataFetcherWrapper>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
+            Task {
+                let result = await wrapper.impl_.fetchValue(key: key)
+                callback?(callbackData, result, FfiStatus(code: 0))
+            }
         }
     )
 }()
 
-public enum NavigationObserverBridge {
+public enum AsyncDataFetcherBridge {
     private static var isRegistered = false
     
     public static func register() {
         guard !isRegistered else { return }
-        mffi_register_navigation_observer_vtable(&navigationObserverVTableInstance)
+        mffi_register_async_data_fetcher_vtable(&asyncDataFetcherVTableInstance)
         isRegistered = true
     }
     
-    public static func create(_ impl: NavigationObserverProtocol) -> OpaquePointer {
+    public static func create(_ impl: AsyncDataFetcherProtocol) -> OpaquePointer {
         register()
-        let wrapper = NavigationObserverWrapper(impl)
+        let wrapper = AsyncDataFetcherWrapper(impl)
         let handle = UInt64(UInt(bitPattern: Unmanaged.passRetained(wrapper).toOpaque()))
-        return OpaquePointer(mffi_create_navigation_observer(handle)!)
+        return OpaquePointer(mffi_create_async_data_fetcher(handle)!)
     }
 }
 

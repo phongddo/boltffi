@@ -452,9 +452,8 @@ pub trait DataProvider {
 }
 
 #[ffi_trait]
-pub trait NavigationObserver {
-    fn on_location_updated(&self, lat: f64, lon: f64);
-    fn on_route_changed(&self, route_id: u32);
+pub trait AsyncDataFetcher {
+    async fn fetch_value(&self, key: u32) -> u64;
 }
 
 pub struct DataConsumer {
