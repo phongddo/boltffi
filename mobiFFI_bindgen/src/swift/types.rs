@@ -1,4 +1,4 @@
-use crate::model::{Primitive, Type};
+use crate::model::Type;
 
 use super::NamingConvention;
 
@@ -7,7 +7,7 @@ pub struct TypeMapper;
 impl TypeMapper {
     pub fn map_type(ty: &Type) -> String {
         match ty {
-            Type::Primitive(primitive) => Self::map_primitive(*primitive),
+            Type::Primitive(p) => p.swift_type().into(),
             Type::String => "String".into(),
             Type::Bytes => "Data".into(),
             Type::Slice(inner) => format!("[{}]", Self::map_type(inner)),
@@ -24,28 +24,9 @@ impl TypeMapper {
         }
     }
 
-    pub fn map_primitive(primitive: Primitive) -> String {
-        match primitive {
-            Primitive::Bool => "Bool",
-            Primitive::I8 => "Int8",
-            Primitive::U8 => "UInt8",
-            Primitive::I16 => "Int16",
-            Primitive::U16 => "UInt16",
-            Primitive::I32 => "Int32",
-            Primitive::U32 => "UInt32",
-            Primitive::I64 => "Int64",
-            Primitive::U64 => "UInt64",
-            Primitive::F32 => "Float",
-            Primitive::F64 => "Double",
-            Primitive::Usize => "UInt",
-            Primitive::Isize => "Int",
-        }
-        .into()
-    }
-
     pub fn ffi_type(ty: &Type) -> String {
         match ty {
-            Type::Primitive(primitive) => Self::ffi_primitive(*primitive),
+            Type::Primitive(p) => p.swift_type().into(),
             Type::String => "UnsafePointer<CChar>".into(),
             Type::Bytes => "UnsafePointer<UInt8>".into(),
             Type::Slice(inner) => format!("UnsafePointer<{}>", Self::ffi_type(inner)),
@@ -67,28 +48,18 @@ impl TypeMapper {
         }
     }
 
-    fn ffi_primitive(primitive: Primitive) -> String {
-        match primitive {
-            Primitive::Bool => "Bool",
-            Primitive::I8 => "Int8",
-            Primitive::U8 => "UInt8",
-            Primitive::I16 => "Int16",
-            Primitive::U16 => "UInt16",
-            Primitive::I32 => "Int32",
-            Primitive::U32 => "UInt32",
-            Primitive::I64 => "Int64",
-            Primitive::U64 => "UInt64",
-            Primitive::F32 => "Float",
-            Primitive::F64 => "Double",
-            Primitive::Usize => "UInt",
-            Primitive::Isize => "Int",
+    pub fn ffi_type_name(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => p.rust_name().into(),
+            Type::String => "string".into(),
+            Type::Record(name) => name.to_lowercase(),
+            _ => "unknown".into(),
         }
-        .into()
     }
 
     pub fn default_value(ty: &Type) -> String {
         match ty {
-            Type::Primitive(primitive) => Self::primitive_default(*primitive),
+            Type::Primitive(p) => p.default_value().into(),
             Type::String => "\"\"".into(),
             Type::Bytes => "Data()".into(),
             Type::Vec(_) => "[]".into(),
@@ -96,15 +67,6 @@ impl TypeMapper {
             Type::Void => "()".into(),
             _ => "/* default */".into(),
         }
-    }
-
-    fn primitive_default(primitive: Primitive) -> String {
-        match primitive {
-            Primitive::Bool => "false",
-            Primitive::F32 | Primitive::F64 => "0.0",
-            _ => "0",
-        }
-        .into()
     }
 
     pub fn needs_conversion(ty: &Type) -> bool {

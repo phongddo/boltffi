@@ -1,4 +1,65 @@
-public func {{ func_name }}({% for param in params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}{% if params.len() > 0 && callbacks.len() > 0 %}, {% endif %}{% for cb in callbacks %}{{ cb.param_name }}: @escaping ({{ cb.swift_type }}) -> Void{% if !loop.last %}, {% endif %}{% endfor %}){% if is_async %} async{% endif %}{% if throws %} throws{% endif %}{% if let Some(ret) = return_type %} -> {{ ret }}{% endif %} {
+public func {{ func_name }}({% for param in params %}{{ param.swift_name }}: {{ param.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %}{% if params.len() > 0 && callbacks.len() > 0 %}, {% endif %}{% for cb in callbacks %}{{ cb.param_name }}: @escaping ({{ cb.swift_type }}) -> Void{% if !loop.last %}, {% endif %}{% endfor %}){% if is_async %} async throws{% else if throws %} throws{% endif %}{% if let Some(ret) = return_type %} -> {{ ret }}{% endif %} {
+{%- if is_async %}
+{#- ASYNC FUNCTION #}
+    let futureHandle = {{ ffi_name }}({% for param in params %}{% if param.is_string %}{{ param.swift_name }}, UInt({{ param.swift_name }}.utf8.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %})
+    
+    class FutureContext {
+        let handle: RustFutureHandle?
+        let continuation: CheckedContinuation<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}, Error>
+        
+        init(handle: RustFutureHandle?, continuation: CheckedContinuation<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}, Error>) {
+            self.handle = handle
+            self.continuation = continuation
+        }
+    }
+    
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            let context = FutureContext(handle: futureHandle, continuation: continuation)
+            
+            func poll(ctx: FutureContext) {
+                {{ ffi_poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
+                    let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
+                    if pollResult == 0 {
+                        var status = FfiStatus()
+{%- if returns_string %}
+                        let ffiStr = {{ ffi_complete }}(ctx.handle, &status)
+                        let str = String(data: Data(bytes: ffiStr.ptr!, count: Int(ffiStr.len)), encoding: .utf8)!
+                        mffi_free_string(ffiStr)
+                        {{ ffi_free }}(ctx.handle)
+                        ctx.continuation.resume(returning: str)
+{%- else if returns_vec %}
+                        let buf = {{ ffi_complete }}(ctx.handle, &status)
+                        let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
+                        {{ ffi_free_vec }}(buf)
+                        {{ ffi_free }}(ctx.handle)
+                        ctx.continuation.resume(returning: arr)
+{%- else if returns_option %}
+                        let opt = {{ ffi_complete }}(ctx.handle, &status)
+                        {{ ffi_free }}(ctx.handle)
+                        ctx.continuation.resume(returning: opt.is_some ? opt.value : nil)
+{%- else if return_type.is_some() %}
+                        let result = {{ ffi_complete }}(ctx.handle, &status)
+                        {{ ffi_free }}(ctx.handle)
+                        ctx.continuation.resume(returning: result)
+{%- else %}
+                        _ = {{ ffi_complete }}(ctx.handle, &status)
+                        {{ ffi_free }}(ctx.handle)
+                        ctx.continuation.resume(returning: ())
+{%- endif %}
+                    } else {
+                        poll(ctx: ctx)
+                    }
+                }
+            }
+            poll(ctx: context)
+        }
+    } onCancel: {
+        {{ ffi_cancel }}(futureHandle)
+        {{ ffi_free }}(futureHandle)
+    }
+{%- else %}
+{#- SYNC FUNCTION #}
 {%- if returns_string %}
     var result = FfiString(ptr: nil, len: 0, cap: 0)
 {%- endif %}
@@ -24,12 +85,6 @@ public func {{ func_name }}({% for param in params %}{{ param.swift_name }}: {{ 
 {%- endif %}
 {%- if returns_string %}
     let status = {{ ffi_name }}({% for param in params %}{% if param.is_string %}{{ param.swift_name }}Ptr, UInt({{ param.swift_name }}.utf8.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %}{% if params.len() > 0 && callbacks.len() > 0 %}, {% endif %}{% for cb in callbacks %}{{ cb.trampoline_name }}, {{ cb.ptr_name }}{% if !loop.last %}, {% endif %}{% endfor %}, &result)
-{%- if throws %}
-    if status.code != 0 {
-        mffi_free_string(result)
-        throw FfiError(status: status)
-    }
-{%- endif %}
     defer { mffi_free_string(result) }
 {%- if has_callbacks %}
 {%- for cb in callbacks %}
@@ -37,6 +92,13 @@ public func {{ func_name }}({% for param in params %}{{ param.swift_name }}: {{ 
 {%- endfor %}
 {%- endif %}
     return String(data: Data(bytes: result.ptr!, count: Int(result.len)), encoding: .utf8)!
+{%- else if returns_vec %}
+    let buf = {{ ffi_name }}({% for param in params %}{% if param.is_string %}{{ param.swift_name }}Ptr, UInt({{ param.swift_name }}.utf8.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %})
+    defer { {{ ffi_free_vec }}(buf) }
+    return Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
+{%- else if returns_option %}
+    let opt = {{ ffi_name }}({% for param in params %}{% if param.is_string %}{{ param.swift_name }}Ptr, UInt({{ param.swift_name }}.utf8.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %})
+    return opt.is_some ? opt.value : nil
 {%- else if return_type.is_some() %}
     {% if has_callbacks %}let result = {% else %}return {% endif %}{{ ffi_name }}({% for param in params %}{% if param.is_string %}{{ param.swift_name }}Ptr, UInt({{ param.swift_name }}.utf8.count){% else %}{{ param.ffi_conversion }}{% endif %}{% if !loop.last %}, {% endif %}{% endfor %}{% if params.len() > 0 && callbacks.len() > 0 %}, {% endif %}{% for cb in callbacks %}{{ cb.trampoline_name }}, {{ cb.ptr_name }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- if has_callbacks %}
@@ -58,4 +120,5 @@ public func {{ func_name }}({% for param in params %}{{ param.swift_name }}: {{ 
     }
 {%- endif %}
 {%- endfor %}
+{%- endif %}
 }

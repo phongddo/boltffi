@@ -18,6 +18,42 @@ pub enum Primitive {
 }
 
 impl Primitive {
+    pub fn swift_type(self) -> &'static str {
+        match self {
+            Self::Bool => "Bool",
+            Self::I8 => "Int8",
+            Self::U8 => "UInt8",
+            Self::I16 => "Int16",
+            Self::U16 => "UInt16",
+            Self::I32 => "Int32",
+            Self::U32 => "UInt32",
+            Self::I64 => "Int64",
+            Self::U64 => "UInt64",
+            Self::F32 => "Float",
+            Self::F64 => "Double",
+            Self::Usize => "UInt",
+            Self::Isize => "Int",
+        }
+    }
+
+    pub fn rust_name(self) -> &'static str {
+        match self {
+            Self::Bool => "bool",
+            Self::I8 => "i8",
+            Self::U8 => "u8",
+            Self::I16 => "i16",
+            Self::U16 => "u16",
+            Self::I32 => "i32",
+            Self::U32 => "u32",
+            Self::I64 => "i64",
+            Self::U64 => "u64",
+            Self::F32 => "f32",
+            Self::F64 => "f64",
+            Self::Usize => "usize",
+            Self::Isize => "isize",
+        }
+    }
+
     pub fn c_type_name(self) -> &'static str {
         match self {
             Self::Bool => "bool",
@@ -33,6 +69,14 @@ impl Primitive {
             Self::F64 => "double",
             Self::Usize => "uintptr_t",
             Self::Isize => "intptr_t",
+        }
+    }
+
+    pub fn default_value(self) -> &'static str {
+        match self {
+            Self::Bool => "false",
+            Self::F32 | Self::F64 => "0.0",
+            _ => "0",
         }
     }
 

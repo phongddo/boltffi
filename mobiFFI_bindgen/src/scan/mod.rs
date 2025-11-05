@@ -189,18 +189,8 @@ impl SourceScanner {
             }
         };
 
-        if let Some(ref out_ty) = output {
-            if matches!(out_ty, MType::Vec(_) | MType::Option(_) | MType::Result { .. }) {
-                return;
-            }
-        }
-
         let has_unsupported_params = params.iter().any(|(_, ty)| matches!(ty, MType::Slice(_) | MType::MutSlice(_)));
         if has_unsupported_params {
-            return;
-        }
-
-        if is_async {
             return;
         }
 

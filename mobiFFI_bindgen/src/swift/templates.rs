@@ -49,12 +49,21 @@ pub struct FunctionTemplate {
     pub params: Vec<FunctionParamView>,
     pub return_type: Option<String>,
     pub returns_string: bool,
+    pub returns_vec: bool,
+    pub returns_option: bool,
+    pub vec_inner_type: Option<String>,
+    pub option_inner_type: Option<String>,
     pub is_async: bool,
     pub throws: bool,
     pub has_string_params: bool,
     pub has_slice_params: bool,
     pub has_callbacks: bool,
     pub callbacks: Vec<FunctionCallbackView>,
+    pub ffi_poll: String,
+    pub ffi_complete: String,
+    pub ffi_free: String,
+    pub ffi_cancel: String,
+    pub ffi_free_vec: String,
 }
 
 impl FunctionTemplate {
@@ -66,6 +75,34 @@ impl FunctionTemplate {
             .as_ref()
             .map(|ty| matches!(ty, Type::String))
             .unwrap_or(false);
+
+        let returns_vec = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::Vec(_)))
+            .unwrap_or(false);
+
+        let returns_option = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::Option(_)))
+            .unwrap_or(false);
+
+        let vec_inner_type = function.output.as_ref().and_then(|ty| {
+            if let Type::Vec(inner) = ty {
+                Some(TypeMapper::map_type(inner))
+            } else {
+                None
+            }
+        });
+
+        let option_inner_type = function.output.as_ref().and_then(|ty| {
+            if let Type::Option(inner) = ty {
+                Some(TypeMapper::map_type(inner))
+            } else {
+                None
+            }
+        });
 
         let has_string_params = function
             .inputs
@@ -113,9 +150,12 @@ impl FunctionTemplate {
             })
             .collect();
 
+        let ffi_prefix = module.ffi_prefix();
+        let func_snake = &function.name;
+
         Self {
             func_name: NamingConvention::method_name(&function.name),
-            ffi_name: function.ffi_name(&module.ffi_prefix()),
+            ffi_name: function.ffi_name(&ffi_prefix),
             params: function
                 .inputs
                 .iter()
@@ -136,12 +176,28 @@ impl FunctionTemplate {
                 .filter(|ty| !ty.is_void())
                 .map(TypeMapper::map_type),
             returns_string,
+            returns_vec,
+            returns_option,
+            vec_inner_type,
+            option_inner_type,
             is_async: function.is_async,
             throws: function.throws(),
             has_string_params,
             has_slice_params,
             has_callbacks,
             callbacks,
+            ffi_poll: format!("{}_{}_poll", ffi_prefix, func_snake),
+            ffi_complete: format!("{}_{}_complete", ffi_prefix, func_snake),
+            ffi_free: format!("{}_{}_free", ffi_prefix, func_snake),
+            ffi_cancel: format!("{}_{}_cancel", ffi_prefix, func_snake),
+            ffi_free_vec: function.output.as_ref().map(|ty| {
+                if let Type::Vec(inner) = ty {
+                    let inner_ffi = TypeMapper::ffi_type_name(inner);
+                    format!("{}_free_buf_{}", ffi_prefix, inner_ffi)
+                } else {
+                    String::new()
+                }
+            }).unwrap_or_default(),
         }
     }
 }
