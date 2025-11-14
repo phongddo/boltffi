@@ -1,4 +1,4 @@
 [workspace]
 resolver = "3"
-members = ["mobiFFI_core", "mobiFFI_macros", "mobiFFI_bindgen", "mobiFFI_cli", "mobiFFI_build"]
+members = ["mobiFFI_core", "mobiFFI_macros", "mobiFFI_bindgen", "mobiFFI_cli", "mobiFFI_build", "mobiFFI_ffi_rules"]
 exclude = ["bench_demo/rust-mobiffi", "bench_demo/rust-uniffi"]
