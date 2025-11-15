@@ -64,9 +64,19 @@ pub struct XcframeworkConfig {
     pub name: Option<String>,
 }
 
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SpmDistribution {
+    #[default]
+    Local,
+    Remote,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 pub struct SpmConfig {
     pub output: PathBuf,
+    #[serde(default)]
+    pub distribution: SpmDistribution,
     pub repo_url: Option<String>,
 }
 
@@ -135,6 +145,7 @@ impl Default for SpmConfig {
     fn default() -> Self {
         Self {
             output: PathBuf::from("dist"),
+            distribution: SpmDistribution::Local,
             repo_url: None,
         }
     }

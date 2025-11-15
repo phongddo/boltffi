@@ -74,4 +74,55 @@ impl Swift {
             .render()
             .expect("function template failed")
     }
+
+    pub fn render_module(module: &Module) -> String {
+        let mut sections = Vec::new();
+
+        sections.push(Self::render_header());
+
+        module
+            .records
+            .iter()
+            .for_each(|r| sections.push(Self::render_record(r)));
+
+        module
+            .enums
+            .iter()
+            .for_each(|e| sections.push(Self::render_enum(e)));
+
+        module.classes.iter().for_each(|c| {
+            sections.push(Self::render_class(c, module));
+            let stream_wrappers = Self::render_stream_wrappers(c, module);
+            if !stream_wrappers.is_empty() {
+                sections.push(stream_wrappers);
+            }
+        });
+
+        module
+            .callback_traits
+            .iter()
+            .for_each(|t| sections.push(Self::render_callback_trait(t, module)));
+
+        module
+            .functions
+            .iter()
+            .for_each(|f| sections.push(Self::render_function(f, module)));
+
+        sections.join("\n\n")
+    }
+
+    fn render_header() -> String {
+        r#"import Foundation
+
+public struct FfiError: Error {
+    public let code: Int32
+    public let message: String
+    
+    init(code: Int32, message: String = "FFI Error") {
+        self.code = code
+        self.message = message
+    }
+}"#
+        .to_string()
+    }
 }

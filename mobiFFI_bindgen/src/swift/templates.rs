@@ -23,20 +23,19 @@ impl RecordTemplate {
             .iter()
             .map(|field| {
                 let swift_name = NamingConvention::property_name(&field.name);
-                let c_name = field.name.clone();
+                let c_name = NamingConvention::property_name(&field.name);
                 FieldView {
-                    needs_alias: swift_name != c_name,
+                    needs_alias: false,
                     swift_name,
                     c_name,
                     swift_type: TypeMapper::map_type(&field.field_type),
                 }
             })
             .collect();
-        let has_aliases = fields.iter().any(|f| f.needs_alias);
         Self {
             class_name: NamingConvention::class_name(&record.name),
             fields,
-            has_aliases,
+            has_aliases: false,
         }
     }
 }

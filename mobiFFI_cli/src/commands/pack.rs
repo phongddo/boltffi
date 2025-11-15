@@ -60,11 +60,11 @@ fn pack_xcframework(config: &Config, libraries: Vec<BuiltLibrary>, release: bool
         println!("  Found: {} ({})", lib.target.triple(), lib.path.display());
     });
 
-    let headers_dir = PathBuf::from("include");
+    let headers_dir = PathBuf::from("dist/include");
 
     if !headers_dir.exists() {
         println!();
-        println!("Headers directory not found. Run 'mobiFFI generate header' first.");
+        println!("Headers not found at dist/include/. Run 'cargo build' first.");
         return Err(CliError::NoLibrariesFound {
             platform: "headers".to_string(),
         });
@@ -97,7 +97,7 @@ fn pack_spm(
         println!("Warning: SPM packages are typically built from release artifacts");
     }
 
-    let headers_dir = PathBuf::from("include");
+    let headers_dir = PathBuf::from("dist/include");
 
     let builder = XcframeworkBuilder::new(config, libraries, headers_dir);
     let xcframework_output = builder.build_with_zip()?;

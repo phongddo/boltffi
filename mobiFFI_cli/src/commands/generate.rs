@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::process::Command;
+
+use mobiFFI_bindgen::{scan_crate, Swift};
 
 use crate::config::Config;
 use crate::error::{CliError, Result};
@@ -31,37 +32,30 @@ pub fn run_generate(config: &Config, options: GenerateOptions) -> Result<()> {
 }
 
 fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
-    let output_path = output
-        .map(|dir| dir.join("Generated.swift"))
-        .unwrap_or_else(|| config.swift.output.join("Generated.swift"));
+    let output_dir = output.unwrap_or_else(|| PathBuf::from("dist/Sources"));
+    let output_path = output_dir.join(format!("{}.swift", config.swift_module_name()));
 
-    if let Some(parent) = output_path.parent() {
-        std::fs::create_dir_all(parent).map_err(|source| CliError::CreateDirectoryFailed {
-            path: parent.to_path_buf(),
-            source,
-        })?;
-    }
+    std::fs::create_dir_all(&output_dir).map_err(|source| CliError::CreateDirectoryFailed {
+        path: output_dir.clone(),
+        source,
+    })?;
 
-    let crate_path = config.library_name();
+    let crate_dir = PathBuf::from(".");
+    let crate_name = config.library_name();
 
-    let status = Command::new("cargo")
-        .args(["run", "-p", "mobiFFI_bindgen", "--"])
-        .arg(crate_path)
-        .arg(&output_path)
-        .status()
-        .map_err(|_| CliError::CommandFailed {
-            command: "mobiFFI_bindgen".to_string(),
-            status: None,
-        })?;
+    let module = scan_crate(&crate_dir, &crate_name).map_err(|e| CliError::CommandFailed {
+        command: format!("scan_crate: {}", e),
+        status: None,
+    })?;
 
-    if !status.success() {
-        return Err(CliError::CommandFailed {
-            command: "mobiFFI_bindgen".to_string(),
-            status: status.code(),
-        });
-    }
+    let swift_code = Swift::render_module(&module);
 
-    println!("Generated Swift bindings -> {}", output_path.display());
+    std::fs::write(&output_path, swift_code).map_err(|source| CliError::WriteFailed {
+        path: output_path.clone(),
+        source,
+    })?;
+
+    println!("Generated: {}", output_path.display());
     Ok(())
 }
 

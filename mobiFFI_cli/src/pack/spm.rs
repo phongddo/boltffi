@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::config::Config;
+use crate::config::{Config, SpmDistribution};
 use crate::error::{CliError, Result};
 
 pub struct SpmPackageGenerator<'a> {
@@ -23,7 +23,10 @@ impl<'a> SpmPackageGenerator<'a> {
     pub fn generate(&self) -> Result<PathBuf> {
         let output_path = self.config.pack.spm.output.join("Package.swift");
 
-        let content = self.generate_package_swift();
+        let content = match self.config.pack.spm.distribution {
+            SpmDistribution::Local => self.generate_local_package(),
+            SpmDistribution::Remote => self.generate_remote_package(),
+        };
 
         std::fs::create_dir_all(&self.config.pack.spm.output).map_err(|source| {
             CliError::CreateDirectoryFailed {
@@ -40,8 +43,47 @@ impl<'a> SpmPackageGenerator<'a> {
         Ok(output_path)
     }
 
-    fn generate_package_swift(&self) -> String {
-        let package_name = &self.config.package.name;
+    fn generate_local_package(&self) -> String {
+        let module_name = self.config.swift_module_name();
+        let tools_version = self.config.swift.tools_version.as_deref().unwrap_or("5.9");
+
+        format!(
+            r#"// swift-tools-version:{tools_version}
+import PackageDescription
+
+let package = Package(
+    name: "{module_name}",
+    platforms: [
+        .iOS(.{ios_version}),
+        .macOS(.v13)
+    ],
+    products: [
+        .library(
+            name: "{module_name}",
+            targets: ["{module_name}"]
+        ),
+    ],
+    targets: [
+        .binaryTarget(
+            name: "{module_name}FFI",
+            path: "{xcframework_name}.xcframework"
+        ),
+        .target(
+            name: "{module_name}",
+            dependencies: ["{module_name}FFI"],
+            path: "Sources"
+        ),
+    ]
+)
+"#,
+            tools_version = tools_version,
+            module_name = module_name,
+            ios_version = self.ios_version_for_spm(),
+            xcframework_name = self.xcframework_name,
+        )
+    }
+
+    fn generate_remote_package(&self) -> String {
         let module_name = self.config.swift_module_name();
         let tools_version = self.config.swift.tools_version.as_deref().unwrap_or("5.9");
         let repo_url = self
@@ -60,7 +102,7 @@ let releaseTag = "{version}"
 let releaseChecksum = "{checksum}"
 
 let package = Package(
-    name: "{package_name}",
+    name: "{module_name}",
     platforms: [
         .iOS(.{ios_version}),
         .macOS(.v13)
@@ -73,9 +115,14 @@ let package = Package(
     ],
     targets: [
         .binaryTarget(
-            name: "{module_name}",
+            name: "{module_name}FFI",
             url: "{repo_url}/releases/download/\(releaseTag)/{xcframework_name}.xcframework.zip",
             checksum: releaseChecksum
+        ),
+        .target(
+            name: "{module_name}",
+            dependencies: ["{module_name}FFI"],
+            path: "Sources"
         ),
     ]
 )
@@ -83,7 +130,6 @@ let package = Package(
             tools_version = tools_version,
             version = self.version,
             checksum = self.checksum,
-            package_name = package_name,
             module_name = module_name,
             ios_version = self.ios_version_for_spm(),
             repo_url = repo_url,
