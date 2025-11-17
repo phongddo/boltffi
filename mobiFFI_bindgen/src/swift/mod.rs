@@ -11,13 +11,19 @@ pub use body::BodyRenderer;
 pub use names::NamingConvention;
 pub use templates::{
     CStyleEnumTemplate, CallbackTraitTemplate, ClassTemplate, DataEnumTemplate, FunctionTemplate,
-    RecordTemplate, StreamCancellableTemplate, StreamSubscriptionTemplate,
+    PreambleTemplate, RecordTemplate, StreamCancellableTemplate, StreamSubscriptionTemplate,
 };
 pub use types::TypeMapper;
 
 pub struct Swift;
 
 impl Swift {
+    pub fn render_preamble(module: &Module) -> String {
+        PreambleTemplate::for_generator(module)
+            .render()
+            .expect("preamble template failed")
+    }
+
     pub fn render_record(record: &Record) -> String {
         RecordTemplate::from_record(record)
             .render()
@@ -78,8 +84,11 @@ impl Swift {
     pub fn render_module(module: &Module) -> String {
         let mut sections = Vec::new();
 
-        let ffi_module_name = format!("{}FFI", NamingConvention::class_name(&module.name));
-        sections.push(Self::render_header(&ffi_module_name));
+        sections.push(
+            PreambleTemplate::for_module(module)
+                .render()
+                .expect("preamble template failed"),
+        );
 
         module
             .records
@@ -110,23 +119,5 @@ impl Swift {
             .for_each(|f| sections.push(Self::render_function(f, module)));
 
         sections.join("\n\n")
-    }
-
-    fn render_header(ffi_module_name: &str) -> String {
-        format!(
-            r#"import Foundation
-import {}
-
-public struct FfiError: Error {{
-    public let code: Int32
-    public let message: String
-    
-    init(code: Int32, message: String = "FFI Error") {{
-        self.code = code
-        self.message = message
-    }}
-}}"#,
-            ffi_module_name
-        )
     }
 }

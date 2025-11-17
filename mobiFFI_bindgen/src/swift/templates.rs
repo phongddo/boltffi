@@ -9,6 +9,30 @@ use super::names::NamingConvention;
 use super::types::TypeMapper;
 
 #[derive(Template)]
+#[template(path = "swift/preamble.txt", escape = "none")]
+pub struct PreambleTemplate {
+    pub prefix: String,
+    pub ffi_module_name: Option<String>,
+}
+
+impl PreambleTemplate {
+    pub fn for_generator(module: &Module) -> Self {
+        Self {
+            prefix: module.ffi_prefix(),
+            ffi_module_name: None,
+        }
+    }
+
+    pub fn for_module(module: &Module) -> Self {
+        let ffi_module_name = format!("{}FFI", NamingConvention::class_name(&module.name));
+        Self {
+            prefix: module.ffi_prefix(),
+            ffi_module_name: Some(ffi_module_name),
+        }
+    }
+}
+
+#[derive(Template)]
 #[template(path = "swift/record.txt", escape = "none")]
 pub struct RecordTemplate {
     pub class_name: String,

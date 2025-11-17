@@ -2,15 +2,49 @@ import Foundation
 
 public struct FfiError: Error {
     public let status: FfiStatus
-    public init(status: FfiStatus) { self.status = status }
+    public let message: String
+    public init(status: FfiStatus, message: String = "") { self.status = status; self.message = message }
 }
+
+@inline(__always)
+private func stringFromFfi(_ ffiString: FfiString) -> String {
+    guard ffiString.len > 0, let pointer = ffiString.ptr else { return "" }
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: Int(ffiString.len)), as: UTF8.self)
+}
+
+@inline(__always)
+private func lastErrorMessage() -> String? {
+    var errorString = FfiString(ptr: nil, len: 0, cap: 0)
+    let status = mffi_last_error_message(&errorString)
+    defer { mffi_free_string(errorString) }
+    guard status.code == 0 else { return nil }
+    return stringFromFfi(errorString)
+}
+
+@inline(__always)
+private func checkStatus(_ status: FfiStatus, context: StaticString = #function) throws {
+    guard status.code == 0 else {
+        let message = lastErrorMessage() ?? ""
+        throw FfiError(status: status, message: message.isEmpty ? "FFI failed in \(context)" : message)
+    }
+}
+
+@inline(__always)
+private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
+    guard status.code == 0 else {
+        let message = lastErrorMessage() ?? ""
+        fatalError(message.isEmpty ? "FFI failed in \(context) [\(status.code)]" : message)
+    }
+}
+
 
 public func greeting(name: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
     return name.withCString { namePtr in
-    let status = mffi_greeting(namePtr, UInt(name.utf8.count), &result)
-    defer { mffi_free_string(result) }
-    return String(data: Data(bytes: result.ptr!, count: Int(result.len)), encoding: .utf8)!
+	    let status = mffi_greeting(namePtr, Int(name.utf8.count), &result)
+	    defer { mffi_free_string(result) }
+	    ensureOk(status)
+	    return stringFromFfi(result)
     }
 }
 
@@ -18,9 +52,10 @@ public func concat(first: String, second: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
     return first.withCString { firstPtr in
     second.withCString { secondPtr in
-    let status = mffi_concat(firstPtr, UInt(first.utf8.count), secondPtr, UInt(second.utf8.count), &result)
-    defer { mffi_free_string(result) }
-    return String(data: Data(bytes: result.ptr!, count: Int(result.len)), encoding: .utf8)!
+	    let status = mffi_concat(firstPtr, Int(first.utf8.count), secondPtr, Int(second.utf8.count), &result)
+	    defer { mffi_free_string(result) }
+	    ensureOk(status)
+	    return stringFromFfi(result)
     }
     }
 }
@@ -28,16 +63,17 @@ public func concat(first: String, second: String) -> String {
 public func reverseString(input: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
     return input.withCString { inputPtr in
-    let status = mffi_reverse_string(inputPtr, UInt(input.utf8.count), &result)
-    defer { mffi_free_string(result) }
-    return String(data: Data(bytes: result.ptr!, count: Int(result.len)), encoding: .utf8)!
+	    let status = mffi_reverse_string(inputPtr, Int(input.utf8.count), &result)
+	    defer { mffi_free_string(result) }
+	    ensureOk(status)
+	    return stringFromFfi(result)
     }
 }
 
 public func copyBytes(src: [UInt8], dst: inout [UInt8]) -> UInt {
     return src.withUnsafeBufferPointer { srcPtr in
     dst.withUnsafeMutableBufferPointer { dstPtr in
-    return mffi_copy_bytes(srcPtr.baseAddress, UInt(srcPtr.count), dstPtr.baseAddress, UInt(dstPtr.count))
+    return mffi_copy_bytes(srcPtr.baseAddress, Int(srcPtr.count), dstPtr.baseAddress, Int(dstPtr.count))
     }
     }
 }
@@ -53,25 +89,28 @@ public func multiplyFloats(first: Double, second: Double) -> Double {
 public func makeGreeting(name: String) -> String {
     var result = FfiString(ptr: nil, len: 0, cap: 0)
     return name.withCString { namePtr in
-    let status = mffi_make_greeting(namePtr, UInt(name.utf8.count), &result)
-    defer { mffi_free_string(result) }
-    return String(data: Data(bytes: result.ptr!, count: Int(result.len)), encoding: .utf8)!
+	    let status = mffi_make_greeting(namePtr, Int(name.utf8.count), &result)
+	    defer { mffi_free_string(result) }
+	    ensureOk(status)
+	    return stringFromFfi(result)
     }
 }
 
 public func safeDivide(numerator: Int32, denominator: Int32) throws -> Int32 {
-    var outValue: Int32 = 0
-    let status = mffi_safe_divide(numerator, denominator, &outValue)
-    if status.code != 0 { throw FfiError(status: status) }
-    return outValue
+	    var outValue: Int32 = 0
+	    let status = mffi_safe_divide(numerator, denominator, &outValue)
+	    try checkStatus(status)
+	    return outValue
 }
 
 public func generateSequence(count: Int32) -> [Int32] {
-    let len = mffi_generate_sequence_len(count)
-    var arr = [Int32](repeating: 0, count: Int(len))
-    var written: UInt = 0
-    _ = mffi_generate_sequence_copy_into(count, &arr, UInt(len), &written)
-    return arr
+	    let len = mffi_generate_sequence_len(count)
+	    var arr = [Int32](repeating: 0, count: Int(len))
+	    var written: Int = 0
+	    let status = mffi_generate_sequence_copy_into(count, &arr, Int(len), &written)
+	    ensureOk(status)
+	    if written < arr.count { arr.removeSubrange(written..<arr.count) }
+	    return arr
 }
 
 public func foreachRange(start: Int32, end: Int32, callback: @escaping (Int32) -> Void) {
@@ -82,8 +121,9 @@ public func foreachRange(start: Int32, end: Int32, callback: @escaping (Int32) -
     let callbackTrampoline: @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void = { ud, val in
         Unmanaged<ForeachRangeCallbackBox>.fromOpaque(ud!).takeUnretainedValue().fn_(val)
     }
-    _ = mffi_foreach_range(start, end, callbackTrampoline, callbackPtr)
-    Unmanaged<ForeachRangeCallbackBox>.fromOpaque(callbackPtr).release()
+	    let status = mffi_foreach_range(start, end, callbackTrampoline, callbackPtr)
+	    Unmanaged<ForeachRangeCallbackBox>.fromOpaque(callbackPtr).release()
+	    ensureOk(status)
 }
 
 public func oppositeDirection(dir: Direction) -> Direction {
@@ -132,7 +172,12 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
                         var status = FfiStatus()
                         let result = mffi_compute_heavy_complete(ctx.handle, &status)
                         mffi_compute_heavy_free(ctx.handle)
-                        ctx.continuation.resume(returning: result)
+                        if status.code != 0 {
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            ctx.continuation.resume(returning: result)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -171,7 +216,8 @@ public func fetchData(id: Int32) async throws -> Int32 {
                         let result = mffi_fetch_data_complete(ctx.handle, &status)
                         mffi_fetch_data_free(ctx.handle)
                         if status.code != 0 {
-                            ctx.continuation.resume(throwing: FfiError(status: status))
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
                         } else {
                             ctx.continuation.resume(returning: result)
                         }
@@ -211,10 +257,15 @@ public func asyncMakeString(value: Int32) async throws -> String {
                     if pollResult == 0 {
                         var status = FfiStatus()
                         let ffiStr = mffi_async_make_string_complete(ctx.handle, &status)
-                        let str = String(data: Data(bytes: ffiStr.ptr!, count: Int(ffiStr.len)), encoding: .utf8)!
-                        mffi_free_string(ffiStr)
                         mffi_async_make_string_free(ctx.handle)
-                        ctx.continuation.resume(returning: str)
+                        defer { mffi_free_string(ffiStr) }
+                        if status.code != 0 {
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            let str = stringFromFfi(ffiStr)
+                            ctx.continuation.resume(returning: str)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -252,7 +303,12 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
                         var status = FfiStatus()
                         let result = mffi_async_fetch_point_complete(ctx.handle, &status)
                         mffi_async_fetch_point_free(ctx.handle)
-                        ctx.continuation.resume(returning: result)
+                        if status.code != 0 {
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            ctx.continuation.resume(returning: result)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -289,10 +345,16 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
                     if pollResult == 0 {
                         var status = FfiStatus()
                         let buf = mffi_async_get_numbers_complete(ctx.handle, &status)
-                        let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
-                        mffi_free_buf_i32(buf)
                         mffi_async_get_numbers_free(ctx.handle)
-                        ctx.continuation.resume(returning: arr)
+                        if status.code != 0 {
+                            mffi_free_buf_i32(buf)
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
+                            mffi_free_buf_i32(buf)
+                            ctx.continuation.resume(returning: arr)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -330,7 +392,12 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
                         var status = FfiStatus()
                         let opt = mffi_async_find_value_complete(ctx.handle, &status)
                         mffi_async_find_value_free(ctx.handle)
-                        ctx.continuation.resume(returning: opt.isSome ? opt.value : nil)
+                        if status.code != 0 {
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            ctx.continuation.resume(returning: opt.isSome ? opt.value : nil)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -345,7 +412,7 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
 }
 
 public func asyncGreeting(name: String) async throws -> String {
-    let futureHandle = mffi_async_greeting(name, UInt(name.utf8.count))
+    let futureHandle = mffi_async_greeting(name, Int(name.utf8.count))
     
     class FutureContext {
         let handle: RustFutureHandle?
@@ -367,10 +434,15 @@ public func asyncGreeting(name: String) async throws -> String {
                     if pollResult == 0 {
                         var status = FfiStatus()
                         let ffiStr = mffi_async_greeting_complete(ctx.handle, &status)
-                        let str = String(data: Data(bytes: ffiStr.ptr!, count: Int(ffiStr.len)), encoding: .utf8)!
-                        mffi_free_string(ffiStr)
                         mffi_async_greeting_free(ctx.handle)
-                        ctx.continuation.resume(returning: str)
+                        defer { mffi_free_string(ffiStr) }
+                        if status.code != 0 {
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
+                        } else {
+                            let str = stringFromFfi(ffiStr)
+                            ctx.continuation.resume(returning: str)
+                        }
                     } else {
                         poll(ctx: ctx)
                     }
@@ -409,7 +481,9 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
                         let buf = mffi_async_fetch_numbers_complete(ctx.handle, &status)
                         mffi_async_fetch_numbers_free(ctx.handle)
                         if status.code != 0 {
-                            ctx.continuation.resume(throwing: FfiError(status: status))
+                            (buf)
+                            let message = lastErrorMessage() ?? ""
+                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
                         } else {
                             let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
                             (buf)
@@ -446,11 +520,15 @@ public final class Counter {
     }
 
     public func set(value: UInt64) {
-        mffi_counter_set(handle, value)
+        
+let status = mffi_counter_set(handle, value)
+ensureOk(status)
     }
 
     public func increment() {
-        mffi_counter_increment(handle)
+        
+let status = mffi_counter_increment(handle)
+ensureOk(status)
     }
 
     public func get() -> UInt64 {
@@ -476,7 +554,9 @@ public final class DataStore {
     }
 
     public func add(point: DataPoint) {
-        mffi_datastore_add(handle, point)
+        
+let status = mffi_datastore_add(handle, point)
+ensureOk(status)
     }
 
     public func len() -> UInt {
@@ -498,8 +578,9 @@ mffi_datastore_copy_into(handle, dstPtr.baseAddress, UInt(dstPtr.count))
         let callbackTrampoline: @convention(c) (UnsafeMutableRawPointer?, DataPoint) -> Void = { ud, val in
             Unmanaged<ForeachCallbackBox>.fromOpaque(ud!).takeUnretainedValue().fn_(val)
         }
-        let _ = mffi_datastore_foreach(handle, callbackTrampoline, callbackPtr)
+        let status = mffi_datastore_foreach(handle, callbackTrampoline, callbackPtr)
         Unmanaged<ForeachCallbackBox>.fromOpaque(callbackPtr).release()
+        ensureOk(status)
     }
 
     public func sum() -> Double {
@@ -525,7 +606,9 @@ public final class Accumulator {
     }
 
     public func add(amount: Int64) {
-        mffi_accumulator_add(handle, amount)
+        
+let status = mffi_accumulator_add(handle, amount)
+ensureOk(status)
     }
 
     public func get() -> Int64 {
@@ -533,7 +616,9 @@ public final class Accumulator {
     }
 
     public func reset() {
-        mffi_accumulator_reset(handle)
+        
+let status = mffi_accumulator_reset(handle)
+ensureOk(status)
     }
 }
 
@@ -555,7 +640,9 @@ public final class SensorMonitor {
     }
 
     public func emitReading(sensorId: Int32, timestampMs: Int64, value: Double) {
-        mffi_sensormonitor_emit_reading(handle, sensorId, timestampMs, value)
+        
+let status = mffi_sensormonitor_emit_reading(handle, sensorId, timestampMs, value)
+ensureOk(status)
     }
 
     public func subscriberCount() -> UInt {
@@ -637,7 +724,9 @@ public final class DataConsumer {
     }
 
     public func setProvider(provider: DataProviderProtocol) {
-        mffi_dataconsumer_set_provider(handle, UnsafeMutablePointer<ForeignDataProvider>(DataProviderBridge.create(provider)))
+        
+let status = mffi_dataconsumer_set_provider(handle, UnsafeMutablePointer<ForeignDataProvider>(DataProviderBridge.create(provider)))
+ensureOk(status)
     }
 
     public func computeSum() -> UInt64 {

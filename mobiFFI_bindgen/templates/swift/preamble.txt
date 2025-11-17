@@ -1,0 +1,42 @@
+import Foundation
+{%- if let Some(ffi_module_name) = ffi_module_name %}
+import {{ ffi_module_name }}
+{%- endif %}
+
+public struct FfiError: Error {
+    public let status: FfiStatus
+    public let message: String
+    public init(status: FfiStatus, message: String = "") { self.status = status; self.message = message }
+}
+
+@inline(__always)
+private func stringFromFfi(_ ffiString: FfiString) -> String {
+    guard ffiString.len > 0, let pointer = ffiString.ptr else { return "" }
+    return String(decoding: UnsafeBufferPointer(start: pointer, count: Int(ffiString.len)), as: UTF8.self)
+}
+
+@inline(__always)
+private func lastErrorMessage() -> String? {
+    var errorString = FfiString(ptr: nil, len: 0, cap: 0)
+    let status = {{ prefix }}_last_error_message(&errorString)
+    defer { {{ prefix }}_free_string(errorString) }
+    guard status.code == 0 else { return nil }
+    return stringFromFfi(errorString)
+}
+
+@inline(__always)
+private func checkStatus(_ status: FfiStatus, context: StaticString = #function) throws {
+    guard status.code == 0 else {
+        let message = lastErrorMessage() ?? ""
+        throw FfiError(status: status, message: message.isEmpty ? "FFI failed in \(context)" : message)
+    }
+}
+
+@inline(__always)
+private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
+    guard status.code == 0 else {
+        let message = lastErrorMessage() ?? ""
+        fatalError(message.isEmpty ? "FFI failed in \(context) [\(status.code)]" : message)
+    }
+}
+

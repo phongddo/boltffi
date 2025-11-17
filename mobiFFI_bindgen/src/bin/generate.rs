@@ -20,32 +20,31 @@ fn read_crate_name(crate_path: &PathBuf) -> String {
 fn generate_swift(module: &Module) -> String {
     let mut output = String::new();
 
-    output.push_str("import Foundation\n\n");
+    output.push_str(&Swift::render_preamble(module));
+    output.push_str("\n\n");
 
-    output.push_str("public struct FfiError: Error {\n");
-    output.push_str("    public let status: FfiStatus\n");
-    output.push_str("    public init(status: FfiStatus) { self.status = status }\n");
-    output.push_str("}\n\n");
-
-    for function in &module.functions {
+    module.functions.iter().for_each(|function| {
         output.push_str(&Swift::render_function(function, module));
         output.push_str("\n\n");
-    }
+    });
 
-    for class in &module.classes {
-        let wrappers = Swift::render_stream_wrappers(class, module);
+    module.classes.iter().for_each(|class_item| {
+        let wrappers = Swift::render_stream_wrappers(class_item, module);
         if !wrappers.is_empty() {
             output.push_str(&wrappers);
             output.push_str("\n\n");
         }
-        output.push_str(&Swift::render_class(class, module));
+        output.push_str(&Swift::render_class(class_item, module));
         output.push_str("\n\n");
-    }
+    });
 
-    for callback_trait in &module.callback_traits {
-        output.push_str(&Swift::render_callback_trait(callback_trait, module));
-        output.push_str("\n\n");
-    }
+    module
+        .callback_traits
+        .iter()
+        .for_each(|callback_trait_item| {
+            output.push_str(&Swift::render_callback_trait(callback_trait_item, module));
+            output.push_str("\n\n");
+        });
 
     output
 }
@@ -67,9 +66,9 @@ fn main() {
     println!("Scanning crate: {}", crate_path.display());
 
     let module = match scan_crate(&crate_path, &module_name) {
-        Ok(m) => m,
-        Err(e) => {
-            eprintln!("Error scanning crate: {}", e);
+        Ok(scanned_module) => scanned_module,
+        Err(error) => {
+            eprintln!("Error scanning crate: {}", error);
             std::process::exit(1);
         }
     };
@@ -94,31 +93,38 @@ fn main() {
     println!("Swift code written to: {}", output_path.display());
 
     println!("\n--- Classes ---");
-    for class in &module.classes {
+    module.classes.iter().for_each(|class_item| {
         println!(
             "  {} ({} methods, {} streams)",
-            class.name,
-            class.methods.len(),
-            class.streams.len()
+            class_item.name,
+            class_item.methods.len(),
+            class_item.streams.len()
         );
-    }
+    });
 
     println!("\n--- Records ---");
-    for record in &module.records {
-        println!("  {} ({} fields)", record.name, record.fields.len());
-    }
+    module.records.iter().for_each(|record_item| {
+        println!("  {} ({} fields)", record_item.name, record_item.fields.len());
+    });
 
     println!("\n--- Functions ---");
-    for function in &module.functions {
-        println!("  {} ({} params)", function.name, function.inputs.len());
-    }
+    module.functions.iter().for_each(|function_item| {
+        println!(
+            "  {} ({} params)",
+            function_item.name,
+            function_item.inputs.len()
+        );
+    });
 
     println!("\n--- Callback Traits ---");
-    for callback_trait in &module.callback_traits {
-        println!(
-            "  {} ({} methods)",
-            callback_trait.name,
-            callback_trait.methods.len()
-        );
-    }
+    module
+        .callback_traits
+        .iter()
+        .for_each(|callback_trait_item| {
+            println!(
+                "  {} ({} methods)",
+                callback_trait_item.name,
+                callback_trait_item.methods.len()
+            );
+        });
 }

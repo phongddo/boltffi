@@ -7,8 +7,13 @@
 {{ param.swift_name }}.withUnsafeMutableBufferPointer { {{ param.swift_name }}Ptr in
 {% endif -%}
 {%- endfor -%}
-{%- if !has_slice_params && has_return %}return {% endif -%}
+{%- if has_return %}
+{%- if !has_slice_params %}return {% endif -%}
 {{ ffi_name }}(handle{% for param in params %}, {{ param.ffi_arg }}{% endfor %})
+{%- else %}
+let status = {{ ffi_name }}(handle{% for param in params %}, {{ param.ffi_arg }}{% endfor %})
+ensureOk(status)
+{%- endif %}
 {%- for param in params -%}
 {%- if param.is_slice || param.is_mut_slice %}
 }

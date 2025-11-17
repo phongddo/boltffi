@@ -7,10 +7,16 @@
             Unmanaged<{{ cb.box_type }}>.fromOpaque(ud!).takeUnretainedValue().fn_(val)
         }
 {%- endfor %}
-        {% if has_return %}let result = {% else %}let _ = {% endif %}{{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %}{% for cb in callbacks %}, {{ cb.trampoline_name }}, {{ cb.ptr_name }}{% endfor %})
+        {%- if has_return %}
+        let result = {{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %}{% for cb in callbacks %}, {{ cb.trampoline_name }}, {{ cb.ptr_name }}{% endfor %})
+        {%- else %}
+        let status = {{ ffi_name }}(handle{% for arg in args %}, {{ arg }}{% endfor %}{% for cb in callbacks %}, {{ cb.trampoline_name }}, {{ cb.ptr_name }}{% endfor %})
+        {%- endif %}
 {%- for cb in callbacks %}
         Unmanaged<{{ cb.box_type }}>.fromOpaque({{ cb.ptr_name }}).release()
 {%- endfor %}
 {%- if has_return %}
         return result
+{%- else %}
+        ensureOk(status)
 {%- endif %}
