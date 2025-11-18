@@ -13,7 +13,7 @@ return
 {% endif -%}
 {%- endfor -%}
 var status = FfiStatus()
-let result = {{ ffi_name }}(handle{% for param in params %}, {% if param.is_string %}UnsafeRawPointer({{ param.swift_name }}Ptr).assumingMemoryBound(to: UInt8.self), Int({{ param.swift_name }}.utf8.count){% else if param.is_slice || param.is_mut_slice || param.is_vec %}{{ param.swift_name }}Ptr.baseAddress, Int({{ param.swift_name }}Ptr.count){% else %}{{ param.ffi_arg }}{% endif %}{% endfor %}, &status)
+let result = {{ ffi_name }}(handle{% for param in params %}, {% if param.is_string %}UnsafeRawPointer({{ param.swift_name }}Ptr).assumingMemoryBound(to: UInt8.self), UInt({{ param.swift_name }}.utf8.count){% else if param.is_slice || param.is_mut_slice || param.is_vec %}{{ param.swift_name }}Ptr.baseAddress, UInt({{ param.swift_name }}Ptr.count){% else %}{{ param.ffi_arg }}{% endif %}{% endfor %}, &status)
 try checkStatus(status)
 return result as {{ return_type }}
 {%- for param in params -%}

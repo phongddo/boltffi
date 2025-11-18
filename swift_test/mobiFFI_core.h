@@ -139,6 +139,12 @@ typedef uint8_t SchedulerStateTag;
 typedef const void* RustFutureHandle;
 typedef void (*RustFutureContinuationCallback)(uint64_t callback_data, RustFuturePoll poll_result);
 
+#include <stdatomic.h>
+
+static inline bool mffi_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {
+  return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);
+}
+
 typedef void (*StreamContinuationCallback)(uint64_t callback_data, int8_t poll_result);
 
 typedef struct DataPoint {

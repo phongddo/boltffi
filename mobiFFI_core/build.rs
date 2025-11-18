@@ -1232,6 +1232,19 @@ fn append_macro_exports(
         } else {
             ""
         };
+        let atomic_cas_defs = if has_async && !header.contains("mffi_atomic_u8_cas") {
+            let include_stdatomic = if header.contains("<stdatomic.h>") {
+                ""
+            } else {
+                "#include <stdatomic.h>\n\n"
+            };
+            format!(
+                "{}static inline bool mffi_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{\n  return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);\n}}\n\n",
+                include_stdatomic
+            )
+        } else {
+            String::new()
+        };
 
         let has_streams = !stream_exports.is_empty();
         let stream_continuation_defs = if has_streams
@@ -1265,11 +1278,12 @@ fn append_macro_exports(
         header.insert_str(
             pos,
             &format!(
-                "{}{}{}{}{}{}{}{}{}\n",
+                "{}{}{}{}{}{}{}{}{}{}\n",
                 marker,
                 generic_defs,
                 enum_defs,
                 rust_future_defs,
+                atomic_cas_defs,
                 stream_continuation_defs,
                 struct_defs,
                 trait_defs,

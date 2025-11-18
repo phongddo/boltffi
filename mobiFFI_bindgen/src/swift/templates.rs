@@ -13,21 +13,34 @@ use super::types::TypeMapper;
 pub struct PreambleTemplate {
     pub prefix: String,
     pub ffi_module_name: Option<String>,
+    pub has_async: bool,
 }
 
 impl PreambleTemplate {
     pub fn for_generator(module: &Module) -> Self {
+        let has_async = module.functions.iter().any(|function| function.is_async)
+            || module
+                .classes
+                .iter()
+                .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
         Self {
             prefix: module.ffi_prefix(),
             ffi_module_name: None,
+            has_async,
         }
     }
 
     pub fn for_module(module: &Module) -> Self {
         let ffi_module_name = format!("{}FFI", NamingConvention::class_name(&module.name));
+        let has_async = module.functions.iter().any(|function| function.is_async)
+            || module
+                .classes
+                .iter()
+                .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
         Self {
             prefix: module.ffi_prefix(),
             ffi_module_name: Some(ffi_module_name),
+            has_async,
         }
     }
 }
@@ -304,13 +317,17 @@ impl FunctionTemplate {
             ffi_free_vec: function
                 .output
                 .as_ref()
-                .map(|ty| {
-                    if let Type::Vec(inner) = ty {
-                        let inner_ffi = TypeMapper::ffi_type_name(inner);
-                        format!("{}_free_buf_{}", ffi_prefix, inner_ffi)
-                    } else {
-                        String::new()
-                    }
+                .and_then(|output_type| match output_type {
+                    Type::Vec(inner) => Some(inner.as_ref()),
+                    Type::Result { ok, .. } => match ok.as_ref() {
+                        Type::Vec(inner) => Some(inner.as_ref()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .map(|inner_type| {
+                    let inner_ffi = TypeMapper::ffi_type_name(inner_type);
+                    format!("{}_free_buf_{}", ffi_prefix, inner_ffi)
                 })
                 .unwrap_or_default(),
             ffi_vec_len: format!("{}_{}_len", ffi_prefix, func_snake),

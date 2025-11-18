@@ -40,3 +40,49 @@ private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
     }
 }
 
+{%- if has_async %}
+final class FfiFutureState<T> {
+    typealias Continuation = CheckedContinuation<T, Error>
+    
+    enum FinishDecision {
+        case alreadyFinished
+        case finishWithoutContinuation
+        case finishWithContinuation(Continuation)
+    }
+    
+    let handle: RustFutureHandle?
+    private var stateTag: UInt8 = 0
+    private var continuation: Continuation?
+    
+    init(handle: RustFutureHandle?) {
+        self.handle = handle
+    }
+    
+    func installContinuation(_ continuation: Continuation) -> Bool {
+        self.continuation = continuation
+        let installed = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 1) }
+        if !installed {
+            self.continuation = nil
+        }
+        return installed
+    }
+    
+    func decideFinish() -> FinishDecision {
+        let finishedWithContinuation = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 1, 2) }
+        if finishedWithContinuation {
+            if let continuation = continuation {
+                self.continuation = nil
+                return .finishWithContinuation(continuation)
+            }
+            return .finishWithoutContinuation
+        }
+        
+        let finishedWithoutContinuation = withUnsafeMutablePointer(to: &stateTag) { {{ prefix }}_atomic_u8_cas($0, 0, 2) }
+        if finishedWithoutContinuation {
+            return .finishWithoutContinuation
+        }
+        
+        return .alreadyFinished
+    }
+}
+{%- endif %}
