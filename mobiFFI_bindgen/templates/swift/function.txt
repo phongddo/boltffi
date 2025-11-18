@@ -20,95 +20,180 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
 {%- endif %}
 {%- endfor %}
     
-    class FutureContext {
-        let handle: RustFutureHandle?
-        let continuation: CheckedContinuation<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}, Error>
+    final class FutureState {
+        typealias Continuation = CheckedContinuation<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}, Error>
         
-        init(handle: RustFutureHandle?, continuation: CheckedContinuation<{% match return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}Void{% endmatch %}, Error>) {
+        enum FinishDecision {
+            case alreadyFinished
+            case finishWithoutContinuation
+            case finishWithContinuation(Continuation)
+        }
+        
+        let handle: RustFutureHandle?
+        private let lock = NSLock()
+        private var finished = false
+        private var continuation: Continuation?
+        
+        init(handle: RustFutureHandle?) {
             self.handle = handle
+        }
+        
+        func installContinuation(_ continuation: Continuation) -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return false }
             self.continuation = continuation
+            return true
+        }
+        
+        func decideFinish() -> FinishDecision {
+            lock.lock()
+            defer { lock.unlock() }
+            guard !finished else { return .alreadyFinished }
+            finished = true
+            if let continuation = continuation {
+                self.continuation = nil
+                return .finishWithContinuation(continuation)
+            }
+            return .finishWithoutContinuation
         }
     }
     
+    let state = FutureState(handle: futureHandle)
+    
     return try await withTaskCancellationHandler {
         try await withCheckedThrowingContinuation { continuation in
-            let context = FutureContext(handle: futureHandle, continuation: continuation)
+            guard state.installContinuation(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
             
-            func poll(ctx: FutureContext) {
+            func poll(ctx: FutureState) {
                 {{ ffi_poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-                    let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
+                    let ctx = Unmanaged<FutureState>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
+                        let decision = ctx.decideFinish()
+                        if case .alreadyFinished = decision { return }
                         var status = FfiStatus()
 {%- if returns_result && result_ok_is_vec %}
                         let buf = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                {{ ffi_free_vec }}(buf)
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
+                                {{ ffi_free_vec }}(buf)
+                                continuation.resume(returning: arr)
+                            }
+                        case .finishWithoutContinuation:
                             {{ ffi_free_vec }}(buf)
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
-                            {{ ffi_free_vec }}(buf)
-                            ctx.continuation.resume(returning: arr)
+                        case .alreadyFinished:
+                            break
                         }
 {%- else if returns_result %}
                         let result = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            ctx.continuation.resume(returning: result)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                continuation.resume(returning: result)
+                            }
+                        case .finishWithoutContinuation:
+                            break
+                        case .alreadyFinished:
+                            break
                         }
 {%- else if returns_string %}
                         let ffiStr = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
                         defer { mffi_free_string(ffiStr) }
-                        if status.code != 0 {
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            let str = stringFromFfi(ffiStr)
-                            ctx.continuation.resume(returning: str)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                let str = stringFromFfi(ffiStr)
+                                continuation.resume(returning: str)
+                            }
+                        case .finishWithoutContinuation:
+                            break
+                        case .alreadyFinished:
+                            break
                         }
 {%- else if returns_vec %}
                         let buf = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                {{ ffi_free_vec }}(buf)
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
+                                {{ ffi_free_vec }}(buf)
+                                continuation.resume(returning: arr)
+                            }
+                        case .finishWithoutContinuation:
                             {{ ffi_free_vec }}(buf)
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            let arr = Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
-                            {{ ffi_free_vec }}(buf)
-                            ctx.continuation.resume(returning: arr)
+                        case .alreadyFinished:
+                            break
                         }
 {%- else if returns_option %}
                         let opt = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            ctx.continuation.resume(returning: opt.isSome ? opt.value : nil)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                continuation.resume(returning: opt.isSome ? opt.value : nil)
+                            }
+                        case .finishWithoutContinuation:
+                            break
+                        case .alreadyFinished:
+                            break
                         }
 {%- else if return_type.is_some() %}
                         let result = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            ctx.continuation.resume(returning: result)
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                continuation.resume(returning: result)
+                            }
+                        case .finishWithoutContinuation:
+                            break
+                        case .alreadyFinished:
+                            break
                         }
 {%- else %}
                         _ = {{ ffi_complete }}(ctx.handle, &status)
                         {{ ffi_free }}(ctx.handle)
-                        if status.code != 0 {
-                            let message = lastErrorMessage() ?? ""
-                            ctx.continuation.resume(throwing: FfiError(status: status, message: message))
-                        } else {
-                            ctx.continuation.resume(returning: ())
+                        switch decision {
+                        case .finishWithContinuation(let continuation):
+                            if status.code != 0 {
+                                let message = lastErrorMessage() ?? ""
+                                continuation.resume(throwing: FfiError(status: status, message: message))
+                            } else {
+                                continuation.resume(returning: ())
+                            }
+                        case .finishWithoutContinuation:
+                            break
+                        case .alreadyFinished:
+                            break
                         }
 {%- endif %}
                     } else {
@@ -116,11 +201,21 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
                     }
                 }
             }
-            poll(ctx: context)
+            poll(ctx: state)
         }
     } onCancel: {
-        {{ ffi_cancel }}(futureHandle)
-        {{ ffi_free }}(futureHandle)
+        let decision = state.decideFinish()
+        switch decision {
+        case .alreadyFinished:
+            break
+        case .finishWithoutContinuation:
+            {{ ffi_cancel }}(futureHandle)
+            {{ ffi_free }}(futureHandle)
+        case .finishWithContinuation(let continuation):
+            {{ ffi_cancel }}(futureHandle)
+            {{ ffi_free }}(futureHandle)
+            continuation.resume(throwing: CancellationError())
+        }
     }
 {%- else %}
 {#- SYNC FUNCTION #}
