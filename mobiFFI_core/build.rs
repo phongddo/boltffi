@@ -1241,7 +1241,7 @@ fn append_macro_exports(
                 "#include <stdatomic.h>\n\n"
             };
             format!(
-                "{}static inline bool mffi_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{\n  return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);\n}}\n\n",
+                "{}static inline bool mffi_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{\n  return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);\n}}\n\nstatic inline uint64_t mffi_atomic_u64_exchange(uint64_t* slot, uint64_t value) {{\n  return atomic_exchange_explicit((_Atomic uint64_t*)slot, value, memory_order_acq_rel);\n}}\n\n",
                 include_stdatomic
             )
         } else {

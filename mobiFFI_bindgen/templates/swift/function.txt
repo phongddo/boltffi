@@ -31,7 +31,6 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 {{ ffi_poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -160,7 +159,6 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
                         }
 {%- endif %}
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)

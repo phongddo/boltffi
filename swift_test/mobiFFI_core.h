@@ -145,6 +145,10 @@ static inline bool mffi_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t 
   return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);
 }
 
+static inline uint64_t mffi_atomic_u64_exchange(uint64_t* slot, uint64_t value) {
+  return atomic_exchange_explicit((_Atomic uint64_t*)slot, value, memory_order_acq_rel);
+}
+
 typedef void (*StreamContinuationCallback)(uint64_t callback_data, int8_t poll_result);
 
 typedef struct DataPoint {

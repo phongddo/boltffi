@@ -38,53 +38,46 @@ private func ensureOk(_ status: FfiStatus, context: StaticString = #function) {
 }
 final class FfiFutureState<T>: @unchecked Sendable {
     typealias Continuation = CheckedContinuation<T, Error>
-    
+
     enum FinishDecision {
         case alreadyFinished
         case finishWithoutContinuation
         case finishWithContinuation(Continuation)
     }
-    
+
+    final class ContinuationBox {
+        let continuation: Continuation
+        init(_ continuation: Continuation) { self.continuation = continuation }
+    }
+
     let handle: RustFutureHandle?
-    private var stateTag: UInt8 = 0
-    private var continuation: Continuation?
-    
+    private var continuationSlot: UInt64 = 0
+
     init(handle: RustFutureHandle?) {
         self.handle = handle
     }
-    
+
     func installContinuation(_ continuation: Continuation) -> Bool {
-        let claimed = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 1) }
-        guard claimed else { return false }
-        self.continuation = continuation
-        let installed = withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 1, 2) }
-        if installed { return true }
-        self.continuation = nil
+        let box = ContinuationBox(continuation)
+        let raw = UInt64(UInt(bitPattern: Unmanaged.passRetained(box).toOpaque()))
+        let prior = withUnsafeMutablePointer(to: &continuationSlot) { mffi_atomic_u64_exchange($0, raw) }
+
+        if prior == 0 { return true }
+        if prior == 1 {
+            Unmanaged.passUnretained(box).release()
+            return false
+        }
+        withUnsafeMutablePointer(to: &continuationSlot) { _ = mffi_atomic_u64_exchange($0, prior) }
+        Unmanaged.passUnretained(box).release()
         return false
     }
 
-    func canPoll() -> Bool {
-        !(withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 3, 3) })
-    }
-    
     func decideFinish() -> FinishDecision {
-        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 2, 3) }) {
-            if let continuation = continuation {
-                self.continuation = nil
-                return .finishWithContinuation(continuation)
-            }
-            return .finishWithoutContinuation
-        }
-
-        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 0, 3) }) {
-            return .finishWithoutContinuation
-        }
-
-        if (withUnsafeMutablePointer(to: &stateTag) { mffi_atomic_u8_cas($0, 1, 3) }) {
-            return .finishWithoutContinuation
-        }
-
-        return .alreadyFinished
+        let prior = withUnsafeMutablePointer(to: &continuationSlot) { mffi_atomic_u64_exchange($0, 1) }
+        if prior == 1 { return .alreadyFinished }
+        if prior == 0 { return .finishWithoutContinuation }
+        let box = Unmanaged<ContinuationBox>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(prior))!).takeRetainedValue()
+        return .finishWithContinuation(box.continuation)
     }
 }
 
@@ -214,7 +207,6 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_compute_heavy_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -237,7 +229,6 @@ public func computeHeavy(input: Int32) async throws -> Int32 {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -278,7 +269,6 @@ public func fetchData(id: Int32) async throws -> Int32 {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_fetch_data_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -301,7 +291,6 @@ public func fetchData(id: Int32) async throws -> Int32 {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -342,7 +331,6 @@ public func asyncMakeString(value: Int32) async throws -> String {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_make_string_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -367,7 +355,6 @@ public func asyncMakeString(value: Int32) async throws -> String {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -408,7 +395,6 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_fetch_point_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -431,7 +417,6 @@ public func asyncFetchPoint(x: Double, y: Double) async throws -> DataPoint {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -472,7 +457,6 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_get_numbers_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -498,7 +482,6 @@ public func asyncGetNumbers(count: Int32) async throws -> [Int32] {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -539,7 +522,6 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_find_value_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -562,7 +544,6 @@ public func asyncFindValue(needle: Int32) async throws -> Int32? {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -605,7 +586,6 @@ public func asyncGreeting(name: String) async throws -> String {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_greeting_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -630,7 +610,6 @@ public func asyncGreeting(name: String) async throws -> String {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
@@ -671,7 +650,6 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
             }
             
             func poll(ctx: FutureContext) {
-                guard ctx.canPoll() else { return }
                 mffi_async_fetch_numbers_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
                     let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
                     if pollResult == 0 {
@@ -697,7 +675,6 @@ public func asyncFetchNumbers(id: Int32) async throws -> [Int32] {
                             break
                         }
                     } else {
-                        guard ctx.canPoll() else { return }
                         Task { [ctx] in
                             await Task.yield()
                             poll(ctx: ctx)
