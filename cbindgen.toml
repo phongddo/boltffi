@@ -1,5 +1,5 @@
 language = "C"
-include_guard = "MOBIFFI_CORE_H"
+include_guard = "RIFF_CORE_H"
 
 [export]
 include = []

@@ -1,0 +1,1082 @@
+use askama::Template;
+use riff_ffi_rules::naming::snake_to_camel;
+
+use crate::model::{
+    CallbackTrait, Class, Enumeration, Function, Method, Module, Record, StreamMethod, StreamMode,
+};
+
+use super::body::BodyRenderer;
+use super::names::NamingConvention;
+use super::types::TypeMapper;
+
+#[derive(Template)]
+#[template(path = "swift/preamble.txt", escape = "none")]
+pub struct PreambleTemplate {
+    pub prefix: String,
+    pub ffi_module_name: Option<String>,
+    pub has_async: bool,
+}
+
+impl PreambleTemplate {
+    pub fn for_generator(module: &Module) -> Self {
+        let has_async = module.functions.iter().any(|function| function.is_async)
+            || module
+                .classes
+                .iter()
+                .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
+        Self {
+            prefix: module.ffi_prefix(),
+            ffi_module_name: None,
+            has_async,
+        }
+    }
+
+    pub fn for_module(module: &Module) -> Self {
+        let ffi_module_name = format!("{}FFI", NamingConvention::class_name(&module.name));
+        let has_async = module.functions.iter().any(|function| function.is_async)
+            || module
+                .classes
+                .iter()
+                .any(|class_item| class_item.methods.iter().any(|method| method.is_async));
+        Self {
+            prefix: module.ffi_prefix(),
+            ffi_module_name: Some(ffi_module_name),
+            has_async,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/record.txt", escape = "none")]
+pub struct RecordTemplate {
+    pub class_name: String,
+    pub fields: Vec<FieldView>,
+    pub has_aliases: bool,
+}
+
+impl RecordTemplate {
+    pub fn from_record(record: &Record) -> Self {
+        let fields: Vec<FieldView> = record
+            .fields
+            .iter()
+            .map(|field| {
+                let swift_name = NamingConvention::property_name(&field.name);
+                let c_name = snake_to_camel(&field.name);
+                let needs_alias = swift_name != c_name;
+                FieldView {
+                    needs_alias,
+                    swift_name,
+                    c_name,
+                    swift_type: TypeMapper::map_type(&field.field_type),
+                }
+            })
+            .collect();
+        let has_aliases = fields.iter().any(|field| field.needs_alias);
+        Self {
+            class_name: NamingConvention::class_name(&record.name),
+            fields,
+            has_aliases,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/function.txt", escape = "none")]
+pub struct FunctionTemplate {
+    pub prefix: String,
+    pub func_name: String,
+    pub ffi_name: String,
+    pub params: Vec<FunctionParamView>,
+    pub return_type: Option<String>,
+    pub returns_string: bool,
+    pub returns_vec: bool,
+    pub returns_option: bool,
+    pub returns_result: bool,
+    pub result_ok_type: Option<String>,
+    pub result_ok_is_vec: bool,
+    pub vec_inner_type: Option<String>,
+    pub vec_inner_is_struct: bool,
+    pub option_inner_type: Option<String>,
+    pub is_async: bool,
+    pub throws: bool,
+    pub has_string_params: bool,
+    pub has_slice_params: bool,
+    pub has_vec_params: bool,
+    pub has_callbacks: bool,
+    pub callbacks: Vec<FunctionCallbackView>,
+    pub ffi_poll: String,
+    pub ffi_complete: String,
+    pub ffi_free: String,
+    pub ffi_cancel: String,
+    pub ffi_free_vec: String,
+    pub ffi_vec_len: String,
+    pub ffi_vec_copy_into: String,
+}
+
+impl FunctionTemplate {
+    pub fn from_function(function: &Function, module: &Module) -> Self {
+        use crate::model::Type;
+
+        let returns_string = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::String))
+            .unwrap_or(false);
+
+        let returns_vec = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::Vec(_)))
+            .unwrap_or(false);
+
+        let returns_option = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::Option(_)))
+            .unwrap_or(false);
+
+        let returns_result = function
+            .output
+            .as_ref()
+            .map(|ty| matches!(ty, Type::Result { .. }))
+            .unwrap_or(false);
+
+        let result_ok_type = function.output.as_ref().and_then(|ty| {
+            if let Type::Result { ok, .. } = ty {
+                Some(TypeMapper::map_type(ok))
+            } else {
+                None
+            }
+        });
+
+        let result_ok_is_vec = function
+            .output
+            .as_ref()
+            .map(|ty| {
+                if let Type::Result { ok, .. } = ty {
+                    matches!(ok.as_ref(), Type::Vec(_))
+                } else {
+                    false
+                }
+            })
+            .unwrap_or(false);
+
+        let vec_inner_type = function.output.as_ref().and_then(|ty| match ty {
+            Type::Vec(inner) => Some(TypeMapper::map_type(inner)),
+            Type::Result { ok, .. } => {
+                if let Type::Vec(inner) = ok.as_ref() {
+                    Some(TypeMapper::map_type(inner))
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        });
+
+        let vec_inner_is_struct = function
+            .output
+            .as_ref()
+            .map(|ty| match ty {
+                Type::Vec(inner) => matches!(inner.as_ref(), Type::Record(_) | Type::Object(_)),
+                Type::Result { ok, .. } => {
+                    if let Type::Vec(inner) = ok.as_ref() {
+                        matches!(inner.as_ref(), Type::Record(_) | Type::Object(_))
+                    } else {
+                        false
+                    }
+                }
+                _ => false,
+            })
+            .unwrap_or(false);
+
+        let option_inner_type = function.output.as_ref().and_then(|ty| {
+            if let Type::Option(inner) = ty {
+                Some(TypeMapper::map_type(inner))
+            } else {
+                None
+            }
+        });
+
+        let has_string_params = function
+            .inputs
+            .iter()
+            .any(|p| matches!(p.param_type, Type::String));
+
+        let has_slice_params = function
+            .inputs
+            .iter()
+            .any(|p| matches!(p.param_type, Type::Slice(_) | Type::MutSlice(_)));
+
+        let has_vec_params = function
+            .inputs
+            .iter()
+            .any(|p| matches!(p.param_type, Type::Vec(_)));
+
+        let has_callbacks = function
+            .inputs
+            .iter()
+            .any(|p| matches!(p.param_type, Type::Callback(_)));
+
+        let func_name_pascal = NamingConvention::class_name(&function.name);
+        let callbacks: Vec<FunctionCallbackView> = function
+            .inputs
+            .iter()
+            .filter(|p| matches!(p.param_type, Type::Callback(_)))
+            .enumerate()
+            .map(|(idx, p)| {
+                let param_name = NamingConvention::param_name(&p.name);
+                let inner_type = match &p.param_type {
+                    Type::Callback(inner) => TypeMapper::map_type(inner),
+                    _ => "Void".into(),
+                };
+                let ffi_inner = match &p.param_type {
+                    Type::Callback(inner) => TypeMapper::ffi_type(inner),
+                    _ => "Void".into(),
+                };
+                let suffix = if idx > 0 {
+                    format!("{}", idx + 1)
+                } else {
+                    String::new()
+                };
+
+                FunctionCallbackView {
+                    param_name: param_name.clone(),
+                    swift_type: inner_type,
+                    ffi_arg_type: ffi_inner,
+                    context_type: format!("{}CallbackFn{}", func_name_pascal, suffix),
+                    box_type: format!("{}CallbackBox{}", func_name_pascal, suffix),
+                    box_name: format!("{}Box{}", param_name, suffix),
+                    ptr_name: format!("{}Ptr{}", param_name, suffix),
+                    trampoline_name: format!("{}Trampoline{}", param_name, suffix),
+                }
+            })
+            .collect();
+
+        let ffi_prefix = module.ffi_prefix();
+        let func_snake = &function.name;
+
+        Self {
+            prefix: ffi_prefix.clone(),
+            func_name: NamingConvention::method_name(&function.name),
+            ffi_name: function.ffi_name(&ffi_prefix),
+            params: function
+                .inputs
+                .iter()
+                .filter(|param| !matches!(param.param_type, Type::Callback(_)))
+                .scan(false, |seen_pointer_param, param| {
+                    let slice_inner_type = match &param.param_type {
+                        Type::Slice(inner) | Type::MutSlice(inner) => Some(TypeMapper::map_type(inner)),
+                        _ => None,
+                    };
+
+                    let vec_inner_type = match &param.param_type {
+                        Type::Vec(inner) => Some(TypeMapper::map_type(inner)),
+                        _ => None,
+                    };
+
+                    let is_string = matches!(param.param_type, Type::String);
+                    let is_slice = matches!(param.param_type, Type::Slice(_));
+                    let is_mut_slice = matches!(param.param_type, Type::MutSlice(_));
+                    let is_vec = matches!(param.param_type, Type::Vec(_));
+
+                    let is_pointer_param = is_string || is_slice || is_mut_slice || is_vec;
+                    let is_first_pointer_param = is_pointer_param && !*seen_pointer_param;
+                    if is_pointer_param {
+                        *seen_pointer_param = true;
+                    }
+
+                    let swift_name = NamingConvention::param_name(&param.name);
+
+                    Some(FunctionParamView {
+                        swift_name: swift_name.clone(),
+                        swift_type: TypeMapper::map_type(&param.param_type),
+                        ffi_conversion: swift_name,
+                        is_string,
+                        is_slice,
+                        is_mut_slice,
+                        is_callback: false,
+                        is_vec,
+                        is_first_pointer_param,
+                        slice_inner_type,
+                        vec_inner_type,
+                    })
+                })
+                .collect(),
+            return_type: function.output.as_ref().and_then(|ty| {
+                if ty.is_void() {
+                    None
+                } else if let Type::Result { ok, .. } = ty {
+                    Some(TypeMapper::map_type(ok))
+                } else {
+                    Some(TypeMapper::map_type(ty))
+                }
+            }),
+            returns_string,
+            returns_vec,
+            returns_option,
+            returns_result,
+            result_ok_type,
+            result_ok_is_vec,
+            vec_inner_type,
+            vec_inner_is_struct,
+            option_inner_type,
+            is_async: function.is_async,
+            throws: function.throws() || returns_result,
+            has_string_params,
+            has_slice_params,
+            has_vec_params,
+            has_callbacks,
+            callbacks,
+            ffi_poll: format!("{}_{}_poll", ffi_prefix, func_snake),
+            ffi_complete: format!("{}_{}_complete", ffi_prefix, func_snake),
+            ffi_free: format!("{}_{}_free", ffi_prefix, func_snake),
+            ffi_cancel: format!("{}_{}_cancel", ffi_prefix, func_snake),
+            ffi_free_vec: function
+                .output
+                .as_ref()
+                .and_then(|output_type| match output_type {
+                    Type::Vec(inner) => Some(inner.as_ref()),
+                    Type::Result { ok, .. } => match ok.as_ref() {
+                        Type::Vec(inner) => Some(inner.as_ref()),
+                        _ => None,
+                    },
+                    _ => None,
+                })
+                .map(|inner_type| {
+                    let inner_ffi = TypeMapper::ffi_type_name(inner_type);
+                    format!("{}_free_buf_{}", ffi_prefix, inner_ffi)
+                })
+                .unwrap_or_default(),
+            ffi_vec_len: format!("{}_{}_len", ffi_prefix, func_snake),
+            ffi_vec_copy_into: format!("{}_{}_copy_into", ffi_prefix, func_snake),
+        }
+    }
+}
+
+pub struct FunctionParamView {
+    pub swift_name: String,
+    pub swift_type: String,
+    pub ffi_conversion: String,
+    pub is_string: bool,
+    pub is_slice: bool,
+    pub is_mut_slice: bool,
+    pub is_callback: bool,
+    pub is_vec: bool,
+    pub is_first_pointer_param: bool,
+    pub slice_inner_type: Option<String>,
+    pub vec_inner_type: Option<String>,
+}
+
+pub struct FunctionCallbackView {
+    pub param_name: String,
+    pub swift_type: String,
+    pub ffi_arg_type: String,
+    pub context_type: String,
+    pub box_type: String,
+    pub box_name: String,
+    pub ptr_name: String,
+    pub trampoline_name: String,
+}
+
+#[derive(Template)]
+#[template(path = "swift/enum_c_style.txt", escape = "none")]
+pub struct CStyleEnumTemplate {
+    pub class_name: String,
+    pub variants: Vec<CStyleVariantView>,
+}
+
+impl CStyleEnumTemplate {
+    pub fn from_enum(enumeration: &Enumeration) -> Self {
+        Self {
+            class_name: NamingConvention::class_name(&enumeration.name),
+            variants: enumeration
+                .variants
+                .iter()
+                .enumerate()
+                .map(|(index, variant)| CStyleVariantView {
+                    swift_name: NamingConvention::enum_case_name(&variant.name),
+                    discriminant: variant.discriminant.unwrap_or(index as i64),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/enum_data.txt", escape = "none")]
+pub struct DataEnumTemplate {
+    pub class_name: String,
+    pub variants: Vec<DataVariantView>,
+}
+
+impl DataEnumTemplate {
+    pub fn from_enum(enumeration: &Enumeration) -> Self {
+        Self {
+            class_name: NamingConvention::class_name(&enumeration.name),
+            variants: enumeration
+                .variants
+                .iter()
+                .map(|variant| DataVariantView {
+                    swift_name: NamingConvention::enum_case_name(&variant.name),
+                    fields: variant
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            let swift_name = NamingConvention::param_name(&field.name);
+                            let c_name = snake_to_camel(&field.name);
+                            FieldView {
+                                needs_alias: swift_name != c_name,
+                                swift_name,
+                                c_name,
+                                swift_type: TypeMapper::map_type(&field.field_type),
+                            }
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/class.txt", escape = "none")]
+pub struct ClassTemplate {
+    pub class_name: String,
+    pub doc: Option<String>,
+    pub deprecated: bool,
+    pub deprecated_message: Option<String>,
+    pub ffi_free: String,
+    pub constructors: Vec<ConstructorView>,
+    pub methods: Vec<MethodView>,
+    pub streams: Vec<StreamView>,
+}
+
+impl ClassTemplate {
+    pub fn from_class(class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+
+        Self {
+            class_name: NamingConvention::class_name(&class.name),
+            doc: class.doc.clone(),
+            deprecated: class.deprecated.is_some(),
+            deprecated_message: class.deprecated.as_ref().and_then(|d| d.message.clone()),
+            ffi_free: class.ffi_free(&module.ffi_prefix()),
+            constructors: class
+                .constructors
+                .iter()
+                .map(|ctor| ConstructorView {
+                    doc: ctor.doc.clone(),
+                    ffi_name: ctor.ffi_name(&class_prefix),
+                    is_failable: false,
+                    params: ctor
+                        .inputs
+                        .iter()
+                        .map(|param| ParamView {
+                            swift_name: NamingConvention::param_name(&param.name),
+                            swift_type: TypeMapper::map_type(&param.param_type),
+                            is_escaping: matches!(
+                                param.param_type,
+                                crate::model::Type::Callback(_)
+                            ),
+                            is_mut_slice: matches!(
+                                param.param_type,
+                                crate::model::Type::MutSlice(_)
+                            ),
+                        })
+                        .collect(),
+                })
+                .collect(),
+            methods: class
+                .methods
+                .iter()
+                .map(|method| MethodView {
+                    doc: method.doc.clone(),
+                    deprecated: method.deprecated.is_some(),
+                    deprecated_message: method.deprecated.as_ref().and_then(|d| d.message.clone()),
+                    swift_name: NamingConvention::method_name(&method.name),
+                    is_static: method.is_static(),
+                    is_async: method.is_async,
+                    throws: method.throws(),
+                    return_type: method
+                        .output
+                        .as_ref()
+                        .filter(|ty| !ty.is_void())
+                        .map(TypeMapper::map_type),
+                    params: method
+                        .inputs
+                        .iter()
+                        .map(|param| ParamView {
+                            swift_name: NamingConvention::param_name(&param.name),
+                            swift_type: TypeMapper::map_type(&param.param_type),
+                            is_escaping: matches!(
+                                param.param_type,
+                                crate::model::Type::Callback(_)
+                            ),
+                            is_mut_slice: matches!(
+                                param.param_type,
+                                crate::model::Type::MutSlice(_)
+                            ),
+                        })
+                        .collect(),
+                    body: BodyRenderer::method(method, class, module),
+                })
+                .collect(),
+            streams: class
+                .streams
+                .iter()
+                .map(|stream| StreamView {
+                    doc: stream.doc.clone(),
+                    swift_name: NamingConvention::method_name(&stream.name),
+                    swift_name_pascal: NamingConvention::class_name(&stream.name),
+                    item_type: TypeMapper::map_type(&stream.item_type),
+                    mode: match stream.mode {
+                        StreamMode::Async => StreamModeView::Async,
+                        StreamMode::Batch => StreamModeView::Batch,
+                        StreamMode::Callback => StreamModeView::Callback,
+                    },
+                    body: BodyRenderer::stream(stream, class, module),
+                })
+                .collect(),
+        }
+    }
+}
+
+pub struct FieldView {
+    pub swift_name: String,
+    pub c_name: String,
+    pub swift_type: String,
+    pub needs_alias: bool,
+}
+
+pub struct CStyleVariantView {
+    pub swift_name: String,
+    pub discriminant: i64,
+}
+
+pub struct DataVariantView {
+    pub swift_name: String,
+    pub fields: Vec<FieldView>,
+}
+
+pub struct ParamView {
+    pub swift_name: String,
+    pub swift_type: String,
+    pub is_escaping: bool,
+    pub is_mut_slice: bool,
+}
+
+pub struct ConstructorView {
+    pub doc: Option<String>,
+    pub ffi_name: String,
+    pub is_failable: bool,
+    pub params: Vec<ParamView>,
+}
+
+pub struct MethodView {
+    pub doc: Option<String>,
+    pub deprecated: bool,
+    pub deprecated_message: Option<String>,
+    pub swift_name: String,
+    pub is_static: bool,
+    pub is_async: bool,
+    pub throws: bool,
+    pub return_type: Option<String>,
+    pub params: Vec<ParamView>,
+    pub body: String,
+}
+
+pub struct StreamView {
+    pub doc: Option<String>,
+    pub swift_name: String,
+    pub swift_name_pascal: String,
+    pub item_type: String,
+    pub mode: StreamModeView,
+    pub body: String,
+}
+
+#[derive(Clone, Copy, PartialEq)]
+pub enum StreamModeView {
+    Async,
+    Batch,
+    Callback,
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_async.txt", escape = "none")]
+pub struct StreamAsyncBodyTemplate {
+    pub item_type: String,
+    pub subscribe_fn: String,
+    pub pop_batch_fn: String,
+    pub poll_fn: String,
+    pub unsubscribe_fn: String,
+    pub free_fn: String,
+    pub atomic_cas_fn: String,
+}
+
+impl StreamAsyncBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            item_type: TypeMapper::map_type(&stream.item_type),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+            pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
+            poll_fn: stream.ffi_poll(&class_prefix),
+            unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
+            free_fn: stream.ffi_free(&class_prefix),
+            atomic_cas_fn: format!("{}_atomic_u8_cas", module.ffi_prefix()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_batch.txt", escape = "none")]
+pub struct StreamBatchBodyTemplate {
+    pub class_name: String,
+    pub method_name_pascal: String,
+    pub subscribe_fn: String,
+}
+
+impl StreamBatchBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_callback.txt", escape = "none")]
+pub struct StreamCallbackBodyTemplate {
+    pub item_type: String,
+    pub class_name: String,
+    pub method_name_pascal: String,
+    pub subscribe_fn: String,
+    pub pop_batch_fn: String,
+    pub poll_fn: String,
+    pub unsubscribe_fn: String,
+    pub free_fn: String,
+    pub atomic_cas_fn: String,
+}
+
+impl StreamCallbackBodyTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            item_type: TypeMapper::map_type(&stream.item_type),
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+            subscribe_fn: stream.ffi_subscribe(&class_prefix),
+            pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
+            poll_fn: stream.ffi_poll(&class_prefix),
+            unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
+            free_fn: stream.ffi_free(&class_prefix),
+            atomic_cas_fn: format!("{}_atomic_u8_cas", module.ffi_prefix()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_sync.txt", escape = "none")]
+pub struct SyncMethodBodyTemplate {
+    pub ffi_name: String,
+    pub params: Vec<MethodParamView>,
+    pub has_return: bool,
+    pub has_pointer_params: bool,
+}
+
+pub struct MethodParamView {
+    pub swift_name: String,
+    pub ffi_arg: String,
+    pub is_string: bool,
+    pub is_slice: bool,
+    pub is_mut_slice: bool,
+    pub is_vec: bool,
+    pub is_first_pointer_param: bool,
+}
+
+fn param_to_ffi_arg(param: &crate::model::Parameter) -> String {
+    let name = NamingConvention::param_name(&param.name);
+    match &param.param_type {
+        crate::model::Type::BoxedTrait(trait_name) => {
+            let class_name = NamingConvention::class_name(trait_name);
+            format!("{}Bridge.create({})", class_name, name)
+        }
+        _ => name,
+    }
+}
+
+fn method_param_views<'a>(
+    params: impl Iterator<Item = &'a crate::model::Parameter>,
+) -> Vec<MethodParamView> {
+    params
+        .scan(false, |seen_pointer_param, param| {
+            let swift_name = NamingConvention::param_name(&param.name);
+
+            let is_string = matches!(param.param_type, crate::model::Type::String);
+            let is_slice = matches!(param.param_type, crate::model::Type::Slice(_));
+            let is_mut_slice = matches!(param.param_type, crate::model::Type::MutSlice(_));
+            let is_vec = matches!(param.param_type, crate::model::Type::Vec(_));
+            let is_pointer_param = is_string || is_slice || is_mut_slice || is_vec;
+
+            let is_first_pointer_param = is_pointer_param && !*seen_pointer_param;
+            if is_pointer_param {
+                *seen_pointer_param = true;
+            }
+
+            Some(MethodParamView {
+                swift_name: swift_name.clone(),
+                ffi_arg: param_to_ffi_arg(param),
+                is_string,
+                is_slice,
+                is_mut_slice,
+                is_vec,
+                is_first_pointer_param,
+            })
+        })
+        .collect()
+}
+
+impl SyncMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        let params = method_param_views(method.non_callback_params());
+        let has_pointer_params = params
+            .iter()
+            .any(|param| param.is_string || param.is_slice || param.is_mut_slice || param.is_vec);
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            params,
+            has_return: method.output.as_ref().map_or(false, |t| !t.is_void()),
+            has_pointer_params,
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_callback.txt", escape = "none")]
+pub struct CallbackMethodBodyTemplate {
+    pub ffi_name: String,
+    pub params: Vec<MethodParamView>,
+    pub has_return: bool,
+    pub has_pointer_params: bool,
+    pub callbacks: Vec<CallbackView>,
+}
+
+pub struct CallbackView {
+    pub param_name: String,
+    pub swift_type: String,
+    pub ffi_arg_type: String,
+    pub context_type: String,
+    pub box_type: String,
+    pub box_name: String,
+    pub ptr_name: String,
+    pub trampoline_name: String,
+}
+
+impl CallbackMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        let method_name_pascal = NamingConvention::class_name(&method.name);
+
+        let params = method_param_views(method.non_callback_params());
+
+        let has_pointer_params = params
+            .iter()
+            .any(|param| param.is_string || param.is_slice || param.is_mut_slice || param.is_vec);
+
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            params,
+            has_return: method.output.as_ref().map_or(false, |t| !t.is_void()),
+            has_pointer_params,
+            callbacks: method
+                .callback_params()
+                .enumerate()
+                .map(|(idx, param)| {
+                    let param_name = NamingConvention::param_name(&param.name);
+                    let inner_type = match &param.param_type {
+                        crate::model::Type::Callback(inner) => TypeMapper::map_type(inner),
+                        _ => "Void".into(),
+                    };
+                    let ffi_inner = match &param.param_type {
+                        crate::model::Type::Callback(inner) => TypeMapper::ffi_type(inner),
+                        _ => "Void".into(),
+                    };
+                    let suffix = if idx > 0 {
+                        format!("{}", idx + 1)
+                    } else {
+                        String::new()
+                    };
+
+                    CallbackView {
+                        param_name: param_name.clone(),
+                        swift_type: inner_type.clone(),
+                        ffi_arg_type: ffi_inner,
+                        context_type: format!("{}{}CallbackFn{}", method_name_pascal, suffix, ""),
+                        box_type: format!("{}{}CallbackBox{}", method_name_pascal, suffix, ""),
+                        box_name: format!("{}Box{}", param_name, suffix),
+                        ptr_name: format!("{}Ptr{}", param_name, suffix),
+                        trampoline_name: format!("{}Trampoline{}", param_name, suffix),
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_throwing.txt", escape = "none")]
+pub struct ThrowingMethodBodyTemplate {
+    pub ffi_name: String,
+    pub params: Vec<MethodParamView>,
+    pub has_pointer_params: bool,
+    pub return_type: String,
+}
+
+impl ThrowingMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        let params = method_param_views(method.inputs.iter());
+
+        let has_pointer_params = params
+            .iter()
+            .any(|param| param.is_string || param.is_slice || param.is_mut_slice || param.is_vec);
+
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            params,
+            has_pointer_params,
+            return_type: method
+                .output
+                .as_ref()
+                .map(TypeMapper::map_type)
+                .unwrap_or_else(|| "Void".into()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_async.txt", escape = "none")]
+pub struct AsyncMethodBodyTemplate {
+    pub ffi_name: String,
+    pub ffi_poll: String,
+    pub ffi_complete: String,
+    pub ffi_cancel: String,
+    pub ffi_free: String,
+    pub args: Vec<String>,
+    pub return_type: String,
+}
+
+impl AsyncMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            ffi_poll: method.ffi_poll(&class_prefix),
+            ffi_complete: method.ffi_complete(&class_prefix),
+            ffi_cancel: method.ffi_cancel(&class_prefix),
+            ffi_free: method.ffi_free(&class_prefix),
+            args: method
+                .inputs
+                .iter()
+                .map(|p| NamingConvention::param_name(&p.name))
+                .collect(),
+            return_type: method
+                .output
+                .as_ref()
+                .map(TypeMapper::map_type)
+                .unwrap_or_else(|| "Void".into()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/method_async_throwing.txt", escape = "none")]
+pub struct AsyncThrowingMethodBodyTemplate {
+    pub ffi_name: String,
+    pub ffi_poll: String,
+    pub ffi_complete: String,
+    pub ffi_cancel: String,
+    pub ffi_free: String,
+    pub args: Vec<String>,
+    pub return_type: String,
+}
+
+impl AsyncThrowingMethodBodyTemplate {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            ffi_name: method.ffi_name(&class_prefix),
+            ffi_poll: method.ffi_poll(&class_prefix),
+            ffi_complete: method.ffi_complete(&class_prefix),
+            ffi_cancel: method.ffi_cancel(&class_prefix),
+            ffi_free: method.ffi_free(&class_prefix),
+            args: method
+                .inputs
+                .iter()
+                .map(|p| NamingConvention::param_name(&p.name))
+                .collect(),
+            return_type: method
+                .output
+                .as_ref()
+                .map(TypeMapper::map_type)
+                .unwrap_or_else(|| "Void".into()),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_subscription.txt", escape = "none")]
+pub struct StreamSubscriptionTemplate {
+    pub class_name: String,
+    pub method_name_pascal: String,
+    pub item_type: String,
+    pub pop_batch_fn: String,
+    pub wait_fn: String,
+    pub unsubscribe_fn: String,
+    pub free_fn: String,
+}
+
+impl StreamSubscriptionTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, module: &Module) -> Self {
+        let class_prefix = class.ffi_prefix(&module.ffi_prefix());
+        Self {
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+            item_type: TypeMapper::map_type(&stream.item_type),
+            pop_batch_fn: stream.ffi_pop_batch(&class_prefix),
+            wait_fn: stream.ffi_wait(&class_prefix),
+            unsubscribe_fn: stream.ffi_unsubscribe(&class_prefix),
+            free_fn: stream.ffi_free(&class_prefix),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/stream_cancellable.txt", escape = "none")]
+pub struct StreamCancellableTemplate {
+    pub class_name: String,
+    pub method_name_pascal: String,
+}
+
+impl StreamCancellableTemplate {
+    pub fn from_stream(stream: &StreamMethod, class: &Class, _module: &Module) -> Self {
+        Self {
+            class_name: NamingConvention::class_name(&class.name),
+            method_name_pascal: NamingConvention::class_name(&stream.name),
+        }
+    }
+}
+
+#[derive(Template)]
+#[template(path = "swift/callback_trait.txt", escape = "none")]
+pub struct CallbackTraitTemplate {
+    pub doc: Option<String>,
+    pub protocol_name: String,
+    pub wrapper_class: String,
+    pub vtable_var: String,
+    pub vtable_type: String,
+    pub bridge_name: String,
+    pub foreign_type: String,
+    pub register_fn: String,
+    pub create_fn: String,
+    pub methods: Vec<TraitMethodView>,
+}
+
+pub struct TraitMethodView {
+    pub swift_name: String,
+    pub ffi_name: String,
+    pub params: Vec<TraitParamView>,
+    pub return_type: Option<String>,
+    pub is_async: bool,
+    pub throws: bool,
+    pub has_return: bool,
+    pub has_out_param: bool,
+}
+
+pub struct TraitParamView {
+    pub label: String,
+    pub ffi_name: String,
+    pub swift_type: String,
+    pub conversion: String,
+}
+
+impl CallbackTraitTemplate {
+    pub fn from_trait(callback_trait: &CallbackTrait, module: &Module) -> Self {
+        let prefix = module.ffi_prefix();
+        let trait_name = &callback_trait.name;
+
+        Self {
+            doc: callback_trait.doc.clone(),
+            protocol_name: format!("{}Protocol", trait_name),
+            wrapper_class: format!("{}Wrapper", trait_name),
+            vtable_var: format!("{}VTableInstance", to_camel_case(trait_name)),
+            vtable_type: callback_trait.ffi_vtable_name(),
+            bridge_name: format!("{}Bridge", trait_name),
+            foreign_type: callback_trait.ffi_foreign_name(),
+            register_fn: callback_trait.ffi_register_fn(&prefix),
+            create_fn: callback_trait.ffi_create_fn(&prefix),
+            methods: callback_trait
+                .methods
+                .iter()
+                .map(|method| {
+                    let has_return = method.has_return();
+                    TraitMethodView {
+                        swift_name: NamingConvention::method_name(&method.name),
+                        ffi_name: to_snake_case(&method.name),
+                        params: method
+                            .inputs
+                            .iter()
+                            .map(|param| {
+                                let swift_name = NamingConvention::param_name(&param.name);
+                                TraitParamView {
+                                    label: swift_name.clone(),
+                                    ffi_name: param.name.clone(),
+                                    swift_type: TypeMapper::map_type(&param.param_type),
+                                    conversion: param.name.clone(),
+                                }
+                            })
+                            .collect(),
+                        return_type: method.output.as_ref().map(TypeMapper::map_type),
+                        is_async: method.is_async,
+                        throws: method.throws(),
+                        has_return,
+                        has_out_param: has_return && !method.is_async,
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+fn to_snake_case(name: &str) -> String {
+    let mut result = String::new();
+    for (i, ch) in name.chars().enumerate() {
+        if ch.is_uppercase() {
+            if i > 0 {
+                result.push('_');
+            }
+            result.push(ch.to_ascii_lowercase());
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
+fn to_camel_case(name: &str) -> String {
+    let mut result = String::new();
+    let mut first = true;
+    for ch in name.chars() {
+        if first {
+            result.push(ch.to_ascii_lowercase());
+            first = false;
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}

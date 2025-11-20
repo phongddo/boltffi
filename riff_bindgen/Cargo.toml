@@ -1,0 +1,16 @@
+[package]
+name = "riff_bindgen"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+riff_ffi_rules = { path = "../riff_ffi_rules" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+heck = "0.5"
+askama = "0.12"
+syn = { version = "2.0", features = ["full", "parsing", "visit"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+walkdir = "2.4"

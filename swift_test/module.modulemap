@@ -1,4 +1,4 @@
-module MobiFFI {
-    header "mobiFFI_core.h"
+module Riff {
+    header "riff_core.h"
     export *
 }

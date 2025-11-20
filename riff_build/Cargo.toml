@@ -1,0 +1,8 @@
+[package]
+name = "riff_build"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+riff_bindgen = { path = "../riff_bindgen" }
+toml = "0.8"

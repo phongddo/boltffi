@@ -9,7 +9,7 @@ struct TestRunner {
 }
 
 func runTests() {
-    print("Testing MobiFFI Swift binding...")
+    print("Testing Riff Swift binding...")
     print("Using generated ergonomic API\n")
 
     testFreeFunctions()
@@ -29,9 +29,9 @@ func testFreeFunctions() {
     print("greeting(\"Ali\") = \"\(greet)\"")
     assert(greet == "Hello, Ali!", "Expected 'Hello, Ali!'")
     
-    let combined = concat(first: "Mobi", second: "FFI")
-    print("concat(\"Mobi\", \"FFI\") = \"\(combined)\"")
-    assert(combined == "MobiFFI", "Expected 'MobiFFI'")
+    let combined = concat(first: "Ri", second: "ff")
+    print("concat(\"Ri\", \"ff\") = \"\(combined)\"")
+    assert(combined == "Riff", "Expected 'Riff'")
     
     let reversed = reverseString(input: "Hello")
     print("reverseString(\"Hello\") = \"\(reversed)\"")

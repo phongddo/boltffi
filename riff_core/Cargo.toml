@@ -1,0 +1,17 @@
+[package]
+name = "riff_core"
+version = "0.1.0"
+edition = "2024"
+authors = ["Ali A. Hilal <me@alihilal.com>"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+riff_macros = { path = "../riff_macros" }
+
+[build-dependencies]
+cbindgen = "0.28"
+syn = { version = "2", features = ["full", "parsing"] }
+quote = "1"
+walkdir = "2"

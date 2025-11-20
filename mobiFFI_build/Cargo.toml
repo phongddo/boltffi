@@ -1,8 +1,0 @@
-[package]
-name = "mobiFFI_build"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-mobiFFI_bindgen = { path = "../mobiFFI_bindgen" }
-toml = "0.8"
