@@ -3,12 +3,13 @@ use std::time::Instant;
 
 use crate::analysis::EffectCollector;
 use crate::contract::{ContractLoader, FfiContract};
-use crate::parse::{LanguageParser, ParseError, SwiftParser};
+use crate::parse::{FfiPatterns, Language, LanguageParser, ParseError, SwiftParser};
 use crate::report::VerificationResult;
 use crate::rules::{RuleRegistry, Violation};
 
 pub struct Verifier {
-    parser: SwiftParser,
+    parser: Box<dyn LanguageParser>,
+    patterns: FfiPatterns,
     rules: RuleRegistry,
     contract: Option<FfiContract>,
 }
@@ -17,6 +18,7 @@ pub struct Verifier {
 pub enum VerifyError {
     Parse(ParseError),
     Io(std::io::Error),
+    UnsupportedLanguage(String),
 }
 
 impl From<ParseError> for VerifyError {
@@ -36,6 +38,7 @@ impl std::fmt::Display for VerifyError {
         match self {
             Self::Parse(e) => write!(f, "parse error: {}", e),
             Self::Io(e) => write!(f, "IO error: {}", e),
+            Self::UnsupportedLanguage(lang) => write!(f, "unsupported language: {}", lang),
         }
     }
 }
@@ -43,20 +46,47 @@ impl std::fmt::Display for VerifyError {
 impl std::error::Error for VerifyError {}
 
 impl Verifier {
-    pub fn new() -> Result<Self, VerifyError> {
+    pub fn for_language(language: Language) -> Result<Self, VerifyError> {
+        let (parser, patterns): (Box<dyn LanguageParser>, FfiPatterns) = match language {
+            Language::Swift => (Box::new(SwiftParser::new()?), FfiPatterns::swift()),
+            Language::Kotlin => return Err(VerifyError::UnsupportedLanguage("Kotlin".into())),
+        };
+        
         Ok(Self {
-            parser: SwiftParser::new()?,
+            parser,
+            patterns,
             rules: RuleRegistry::with_defaults(),
             contract: None,
         })
     }
 
-    pub fn with_rules(rules: RuleRegistry) -> Result<Self, VerifyError> {
-        Ok(Self {
-            parser: SwiftParser::new()?,
-            rules,
+    pub fn for_path(path: &Path) -> Result<Self, VerifyError> {
+        let language = Language::from_path(path)
+            .ok_or_else(|| VerifyError::UnsupportedLanguage(
+                path.extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("unknown")
+                    .to_string()
+            ))?;
+        Self::for_language(language)
+    }
+
+    pub fn swift() -> Result<Self, VerifyError> {
+        Self::for_language(Language::Swift)
+    }
+
+    pub fn with_parser_and_patterns<P: LanguageParser + 'static>(parser: P, patterns: FfiPatterns) -> Self {
+        Self {
+            parser: Box::new(parser),
+            patterns,
+            rules: RuleRegistry::with_defaults(),
             contract: None,
-        })
+        }
+    }
+
+    pub fn with_rules(mut self, rules: RuleRegistry) -> Self {
+        self.rules = rules;
+        self
     }
 
     pub fn with_contract(mut self, contract: FfiContract) -> Self {
@@ -65,7 +95,7 @@ impl Verifier {
     }
 
     pub fn with_auto_contract(mut self, source: &str, prefix: &str) -> Self {
-        self.contract = Some(ContractLoader::from_swift_source(source, prefix));
+        self.contract = Some(ContractLoader::from_source_with_patterns(source, prefix, &self.patterns));
         self
     }
 
@@ -79,7 +109,7 @@ impl Verifier {
         
         let contract = self.contract
             .clone()
-            .unwrap_or_else(|| ContractLoader::from_swift_source(source, "riff"));
+            .unwrap_or_else(|| ContractLoader::from_source_with_patterns(source, "riff", &self.patterns));
         
         let units = self.parser.parse_source(path, source)?;
         
@@ -104,20 +134,25 @@ impl Verifier {
         }
     }
 
-    pub fn verify_generated_swift(&mut self, swift_code: &str) -> Result<VerificationResult, VerifyError> {
-        self.verify_source(Path::new("generated.swift"), swift_code)
+    pub fn language(&self) -> &str {
+        self.parser.language_name()
     }
 }
 
 impl Default for Verifier {
     fn default() -> Self {
-        Self::new().expect("failed to create verifier")
+        Self::swift().expect("failed to create verifier")
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn verify_swift(source: &str) -> VerificationResult {
+        let mut verifier = Verifier::swift().unwrap();
+        verifier.verify_source(Path::new("test.swift"), source).unwrap()
+    }
 
     #[test]
     fn test_verify_balanced_alloc_free() {
@@ -127,9 +162,7 @@ public func test() {
     defer { ptr.deallocate() }
 }
 "#;
-        let mut verifier = Verifier::new().unwrap();
-        let result = verifier.verify_generated_swift(source).unwrap();
-        
+        let result = verify_swift(source);
         assert!(result.is_verified(), "Should verify: balanced alloc/free");
     }
 
@@ -140,9 +173,7 @@ public func test() {
     let ptr = UnsafeMutablePointer<Int32>.allocate(capacity: 10)
 }
 "#;
-        let mut verifier = Verifier::new().unwrap();
-        let result = verifier.verify_generated_swift(source).unwrap();
-        
+        let result = verify_swift(source);
         assert!(result.is_failed(), "Should detect memory leak");
         assert!(result.error_count() > 0);
     }
@@ -156,9 +187,7 @@ public func test() {
     Unmanaged<MyObject>.fromOpaque(handle).release()
 }
 "#;
-        let mut verifier = Verifier::new().unwrap();
-        let result = verifier.verify_generated_swift(source).unwrap();
-        
+        let result = verify_swift(source);
         assert!(result.is_verified(), "Should verify: balanced retain/release");
     }
 
@@ -175,9 +204,7 @@ public func alsoCorrect() {
     defer { ptr.deallocate() }
 }
 "#;
-        let mut verifier = Verifier::new().unwrap();
-        let result = verifier.verify_generated_swift(source).unwrap();
-        
+        let result = verify_swift(source);
         assert!(result.is_verified(), "Should verify both functions");
     }
 }

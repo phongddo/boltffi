@@ -1,15 +1,20 @@
 use std::path::Path;
 
+use crate::parse::FfiPatterns;
 use super::types::{FfiContract, FfiFunction, FfiClass, FfiOutput, FfiType, CallbackBridge};
 
 pub struct ContractLoader;
 
 impl ContractLoader {
-    pub fn from_swift_source(source: &str, prefix: &str) -> FfiContract {
+    pub fn from_source(source: &str, prefix: &str) -> FfiContract {
+        Self::from_source_with_patterns(source, prefix, &FfiPatterns::swift())
+    }
+
+    pub fn from_source_with_patterns(source: &str, prefix: &str, patterns: &FfiPatterns) -> FfiContract {
         let mut contract = FfiContract::new("detected", prefix);
         
-        Self::detect_classes(source, prefix, &mut contract);
-        Self::detect_callback_bridges(source, &mut contract);
+        Self::detect_classes(source, prefix, patterns, &mut contract);
+        Self::detect_callback_bridges(source, patterns, &mut contract);
         Self::detect_vec_patterns(source, prefix, &mut contract);
         
         contract
@@ -20,18 +25,10 @@ impl ContractLoader {
         Ok(FfiContract::default())
     }
 
-    fn detect_classes(source: &str, prefix: &str, contract: &mut FfiContract) {
+    fn detect_classes(source: &str, prefix: &str, patterns: &FfiPatterns, contract: &mut FfiContract) {
         source.lines().for_each(|line| {
-            let trimmed = line.trim();
-            
-            if trimmed.starts_with("public class ") && trimmed.contains('{') {
-                let class_name = trimmed
-                    .strip_prefix("public class ")
-                    .and_then(|s| s.split(|c| c == ':' || c == '{' || c == ' ').next())
-                    .map(|s| s.trim())
-                    .unwrap_or("");
-                
-                if !class_name.is_empty() && !class_name.contains("Bridge") {
+            if patterns.is_class_decl(line) && !patterns.is_bridge_class(line) {
+                if let Some(class_name) = patterns.extract_class_name(line) {
                     let snake_name = Self::to_snake_case(class_name);
                     let class = FfiClass::new(class_name)
                         .with_constructor(format!("{}_{}_new", prefix, snake_name))
@@ -43,18 +40,15 @@ impl ContractLoader {
         });
     }
 
-    fn detect_callback_bridges(source: &str, contract: &mut FfiContract) {
+    fn detect_callback_bridges(source: &str, patterns: &FfiPatterns, contract: &mut FfiContract) {
         source.lines().for_each(|line| {
-            let trimmed = line.trim();
-            
-            if trimmed.contains("Bridge") && trimmed.contains("class") {
-                let bridge_name = trimmed
-                    .split(|c: char| !c.is_alphanumeric())
-                    .find(|s| s.contains("Bridge"))
-                    .unwrap_or("");
-                
-                if !bridge_name.is_empty() {
-                    let trait_name = bridge_name.strip_suffix("Bridge").unwrap_or(bridge_name);
+            if patterns.is_bridge_class(line) {
+                if let Some(bridge_name) = patterns.extract_class_name(line) {
+                    let trait_name = patterns.bridge_markers
+                        .iter()
+                        .find_map(|marker| bridge_name.strip_suffix(marker))
+                        .unwrap_or(bridge_name);
+                    
                     contract.add_callback_bridge(CallbackBridge::new(trait_name, bridge_name));
                 }
             }
@@ -91,9 +85,8 @@ impl ContractLoader {
 
     fn to_snake_case(s: &str) -> String {
         let mut result = String::new();
-        let mut chars = s.chars().peekable();
         
-        while let Some(c) = chars.next() {
+        s.chars().for_each(|c| {
             if c.is_uppercase() {
                 if !result.is_empty() {
                     result.push('_');
@@ -102,7 +95,7 @@ impl ContractLoader {
             } else {
                 result.push(c);
             }
-        }
+        });
         
         result
     }
@@ -128,7 +121,7 @@ public class DataStore {
 }
 "#;
         
-        let contract = ContractLoader::from_swift_source(source, "riff");
+        let contract = ContractLoader::from_source(source, "riff");
         
         assert!(contract.get_class("DataStore").is_some());
         let class = contract.get_class("DataStore").unwrap();
@@ -148,7 +141,7 @@ private class AsyncDataFetcherBridge {
 }
 "#;
         
-        let contract = ContractLoader::from_swift_source(source, "riff");
+        let contract = ContractLoader::from_source(source, "riff");
         
         assert!(contract.is_callback_bridge_retain("AsyncDataFetcherBridge"));
     }
@@ -167,7 +160,7 @@ public func generateLocations(count: Int32) -> [Location] {
 }
 "#;
         
-        let contract = ContractLoader::from_swift_source(source, "riff");
+        let contract = ContractLoader::from_source(source, "riff");
         
         assert!(contract.get_function("riff_generate_locations_len").is_some());
     }

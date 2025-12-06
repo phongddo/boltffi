@@ -1,5 +1,5 @@
 use std::path::Path;
-use riff_verify::{Verifier, Reporter};
+use riff_verify::{Verifier, Reporter, VerificationResult};
 
 #[test]
 fn test_verify_generated_benchriff() {
@@ -10,15 +10,15 @@ fn test_verify_generated_benchriff() {
         return;
     }
 
-    let mut verifier = Verifier::new().expect("failed to create verifier");
+    let mut verifier = Verifier::swift().expect("failed to create verifier");
     let result = verifier.verify_file(swift_path).expect("failed to verify");
     
     let reporter = Reporter::human();
     eprintln!("{}", reporter.report(&result));
     
     eprintln!("Verified {} functions", match &result {
-        riff_verify::VerificationResult::Verified { unit_count, .. } => *unit_count,
-        riff_verify::VerificationResult::Failed { .. } => 0,
+        VerificationResult::Verified { unit_count, .. } => unit_count,
+        VerificationResult::Failed { .. } => &0,
     });
 }
 
@@ -69,8 +69,8 @@ public func echoString(value: String) -> String {
 }
 "#;
 
-    let mut verifier = Verifier::new().expect("failed to create verifier");
-    let result = verifier.verify_generated_swift(source).expect("failed to verify");
+    let mut verifier = Verifier::swift().expect("failed to create verifier");
+    let result = verifier.verify_source(std::path::Path::new("test.swift"), source).expect("failed to verify");
     
     let reporter = Reporter::human();
     eprintln!("{}", reporter.report(&result));
