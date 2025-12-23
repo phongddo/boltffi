@@ -269,18 +269,25 @@ impl ClassTemplate {
 
     fn generate_method_body(method: &crate::model::Method, ffi_name: &str) -> String {
         let args = std::iter::once("handle".to_string())
-            .chain(
-                method
-                    .inputs
-                    .iter()
-                    .map(|p| NamingConvention::param_name(&p.name)),
-            )
+            .chain(method.inputs.iter().map(|p| {
+                ParamConversion::to_ffi(
+                    &NamingConvention::param_name(&p.name),
+                    &p.param_type,
+                )
+            }))
             .collect::<Vec<_>>()
             .join(", ");
 
         match &method.output {
-            Some(_) => format!("return Native.{}({})", ffi_name, args),
-            None => format!("Native.{}({})", ffi_name, args),
+            Some(ty) if ty.is_primitive() => format!("return Native.{}({})", ffi_name, args),
+            Some(_) => format!(
+                "val status = Native.{}({})\n        checkStatus(status)\n        return result",
+                ffi_name, args
+            ),
+            None => format!(
+                "val status = Native.{}({})\n        checkStatus(status)",
+                ffi_name, args
+            ),
         }
     }
 }
@@ -292,6 +299,12 @@ pub struct NativeTemplate {
     pub prefix: String,
     pub functions: Vec<NativeFunctionView>,
     pub classes: Vec<NativeClassView>,
+    pub callback_traits: Vec<NativeCallbackTraitView>,
+}
+
+pub struct NativeCallbackTraitView {
+    pub register_fn: String,
+    pub create_fn: String,
 }
 
 pub struct NativeFunctionView {
@@ -405,11 +418,24 @@ impl NativeTemplate {
             })
             .collect();
 
+        let callback_traits: Vec<NativeCallbackTraitView> = module
+            .callback_traits
+            .iter()
+            .map(|cb| {
+                let ffi_prefix = format!("{}_{}", naming::ffi_prefix(), cb.name);
+                NativeCallbackTraitView {
+                    register_fn: format!("{}_register_vtable", ffi_prefix),
+                    create_fn: format!("{}_create", ffi_prefix),
+                }
+            })
+            .collect();
+
         Self {
             lib_name: module.name.clone(),
             prefix,
             functions,
             classes,
+            callback_traits,
         }
     }
 

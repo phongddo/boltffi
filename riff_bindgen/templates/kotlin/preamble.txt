@@ -57,8 +57,7 @@ open class FfiBytes : Structure() {
 
 private fun checkStatus(status: FfiStatus) {
     if (status.code != 0) {
-        val message = Native.{{ prefix }}_last_error_message()?.toKotlinString() ?: "FFI error"
-        Native.{{ prefix }}_clear_last_error()
+        val message = lastErrorMessage() ?: "FFI error"
         throw FfiException(status.code, message)
     }
 }
@@ -77,3 +76,5 @@ interface FfiCallback : Callback {
     fun onSuccess(result: Long)
     fun onError(code: Int)
 }
+
+private val pendingCallbacks = java.util.Collections.synchronizedSet(mutableSetOf<FfiCallback>())

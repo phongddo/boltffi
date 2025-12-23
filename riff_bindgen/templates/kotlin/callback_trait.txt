@@ -10,10 +10,11 @@ interface {{ interface_name }} {
 }
 
 private class {{ wrapper_class }}(private val impl: {{ interface_name }}) {
-    val handle: Long = System.identityHashCode(this).toLong()
+    val handle: Long = nextHandle.getAndIncrement()
 
     companion object {
-        private val instances = mutableMapOf<Long, {{ wrapper_class }}>()
+        private val nextHandle = java.util.concurrent.atomic.AtomicLong(1L)
+        private val instances = java.util.concurrent.ConcurrentHashMap<Long, {{ wrapper_class }}>()
 
         fun register(wrapper: {{ wrapper_class }}) {
             instances[wrapper.handle] = wrapper
@@ -49,12 +50,11 @@ private val {{ vtable_var }} = object : {{ vtable_type }} {
 }
 
 object {{ bridge_name }} {
-    private var registered = false
+    private val registered = java.util.concurrent.atomic.AtomicBoolean(false)
 
     fun register() {
-        if (registered) return
+        if (!registered.compareAndSet(false, true)) return
         Native.{{ register_fn }}({{ vtable_var }})
-        registered = true
     }
 
     fun create(impl: {{ interface_name }}): Long {

@@ -262,4 +262,25 @@ mod tests {
         assert!(output.contains("fun onError(code: Int)"));
         assert!(output.contains("DataHandlerBridge"));
     }
+
+    #[test]
+    fn test_render_native() {
+        let module = Module::new("mylib")
+            .with_function(
+                Function::new("get_version").with_output(Type::Primitive(Primitive::I32)),
+            )
+            .with_class(
+                Class::new("sensor")
+                    .with_constructor(Constructor::new())
+                    .with_method(Method::new("read", Receiver::Ref)),
+            );
+
+        let output = Kotlin::render_native(&module);
+        assert!(output.contains("interface NativeLib : Library"));
+        assert!(output.contains("riff_get_version"));
+        assert!(output.contains("riff_sensor_new"));
+        assert!(output.contains("riff_sensor_free"));
+        assert!(output.contains("riff_sensor_read"));
+        assert!(output.contains("riff_cancel_async"));
+    }
 }

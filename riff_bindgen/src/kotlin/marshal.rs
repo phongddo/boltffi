@@ -35,7 +35,12 @@ impl ReturnKind {
             Type::Record(name) => Self::Record {
                 name: super::NamingConvention::class_name(name),
             },
-            _ => Self::Void,
+            Type::Bytes => panic!("Bytes return type not yet supported in Kotlin bindings"),
+            Type::Slice(_) => panic!("Slice return type not yet supported in Kotlin bindings"),
+            Type::MutSlice(_) => panic!("MutSlice return type not yet supported in Kotlin bindings"),
+            Type::Object(name) => panic!("Object return type '{}' not yet supported in Kotlin bindings", name),
+            Type::BoxedTrait(name) => panic!("BoxedTrait return type '{}' not yet supported in Kotlin bindings", name),
+            Type::Callback(_) => panic!("Callback return type not yet supported in Kotlin bindings"),
         }
     }
 
@@ -105,5 +110,66 @@ impl ParamConversion {
             Type::Slice(_) => format!("{}.toTypedArray()", param_name),
             _ => param_name.to_string(),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::Primitive;
+
+    #[test]
+    fn test_return_kind_primitives() {
+        assert!(ReturnKind::from_type(&Type::Primitive(Primitive::I32), "test").is_primitive());
+        assert!(ReturnKind::from_type(&Type::Primitive(Primitive::Bool), "test").is_primitive());
+    }
+
+    #[test]
+    fn test_return_kind_string() {
+        assert!(ReturnKind::from_type(&Type::String, "test").is_string());
+    }
+
+    #[test]
+    fn test_return_kind_vec() {
+        let vec_type = Type::Vec(Box::new(Type::Primitive(Primitive::I32)));
+        let kind = ReturnKind::from_type(&vec_type, "test_fn");
+        assert!(kind.is_vec());
+        assert_eq!(kind.len_fn(), Some("test_fn_len"));
+        assert_eq!(kind.copy_fn(), Some("test_fn_copy_into"));
+        assert_eq!(kind.inner_type(), Some("Int"));
+    }
+
+    #[test]
+    fn test_return_kind_void() {
+        assert!(ReturnKind::from_type(&Type::Void, "test").is_unit());
+    }
+
+    #[test]
+    fn test_param_conversion_string() {
+        assert_eq!(ParamConversion::to_ffi("name", &Type::String), "name.toByteArray()");
+    }
+
+    #[test]
+    fn test_param_conversion_enum() {
+        assert_eq!(
+            ParamConversion::to_ffi("status", &Type::Enum("Status".into())),
+            "status.value"
+        );
+    }
+
+    #[test]
+    fn test_param_conversion_object() {
+        assert_eq!(
+            ParamConversion::to_ffi("sensor", &Type::Object("Sensor".into())),
+            "sensor.handle"
+        );
+    }
+
+    #[test]
+    fn test_param_conversion_primitive() {
+        assert_eq!(
+            ParamConversion::to_ffi("count", &Type::Primitive(Primitive::I32)),
+            "count"
+        );
     }
 }

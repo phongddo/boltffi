@@ -8,6 +8,7 @@ internal interface NativeLib : Library {
     fun {{ prefix }}_free_string(string: FfiString)
     fun {{ prefix }}_last_error_message(out: FfiString.ByReference): FfiStatus
     fun {{ prefix }}_clear_last_error()
+    fun {{ prefix }}_cancel_async(handle: Long)
 {%- for function in functions %}
 
     fun {{ function.ffi_name }}({% for param in function.params %}{{ param.name }}: {{ param.jni_type }}{% if !loop.last %}, {% endif %}{% endfor %}{% if function.has_out_param %}, out: {{ function.out_type }}{% endif %}): {{ function.return_jni_type }}
@@ -19,6 +20,11 @@ internal interface NativeLib : Library {
 {%- for method in class.methods %}
     fun {{ method.ffi_name }}(handle: Long{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.name }}: {{ param.jni_type }}{% if !loop.last %}, {% endif %}{% endfor %}{% if method.has_out_param %}, out: {{ method.out_type }}{% endif %}): {{ method.return_jni_type }}
 {%- endfor %}
+{%- endfor %}
+{%- for trait in callback_traits %}
+
+    fun {{ trait.register_fn }}(vtable: Any): FfiStatus
+    fun {{ trait.create_fn }}(handle: Long): Long
 {%- endfor %}
 }
 

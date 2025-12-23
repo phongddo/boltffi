@@ -2,6 +2,7 @@
 suspend fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} = suspendCancellableCoroutine { cont ->
     val callback = object : FfiCallback {
         override fun onSuccess(result: Long) {
+            pendingCallbacks.remove(this)
 {%- if return_kind.is_primitive() %}
             cont.resume(result{% match return_type %}{% when Some with (ret) %}.to{{ ret }}(){% when None %}{% endmatch %})
 {%- else if return_kind.is_string() %}
@@ -14,11 +15,16 @@ suspend fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.
 {%- endif %}
         }
         override fun onError(code: Int) {
+            pendingCallbacks.remove(this)
             cont.resumeWithException(FfiException(code, lastErrorMessage() ?: "Async error"))
         }
     }
+    pendingCallbacks.add(callback)
     val handle = Native.{{ ffi_name }}({% for param in params %}{{ param.conversion }}{% if !loop.last %}, {% endif %}{% endfor %}{% if !params.is_empty() %}, {% endif %}callback)
-    cont.invokeOnCancellation { Native.{{ prefix }}_cancel_async(handle) }
+    cont.invokeOnCancellation {
+        pendingCallbacks.remove(callback)
+        Native.{{ prefix }}_cancel_async(handle)
+    }
 }
 {%- else %}
 fun {{ func_name }}({% for param in params %}{{ param.name }}: {{ param.kotlin_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match return_type %}{% when Some with (ret) %}: {{ ret }}{% when None %}{% endmatch %} {

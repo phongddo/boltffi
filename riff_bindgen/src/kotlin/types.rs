@@ -86,7 +86,12 @@ impl TypeMapper {
             Type::Vec(_) | Type::Slice(_) | Type::MutSlice(_) => "emptyList()".into(),
             Type::Option(_) => "null".into(),
             Type::Void => "Unit".into(),
-            _ => "TODO()".into(),
+            Type::Result { ok, .. } => Self::default_value(ok),
+            Type::Object(name) => panic!("no default value for object type '{}'", name),
+            Type::Record(name) => panic!("no default value for record type '{}'", name),
+            Type::Enum(name) => panic!("no default value for enum type '{}'", name),
+            Type::BoxedTrait(name) => panic!("no default value for trait type '{}'", name),
+            Type::Callback(_) => panic!("no default value for callback type"),
         }
     }
 
@@ -95,8 +100,69 @@ impl TypeMapper {
             Primitive::Bool => "false",
             Primitive::F32 => "0.0f",
             Primitive::F64 => "0.0",
-            _ => "0",
+            Primitive::U8 | Primitive::U16 | Primitive::U32 | Primitive::U64 | Primitive::Usize => {
+                "0u"
+            }
+            Primitive::I8 | Primitive::I16 | Primitive::I32 | Primitive::I64 | Primitive::Isize => {
+                "0"
+            }
         }
         .into()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_jni_type_primitives() {
+        assert_eq!(TypeMapper::jni_type(&Type::Primitive(Primitive::I32)), "Int");
+        assert_eq!(TypeMapper::jni_type(&Type::Primitive(Primitive::U64)), "Long");
+        assert_eq!(TypeMapper::jni_type(&Type::Primitive(Primitive::Bool)), "Boolean");
+    }
+
+    #[test]
+    fn test_jni_type_string_bytes() {
+        assert_eq!(TypeMapper::jni_type(&Type::String), "String");
+        assert_eq!(TypeMapper::jni_type(&Type::Bytes), "ByteArray");
+    }
+
+    #[test]
+    fn test_jni_type_object_is_long() {
+        assert_eq!(TypeMapper::jni_type(&Type::Object("Sensor".into())), "Long");
+        assert_eq!(TypeMapper::jni_type(&Type::BoxedTrait("Handler".into())), "Long");
+    }
+
+    #[test]
+    fn test_jni_type_vec_is_long() {
+        let vec_type = Type::Vec(Box::new(Type::Primitive(Primitive::I32)));
+        assert_eq!(TypeMapper::jni_type(&vec_type), "Long");
+    }
+
+    #[test]
+    fn test_default_value_unsigned() {
+        assert_eq!(TypeMapper::default_value(&Type::Primitive(Primitive::U32)), "0u");
+        assert_eq!(TypeMapper::default_value(&Type::Primitive(Primitive::U64)), "0u");
+    }
+
+    #[test]
+    fn test_default_value_signed() {
+        assert_eq!(TypeMapper::default_value(&Type::Primitive(Primitive::I32)), "0");
+        assert_eq!(TypeMapper::default_value(&Type::Primitive(Primitive::I64)), "0");
+    }
+
+    #[test]
+    fn test_default_value_collections() {
+        assert_eq!(TypeMapper::default_value(&Type::String), "\"\"");
+        assert_eq!(TypeMapper::default_value(&Type::Bytes), "byteArrayOf()");
+        let vec_type = Type::Vec(Box::new(Type::Primitive(Primitive::I32)));
+        assert_eq!(TypeMapper::default_value(&vec_type), "emptyList()");
+    }
+
+    #[test]
+    fn test_default_value_option() {
+        let opt_type = Type::Option(Box::new(Type::String));
+        assert_eq!(TypeMapper::default_value(&opt_type), "null");
     }
 }
