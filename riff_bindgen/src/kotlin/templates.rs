@@ -771,7 +771,7 @@ impl NativeTemplate {
             .collect();
 
         Self {
-            lib_name: module.name.clone(),
+            lib_name: format!("{}_jni", module.name),
             prefix,
             functions,
             classes,

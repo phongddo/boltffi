@@ -145,7 +145,7 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
     (void)_status;
 {%- else if func.return_kind.is_string() %}
-    FfiString _out;
+    FfiString _out = {0, 0, 0};
     FfiStatus _status = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}&_out);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
@@ -156,7 +156,12 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endif %}
 {%- endfor %}
     if (_status.code != 0) return NULL;
-    jstring _result = (*env)->NewStringUTF(env, (char*)_out.ptr);
+    char* _tmp = (char*)malloc(_out.len + 1);
+    if (!_tmp) { {{ prefix }}_free_string(_out); return NULL; }
+    memcpy(_tmp, _out.ptr, _out.len);
+    _tmp[_out.len] = '\0';
+    jstring _result = (*env)->NewStringUTF(env, _tmp);
+    free(_tmp);
     {{ prefix }}_free_string(_out);
     return _result;
 {%- else %}
