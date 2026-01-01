@@ -183,6 +183,42 @@ impl OptionView {
 }
 
 #[derive(Debug, Clone)]
+pub struct ResultView {
+    pub ok_type: String,
+    pub ok_c_type: String,
+    pub ok_jni_type: String,
+    pub throws: bool,
+}
+
+impl ResultView {
+    pub fn from_result(ok: &Type, _err: &Type, _module: &Module) -> Self {
+        Self {
+            ok_type: TypeMapper::map_type(ok),
+            ok_c_type: Self::resolve_c_type(ok),
+            ok_jni_type: TypeMapper::c_jni_type(ok),
+            throws: true,
+        }
+    }
+
+    fn resolve_c_type(ok: &Type) -> String {
+        match ok {
+            Type::Primitive(p) => p.c_type_name().to_string(),
+            Type::String => "FfiString".to_string(),
+            Type::Void => "void".to_string(),
+            _ => "void".to_string(),
+        }
+    }
+
+    pub fn is_void(&self) -> bool {
+        self.ok_type == "Unit" || self.ok_c_type == "void"
+    }
+
+    pub fn is_string(&self) -> bool {
+        self.ok_c_type == "FfiString"
+    }
+}
+
+#[derive(Debug, Clone)]
 pub enum ReturnKind {
     Void,
     Primitive,
@@ -412,6 +448,7 @@ pub enum JniReturnKind {
     CStyleEnum,
     DataEnum { enum_name: String, struct_size: usize },
     Option(OptionView),
+    Result(ResultView),
 }
 
 impl JniReturnKind {
@@ -440,6 +477,9 @@ impl JniReturnKind {
     ) -> Self {
         match ty {
             Some(Type::Option(inner)) => Self::Option(OptionView::from_inner(inner, module)),
+            Some(Type::Result { ok, err }) => {
+                Self::Result(ResultView::from_result(ok, err, module))
+            }
             Some(Type::Enum(enum_name)) => {
                 module
                     .enums
@@ -497,6 +537,18 @@ impl JniReturnKind {
             Self::CStyleEnum => "jint",
             Self::DataEnum { .. } => "jobject",
             Self::Option(view) => view.strategy.jni_return_type(),
+            Self::Result(view) => &view.ok_jni_type,
+        }
+    }
+
+    pub fn is_result(&self) -> bool {
+        matches!(self, Self::Result(_))
+    }
+
+    pub fn result_view(&self) -> Option<&ResultView> {
+        match self {
+            Self::Result(view) => Some(view),
+            _ => None,
         }
     }
 

@@ -255,6 +255,114 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
     free(_tmp);
     {{ prefix }}_free_string(_out);
     return _result;
+{%- else if let Some(res) = func.result %}
+{%- if res.is_void() %}
+    FfiStatus _status = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+    (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+    if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+    if (_status.code != 0) {
+        FfiString _err_msg = {0, 0, 0};
+        {{ prefix }}_last_error_message(&_err_msg);
+        jclass _exc_cls = (*env)->FindClass(env, "java/lang/Exception");
+        char* _err_tmp = (char*)malloc(_err_msg.len + 1);
+        if (_err_tmp) {
+            memcpy(_err_tmp, _err_msg.ptr, _err_msg.len);
+            _err_tmp[_err_msg.len] = '\0';
+            (*env)->ThrowNew(env, _exc_cls, _err_tmp);
+            free(_err_tmp);
+        } else {
+            (*env)->ThrowNew(env, _exc_cls, "FFI error");
+        }
+        {{ prefix }}_free_string(_err_msg);
+    }
+{%- else if res.is_string() %}
+    FfiString _out = {0, 0, 0};
+    FfiStatus _status = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}&_out);
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+    (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+    if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+    if (_status.code != 0) {
+        FfiString _err_msg = {0, 0, 0};
+        {{ prefix }}_last_error_message(&_err_msg);
+        jclass _exc_cls = (*env)->FindClass(env, "java/lang/Exception");
+        char* _err_tmp = (char*)malloc(_err_msg.len + 1);
+        if (_err_tmp) {
+            memcpy(_err_tmp, _err_msg.ptr, _err_msg.len);
+            _err_tmp[_err_msg.len] = '\0';
+            (*env)->ThrowNew(env, _exc_cls, _err_tmp);
+            free(_err_tmp);
+        } else {
+            (*env)->ThrowNew(env, _exc_cls, "FFI error");
+        }
+        {{ prefix }}_free_string(_err_msg);
+        return NULL;
+    }
+    char* _tmp = (char*)malloc(_out.len + 1);
+    if (!_tmp) { {{ prefix }}_free_string(_out); return NULL; }
+    memcpy(_tmp, _out.ptr, _out.len);
+    _tmp[_out.len] = '\0';
+    jstring _result = (*env)->NewStringUTF(env, _tmp);
+    free(_tmp);
+    {{ prefix }}_free_string(_out);
+    return _result;
+{%- else %}
+    {{ res.ok_c_type }} _out = 0;
+    FfiStatus _status = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}&_out);
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+    (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+    (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+    if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+    if (_status.code != 0) {
+        FfiString _err_msg = {0, 0, 0};
+        {{ prefix }}_last_error_message(&_err_msg);
+        jclass _exc_cls = (*env)->FindClass(env, "java/lang/Exception");
+        char* _err_tmp = (char*)malloc(_err_msg.len + 1);
+        if (_err_tmp) {
+            memcpy(_err_tmp, _err_msg.ptr, _err_msg.len);
+            _err_tmp[_err_msg.len] = '\0';
+            (*env)->ThrowNew(env, _exc_cls, _err_tmp);
+            free(_err_tmp);
+        } else {
+            (*env)->ThrowNew(env, _exc_cls, "FFI error");
+        }
+        {{ prefix }}_free_string(_err_msg);
+        return 0;
+    }
+    return _out;
+{%- endif %}
 {%- else %}
     {{ func.jni_return }} _result = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- for param in func.params %}

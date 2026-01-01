@@ -5,7 +5,7 @@ use riff_ffi_rules::naming;
 use crate::model::{Class, DataEnumLayout, Enumeration, Function, Module, Record, Type};
 
 use super::layout::{KotlinBufferRead, KotlinBufferWrite};
-use super::marshal::{OptionView, ParamConversion, ReturnKind};
+use super::marshal::{OptionView, ParamConversion, ResultView, ReturnKind};
 use super::{NamingConvention, TypeMapper};
 
 #[derive(Template)]
@@ -394,6 +394,7 @@ pub struct FunctionTemplate {
     pub reader_name: Option<String>,
     pub is_async: bool,
     pub option: Option<OptionView>,
+    pub result: Option<ResultView>,
 }
 
 pub struct ParamView {
@@ -465,7 +466,10 @@ impl FunctionTemplate {
             })
             .collect();
 
-        let return_type = function.output.as_ref().map(TypeMapper::map_type);
+        let return_type = function.output.as_ref().map(|ty| match ty {
+            Type::Result { ok, .. } => TypeMapper::map_type(ok),
+            other => TypeMapper::map_type(other),
+        });
         let inner_type = return_kind.inner_type().map(String::from);
         let len_fn = return_kind.len_fn().map(String::from);
         let copy_fn = return_kind.copy_fn().map(String::from);
@@ -473,6 +477,11 @@ impl FunctionTemplate {
 
         let option = function.output.as_ref().and_then(|ty| match ty {
             Type::Option(inner) => Some(OptionView::from_inner(inner, _module)),
+            _ => None,
+        });
+
+        let result = function.output.as_ref().and_then(|ty| match ty {
+            Type::Result { ok, err } => Some(ResultView::from_result(ok, err, _module)),
             _ => None,
         });
 
@@ -492,6 +501,7 @@ impl FunctionTemplate {
             reader_name,
             is_async: function.is_async,
             option,
+            result,
         }
     }
 }

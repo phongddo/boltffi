@@ -1,7 +1,7 @@
 use askama::Template;
 use riff_ffi_rules::naming;
 
-use super::marshal::{JniParamInfo, JniReturnKind, OptionView};
+use super::marshal::{JniParamInfo, JniReturnKind, OptionView, ResultView};
 use crate::model::{Class, Function, Method, Module, Type};
 
 #[derive(Template)]
@@ -97,6 +97,7 @@ pub struct JniFunctionView {
     pub vec_new_array_fn: String,
     pub vec_struct_size: usize,
     pub option: Option<OptionView>,
+    pub result: Option<ResultView>,
 }
 
 pub struct JniClassView {
@@ -174,6 +175,7 @@ impl JniGlueTemplate {
                 _ => false,
             },
             Some(Type::Option(inner)) => Self::is_supported_option_inner(inner, module),
+            Some(Type::Result { ok, .. }) => Self::is_supported_result_ok(ok),
             _ => false,
         };
 
@@ -202,6 +204,10 @@ impl JniGlueTemplate {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+
+    fn is_supported_result_ok(ok: &Type) -> bool {
+        matches!(ok, Type::Primitive(_) | Type::String | Type::Void)
     }
 
     fn is_record_blittable(record_name: &str, module: &Module) -> bool {
@@ -276,6 +282,14 @@ impl JniGlueTemplate {
             vec_new_array_fn: Self::extract_new_array_fn(&vec_return),
             vec_struct_size: Self::extract_struct_size(&vec_return),
             option: return_kind.option_view().cloned(),
+            result: Self::extract_result_view(&func.output, module),
+        }
+    }
+
+    fn extract_result_view(output: &Option<Type>, module: &Module) -> Option<ResultView> {
+        match output {
+            Some(Type::Result { ok, err }) => Some(ResultView::from_result(ok, err, module)),
+            _ => None,
         }
     }
 

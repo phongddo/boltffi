@@ -206,6 +206,7 @@ impl Kotlin {
                 _ => false,
             },
             Some(Type::Option(inner)) => Self::is_supported_option_inner(inner, module),
+            Some(Type::Result { ok, .. }) => Self::is_supported_result_ok(ok),
             _ => false,
         };
 
@@ -234,6 +235,10 @@ impl Kotlin {
                 .unwrap_or(false),
             _ => false,
         }
+    }
+
+    fn is_supported_result_ok(ok: &Type) -> bool {
+        matches!(ok, Type::Primitive(_) | Type::String | Type::Void)
     }
 
     fn is_record_blittable(record_name: &str, module: &Module) -> bool {
