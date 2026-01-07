@@ -482,17 +482,13 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
             }
         }
         ReturnKind::Vec(inner_ty) => {
-            let len_fn_name = syn::Ident::new(&format!("{}_len", export_name), fn_name.span());
-            let copy_fn_name =
-                syn::Ident::new(&format!("{}_copy_into", export_name), fn_name.span());
-
             let body = if has_conversions {
                 quote! {
                     #(#conversions)*
-                    #fn_name(#(#call_args),*)
+                    crate::FfiBuf::from_vec(#fn_name(#(#call_args),*))
                 }
             } else {
-                quote! { #fn_name(#(#call_args),*) }
+                quote! { crate::FfiBuf::from_vec(#fn_name(#(#call_args),*)) }
             };
 
             if has_params {
@@ -500,27 +496,10 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #input
 
                     #[unsafe(no_mangle)]
-                    #fn_vis unsafe extern "C" fn #len_fn_name(
+                    #fn_vis unsafe extern "C" fn #export_ident(
                         #(#ffi_params),*
-                    ) -> usize {
-                        #body.len()
-                    }
-
-                    #[unsafe(no_mangle)]
-                    #fn_vis unsafe extern "C" fn #copy_fn_name(
-                        #(#ffi_params),*,
-                        out: *mut #inner_ty,
-                        capacity: usize,
-                        written: *mut usize
-                    ) -> crate::FfiStatus {
-                        if out.is_null() || written.is_null() {
-                            return crate::FfiStatus::NULL_POINTER;
-                        }
-                        let result = #body;
-                        let to_copy = result.len().min(capacity);
-                        core::ptr::copy_nonoverlapping(result.as_ptr(), out, to_copy);
-                        *written = to_copy;
-                        crate::FfiStatus::OK
+                    ) -> crate::FfiBuf<#inner_ty> {
+                        #body
                     }
                 }
             } else {
@@ -528,24 +507,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #input
 
                     #[unsafe(no_mangle)]
-                    #fn_vis extern "C" fn #len_fn_name() -> usize {
-                        #body.len()
-                    }
-
-                    #[unsafe(no_mangle)]
-                    #fn_vis unsafe extern "C" fn #copy_fn_name(
-                        out: *mut #inner_ty,
-                        capacity: usize,
-                        written: *mut usize
-                    ) -> crate::FfiStatus {
-                        if out.is_null() || written.is_null() {
-                            return crate::FfiStatus::NULL_POINTER;
-                        }
-                        let result = #body;
-                        let to_copy = result.len().min(capacity);
-                        core::ptr::copy_nonoverlapping(result.as_ptr(), out, to_copy);
-                        *written = to_copy;
-                        crate::FfiStatus::OK
+                    #fn_vis extern "C" fn #export_ident() -> crate::FfiBuf<#inner_ty> {
+                        #body
                     }
                 }
             }
@@ -608,53 +571,23 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     }
                 }
                 OptionReturnAbi::Vec { inner } => {
-                    let is_some_fn_name =
-                        syn::Ident::new(&format!("{}_is_some", export_name), fn_name.span());
-                    let len_fn_name =
-                        syn::Ident::new(&format!("{}_len", export_name), fn_name.span());
-                    let copy_fn_name =
-                        syn::Ident::new(&format!("{}_copy_into", export_name), fn_name.span());
-
                     let is_string = is_string_type(&inner);
-
-                    let (out_type, copy_body) = if is_string {
-                        (
-                            quote! { crate::FfiString },
-                            quote! {
-                                match #call {
-                                    Some(result) => {
-                                        let to_copy = result.len().min(capacity);
-                                        for (i, s) in result.into_iter().enumerate().take(to_copy) {
-                                            *out.add(i) = crate::FfiString::from(s);
-                                        }
-                                        *written = to_copy;
-                                        crate::FfiStatus::OK
-                                    }
-                                    None => {
-                                        *written = 0;
-                                        crate::FfiStatus::OK
-                                    }
-                                }
-                            },
-                        )
+                    let ffi_inner = if is_string {
+                        quote! { crate::FfiString }
                     } else {
-                        (
-                            quote! { #inner },
-                            quote! {
-                                match #call {
-                                    Some(result) => {
-                                        let to_copy = result.len().min(capacity);
-                                        core::ptr::copy_nonoverlapping(result.as_ptr(), out, to_copy);
-                                        *written = to_copy;
-                                        crate::FfiStatus::OK
-                                    }
-                                    None => {
-                                        *written = 0;
-                                        crate::FfiStatus::OK
-                                    }
-                                }
-                            },
-                        )
+                        quote! { #inner }
+                    };
+
+                    let convert_body = if is_string {
+                        quote! {
+                            #call.map(|v| {
+                                crate::FfiBuf::from_vec(v.into_iter().map(crate::FfiString::from).collect())
+                            }).into()
+                        }
+                    } else {
+                        quote! {
+                            #call.map(crate::FfiBuf::from_vec).into()
+                        }
                     };
 
                     if has_params {
@@ -662,30 +595,10 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #is_some_fn_name(
+                            #fn_vis unsafe extern "C" fn #export_ident(
                                 #(#ffi_params),*
-                            ) -> i32 {
-                                #call.is_some() as i32
-                            }
-
-                            #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #len_fn_name(
-                                #(#ffi_params),*
-                            ) -> usize {
-                                #call.map_or(0, |v| v.len())
-                            }
-
-                            #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #copy_fn_name(
-                                #(#ffi_params),*,
-                                out: *mut #out_type,
-                                capacity: usize,
-                                written: *mut usize
-                            ) -> crate::FfiStatus {
-                                if out.is_null() || written.is_null() {
-                                    return crate::FfiStatus::NULL_POINTER;
-                                }
-                                #copy_body
+                            ) -> crate::FfiOption<crate::FfiBuf<#ffi_inner>> {
+                                #convert_body
                             }
                         }
                     } else {
@@ -693,25 +606,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                             #input
 
                             #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #is_some_fn_name() -> i32 {
-                                #call.is_some() as i32
-                            }
-
-                            #[unsafe(no_mangle)]
-                            #fn_vis extern "C" fn #len_fn_name() -> usize {
-                                #call.map_or(0, |v| v.len())
-                            }
-
-                            #[unsafe(no_mangle)]
-                            #fn_vis unsafe extern "C" fn #copy_fn_name(
-                                out: *mut #out_type,
-                                capacity: usize,
-                                written: *mut usize
-                            ) -> crate::FfiStatus {
-                                if out.is_null() || written.is_null() {
-                                    return crate::FfiStatus::NULL_POINTER;
-                                }
-                                #copy_body
+                            #fn_vis extern "C" fn #export_ident() -> crate::FfiOption<crate::FfiBuf<#ffi_inner>> {
+                                #convert_body
                             }
                         }
                     }

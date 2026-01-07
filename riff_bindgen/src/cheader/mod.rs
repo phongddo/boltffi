@@ -7,6 +7,15 @@ use crate::model::{
 
 pub struct CHeaderGenerator;
 
+struct CollectedFfiTypes {
+    primitive_buf_types: Vec<String>,
+    named_buf_types: Vec<String>,
+    option_primitive_buf_types: Vec<String>,
+    option_named_buf_types: Vec<String>,
+    primitive_option_types: Vec<String>,
+    named_option_types: Vec<String>,
+}
+
 impl CHeaderGenerator {
     pub fn generate(module: &Module) -> String {
         let prefix = naming::ffi_prefix();
@@ -18,6 +27,7 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_ffi_primitive_types(module));
         out.push_str(&Self::generate_enums(&module.enums));
         out.push_str(&Self::generate_records(&module.records));
+        out.push_str(&Self::generate_ffi_named_buf_types(module));
         out.push_str(&Self::generate_ffi_named_option_types(module));
         out.push_str(&Self::generate_traits(&module.callback_traits, &prefix));
         out.push_str(&Self::generate_functions(&module.functions));
@@ -80,66 +90,98 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             .to_string()
     }
 
-    fn collect_ffi_types(module: &Module) -> (Vec<String>, Vec<String>, Vec<String>) {
+    fn collect_ffi_types(module: &Module) -> CollectedFfiTypes {
         use std::collections::HashSet;
-        let mut buf_types: HashSet<String> = HashSet::new();
+        let mut primitive_buf_types: HashSet<String> = HashSet::new();
+        let mut named_buf_types: HashSet<String> = HashSet::new();
+        let mut option_primitive_buf_types: HashSet<String> = HashSet::new();
+        let mut option_named_buf_types: HashSet<String> = HashSet::new();
         let mut primitive_option_types: HashSet<String> = HashSet::new();
         let mut named_option_types: HashSet<String> = HashSet::new();
 
-        let collect_from_type = |ty: &Type,
-                                  buf_types: &mut HashSet<String>,
-                                  prim_opts: &mut HashSet<String>,
-                                  named_opts: &mut HashSet<String>| {
+        fn insert_vec_buf_type(
+            inner: &Type,
+            primitive_buf: &mut HashSet<String>,
+            named_buf: &mut HashSet<String>,
+        ) {
+            match inner {
+                Type::Primitive(p) => {
+                    primitive_buf.insert(p.rust_name().to_string());
+                }
+                Type::Record(name) | Type::Enum(name) => {
+                    named_buf.insert(name.clone());
+                }
+                Type::String => {
+                    named_buf.insert("FfiString".to_string());
+                }
+                _ => {}
+            }
+        }
+
+        fn collect_from_type(
+            ty: &Type,
+            primitive_buf: &mut HashSet<String>,
+            named_buf: &mut HashSet<String>,
+            option_primitive_buf: &mut HashSet<String>,
+            option_named_buf: &mut HashSet<String>,
+            prim_opts: &mut HashSet<String>,
+            named_opts: &mut HashSet<String>,
+        ) {
             match ty {
-                Type::Vec(inner) if inner.is_primitive() => {
-                    buf_types.insert(Self::primitive_to_cbindgen_name(inner));
+                Type::Vec(inner) => {
+                    insert_vec_buf_type(inner, primitive_buf, named_buf);
                 }
-                Type::Option(inner) if !matches!(inner.as_ref(), Type::Vec(_)) => {
-                    match inner.as_ref() {
-                        Type::Primitive(_) => {
-                            prim_opts.insert(Self::primitive_to_cbindgen_name(inner));
-                        }
-                        Type::String => {
-                            prim_opts.insert("FfiString".to_string());
-                        }
-                        Type::Record(name) | Type::Enum(name) => {
-                            named_opts.insert(name.clone());
-                        }
-                        _ => {}
+                Type::Option(inner) => match inner.as_ref() {
+                    Type::Vec(vec_inner) => {
+                        insert_vec_buf_type(vec_inner, primitive_buf, named_buf);
+                        insert_vec_buf_type(vec_inner, option_primitive_buf, option_named_buf);
                     }
-                }
+                    Type::Primitive(p) => {
+                        prim_opts.insert(p.rust_name().to_string());
+                    }
+                    Type::String => {
+                        prim_opts.insert("FfiString".to_string());
+                    }
+                    Type::Record(name) | Type::Enum(name) => {
+                        named_opts.insert(name.clone());
+                    }
+                    _ => {}
+                },
                 Type::Result { ok, .. } => {
                     if let Type::Vec(inner) = ok.as_ref() {
-                        if inner.is_primitive() {
-                            buf_types.insert(Self::primitive_to_cbindgen_name(inner));
-                        }
+                        insert_vec_buf_type(inner, primitive_buf, named_buf);
                     }
                     if let Type::Option(inner) = ok.as_ref() {
-                        if !matches!(inner.as_ref(), Type::Vec(_)) {
-                            match inner.as_ref() {
-                                Type::Primitive(_) => {
-                                    prim_opts.insert(Self::primitive_to_cbindgen_name(inner));
-                                }
-                                Type::String => {
-                                    prim_opts.insert("FfiString".to_string());
-                                }
-                                Type::Record(name) | Type::Enum(name) => {
-                                    named_opts.insert(name.clone());
-                                }
-                                _ => {}
+                        match inner.as_ref() {
+                            Type::Vec(vec_inner) => {
+                                insert_vec_buf_type(vec_inner, primitive_buf, named_buf);
+                                insert_vec_buf_type(vec_inner, option_primitive_buf, option_named_buf);
                             }
+                            Type::Primitive(p) => {
+                                prim_opts.insert(p.rust_name().to_string());
+                            }
+                            Type::String => {
+                                prim_opts.insert("FfiString".to_string());
+                            }
+                            Type::Record(name) | Type::Enum(name) => {
+                                named_opts.insert(name.clone());
+                            }
+                            _ => {}
                         }
                     }
                 }
                 _ => {}
             }
-        };
+        }
 
         for func in &module.functions {
             if let Some(ref ty) = func.output {
                 collect_from_type(
                     ty,
-                    &mut buf_types,
+                    &mut primitive_buf_types,
+                    &mut named_buf_types,
+                    &mut option_primitive_buf_types,
+                    &mut option_named_buf_types,
                     &mut primitive_option_types,
                     &mut named_option_types,
                 );
@@ -151,7 +193,10 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 if let Some(ref ty) = method.output {
                     collect_from_type(
                         ty,
-                        &mut buf_types,
+                        &mut primitive_buf_types,
+                        &mut named_buf_types,
+                        &mut option_primitive_buf_types,
+                        &mut option_named_buf_types,
                         &mut primitive_option_types,
                         &mut named_option_types,
                     );
@@ -159,21 +204,35 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             }
         }
 
-        let mut buf_vec: Vec<_> = buf_types.into_iter().collect();
+        let mut primitive_buf_vec: Vec<_> = primitive_buf_types.into_iter().collect();
+        let mut named_buf_vec: Vec<_> = named_buf_types.into_iter().collect();
+        let mut option_primitive_buf_vec: Vec<_> = option_primitive_buf_types.into_iter().collect();
+        let mut option_named_buf_vec: Vec<_> = option_named_buf_types.into_iter().collect();
         let mut prim_vec: Vec<_> = primitive_option_types.into_iter().collect();
         let mut named_vec: Vec<_> = named_option_types.into_iter().collect();
-        buf_vec.sort();
+        
+        primitive_buf_vec.sort();
+        named_buf_vec.sort();
+        option_primitive_buf_vec.sort();
+        option_named_buf_vec.sort();
         prim_vec.sort();
         named_vec.sort();
 
-        (buf_vec, prim_vec, named_vec)
+        CollectedFfiTypes {
+            primitive_buf_types: primitive_buf_vec,
+            named_buf_types: named_buf_vec,
+            option_primitive_buf_types: option_primitive_buf_vec,
+            option_named_buf_types: option_named_buf_vec,
+            primitive_option_types: prim_vec,
+            named_option_types: named_vec,
+        }
     }
 
     fn generate_ffi_primitive_types(module: &Module) -> String {
-        let (buf_types, primitive_option_types, _) = Self::collect_ffi_types(module);
+        let types = Self::collect_ffi_types(module);
         let mut out = String::new();
 
-        for ty_name in &buf_types {
+        for ty_name in &types.primitive_buf_types {
             let c_type = Self::cbindgen_name_to_c_type(ty_name);
             out.push_str(&format!(
                 "typedef struct FfiBuf_{} {{ {}* ptr; size_t len; size_t cap; }} FfiBuf_{};\n",
@@ -181,7 +240,14 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             ));
         }
 
-        for ty_name in &primitive_option_types {
+        for ty_name in &types.option_primitive_buf_types {
+            out.push_str(&format!(
+                "typedef struct FfiOption_FfiBuf_{} {{ bool isSome; FfiBuf_{} value; }} FfiOption_FfiBuf_{};\n",
+                ty_name, ty_name, ty_name
+            ));
+        }
+
+        for ty_name in &types.primitive_option_types {
             let c_type = Self::option_type_to_c_type(ty_name);
             out.push_str(&format!(
                 "typedef struct FfiOption_{} {{ bool isSome; {} value; }} FfiOption_{};\n",
@@ -189,7 +255,39 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             ));
         }
 
-        for ty_name in &buf_types {
+        for ty_name in &types.primitive_buf_types {
+            out.push_str(&format!(
+                "void riff_free_buf_{}(FfiBuf_{} buf);\n",
+                ty_name, ty_name
+            ));
+        }
+
+        if !out.is_empty() {
+            out.push('\n');
+        }
+
+        out
+    }
+
+    fn generate_ffi_named_buf_types(module: &Module) -> String {
+        let types = Self::collect_ffi_types(module);
+        let mut out = String::new();
+
+        for ty_name in &types.named_buf_types {
+            out.push_str(&format!(
+                "typedef struct FfiBuf_{} {{ {}* ptr; size_t len; size_t cap; }} FfiBuf_{};\n",
+                ty_name, ty_name, ty_name
+            ));
+        }
+
+        for ty_name in &types.option_named_buf_types {
+            out.push_str(&format!(
+                "typedef struct FfiOption_FfiBuf_{} {{ bool isSome; FfiBuf_{} value; }} FfiOption_FfiBuf_{};\n",
+                ty_name, ty_name, ty_name
+            ));
+        }
+
+        for ty_name in &types.named_buf_types {
             out.push_str(&format!(
                 "void riff_free_buf_{}(FfiBuf_{} buf);\n",
                 ty_name, ty_name
@@ -204,10 +302,10 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     }
 
     fn generate_ffi_named_option_types(module: &Module) -> String {
-        let (_, _, named_option_types) = Self::collect_ffi_types(module);
+        let types = Self::collect_ffi_types(module);
         let mut out = String::new();
 
-        for ty_name in &named_option_types {
+        for ty_name in &types.named_option_types {
             out.push_str(&format!(
                 "typedef struct FfiOption_{} {{ bool isSome; {} value; }} FfiOption_{};\n",
                 ty_name, ty_name, ty_name
@@ -470,8 +568,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     ) -> String {
         match output {
             Some(Type::Vec(inner)) => {
-                let inner_c = Self::type_to_c(inner);
-                Self::generate_vec_return_function(ffi_name, params, &inner_c)
+                Self::generate_vec_return_function(ffi_name, params, inner)
             }
             Some(Type::String) => Self::generate_string_return_function(ffi_name, params),
             Some(Type::Result { ok, err }) => {
@@ -527,20 +624,11 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     fn generate_vec_return_function(
         ffi_name: &str,
         params: &[(String, String)],
-        inner_c: &str,
+        inner: &Type,
     ) -> String {
         let params_str = Self::format_params(params);
-
-        let mut copy_params: Vec<(String, String)> = params.to_vec();
-        copy_params.push(("dst".to_string(), format!("{} *", inner_c)));
-        copy_params.push(("dst_cap".to_string(), "uintptr_t".to_string()));
-        copy_params.push(("written".to_string(), "uintptr_t *".to_string()));
-        let copy_params_str = Self::format_params(&copy_params);
-
-        format!(
-            "uintptr_t {}_len({});\nFfiStatus {}_copy_into({});\n",
-            ffi_name, params_str, ffi_name, copy_params_str
-        )
+        let buf_type = format!("FfiBuf_{}", Self::primitive_to_cbindgen_name(inner));
+        format!("{} {}({});\n", buf_type, ffi_name, params_str)
     }
 
     fn generate_string_return_function(ffi_name: &str, params: &[(String, String)]) -> String {
@@ -627,22 +715,9 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         params: &[(String, String)],
         inner: &Type,
     ) -> String {
-        let inner_c = Self::type_to_c(inner);
         let params_str = Self::format_params(params);
-
-        format!(
-            "int32_t {}_is_some({});\n\
-             uintptr_t {}_len({});\n\
-             FfiStatus {}_copy_into({}{}{} * dst, uintptr_t dst_cap, uintptr_t * written);\n",
-            ffi_name,
-            params_str,
-            ffi_name,
-            params_str,
-            ffi_name,
-            params_str,
-            if params.is_empty() { "" } else { ", " },
-            inner_c
-        )
+        let buf_type = format!("FfiBuf_{}", Self::primitive_to_cbindgen_name(inner));
+        format!("FfiOption_{} {}({});\n", buf_type, ffi_name, params_str)
     }
 
     fn generate_classes(classes: &[Class], prefix: &str) -> String {

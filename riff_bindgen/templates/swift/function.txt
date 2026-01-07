@@ -256,91 +256,31 @@ public func {{ func_name }}({% for param in params %}{% if param.is_mut_slice %}
     ensureOk(status)
     return stringFromFfi(result)
 {%- else if return_kind.is_vec() %}
-{%- if let Some(len_fn) = return_kind.vec_len_fn() %}
-    let len = {{ len_fn }}({{ ffi_args }})
-{%- endif %}
-{%- if return_kind.vec_is_struct() %}
-{%- if let Some(inner) = return_kind.inner_type() %}
-    let ptr = UnsafeMutablePointer<{{ inner }}>.allocate(capacity: Int(len))
-{%- endif %}
-    defer { ptr.deallocate() }
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}ptr, len, &written)
-{%- endif %}
-    ensureOk(status)
-    return Array(UnsafeBufferPointer(start: ptr, count: Int(written)))
-{%- else %}
-{%- if let Some(inner) = return_kind.inner_type() %}
-    var arr = [{{ inner }}](repeating: 0, count: Int(len))
-{%- endif %}
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&arr, len, &written)
-{%- endif %}
-    ensureOk(status)
-    let writtenCount = min(Int(written), arr.count)
-    if writtenCount < arr.count { arr.removeSubrange(writtenCount..<arr.count) }
-    return arr
+{%- if let Some(free_fn) = return_kind.vec_free_fn() %}
+    let buf = {{ ffi_name }}({{ ffi_args }})
+    defer { {{ free_fn }}(buf) }
+    return Array(UnsafeBufferPointer(start: buf.ptr, count: Int(buf.len)))
 {%- endif %}
 {%- else if return_kind.is_option_vec() %}
-{%- if let Some(is_some_fn) = return_kind.option_vec_is_some_fn() %}
-    let isSome = {{ is_some_fn }}({{ ffi_args }})
-    if isSome == 0 { return nil }
-{%- endif %}
-{%- if let Some(len_fn) = return_kind.option_vec_len_fn() %}
-    let len = {{ len_fn }}({{ ffi_args }})
-{%- endif %}
-{%- if return_kind.option_vec_is_struct() %}
-{%- if let Some(inner) = return_kind.inner_type() %}
-    let ptr = UnsafeMutablePointer<{{ inner }}>.allocate(capacity: Int(len))
-{%- endif %}
-    defer { ptr.deallocate() }
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}ptr, len, &written)
-{%- endif %}
-    ensureOk(status)
-    return Array(UnsafeBufferPointer(start: ptr, count: Int(written)))
-{%- else if return_kind.option_vec_is_string() %}
-    let ptr = UnsafeMutablePointer<FfiString>.allocate(capacity: Int(len))
-    defer { ptr.deallocate() }
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}ptr, len, &written)
-{%- endif %}
-    ensureOk(status)
+{%- if let Some(free_fn) = return_kind.option_vec_free_fn() %}
+    let opt = {{ ffi_name }}({{ ffi_args }})
+    if !opt.isSome { return nil }
+    defer { {{ free_fn }}(opt.value) }
+{%- if return_kind.option_vec_is_string() %}
     var result = [String]()
-    result.reserveCapacity(Int(written))
-    for i in 0..<Int(written) {
-        let ffiStr = ptr[i]
+    result.reserveCapacity(Int(opt.value.len))
+    for i in 0..<Int(opt.value.len) {
+        let ffiStr = opt.value.ptr[i]
         result.append(stringFromFfi(ffiStr))
-        {{ prefix }}_free_string(ffiStr)
     }
     return result
 {%- else if return_kind.option_vec_is_enum() %}
 {%- if let Some(inner) = return_kind.inner_type() %}
-    var rawArr = [Int32](repeating: 0, count: Int(len))
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&rawArr, len, &written)
-{%- endif %}
-    ensureOk(status)
-    let writtenCount = min(Int(written), rawArr.count)
-    return rawArr.prefix(writtenCount).map { {{ inner }}(fromC: $0) }
+    return UnsafeBufferPointer(start: opt.value.ptr, count: Int(opt.value.len)).map { {{ inner }}(fromC: $0) }
 {%- endif %}
 {%- else %}
-{%- if let Some(inner) = return_kind.inner_type() %}
-    var arr = [{{ inner }}](repeating: 0, count: Int(len))
+    return Array(UnsafeBufferPointer(start: opt.value.ptr, count: Int(opt.value.len)))
 {%- endif %}
-    var written: UInt = 0
-{%- if let Some(copy_fn) = return_kind.option_vec_copy_fn() %}
-    let status = {{ copy_fn }}({{ ffi_args }}{% if !ffi_args.is_empty() %}, {% endif %}&arr, len, &written)
-{%- endif %}
-    ensureOk(status)
-    let writtenCount = min(Int(written), arr.count)
-    if writtenCount < arr.count { arr.removeSubrange(writtenCount..<arr.count) }
-    return arr
 {%- endif %}
 {%- else if return_kind.is_option_string() %}
     let result = {{ ffi_name }}({{ ffi_args }})

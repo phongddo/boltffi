@@ -54,6 +54,10 @@ impl Primitive {
         }
     }
 
+    pub fn cbindgen_name(self) -> &'static str {
+        self.rust_name()
+    }
+
     pub fn c_type_name(self) -> &'static str {
         match self {
             Self::Bool => "bool",

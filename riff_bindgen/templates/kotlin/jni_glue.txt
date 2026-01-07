@@ -66,12 +66,29 @@ JNIEXPORT jobject JNICALL {{ func.jni_name }}(JNIEnv *env, jclass cls{{ func.jni
     jbyte* _{{ param.name }}_ptr = (*env)->GetByteArrayElements(env, {{ param.name }}, NULL);
 {%- endif %}
 {%- endfor %}
-    uintptr_t _len = {{ func.vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    size_t _byte_size = _len * {{ func.vec_struct_size }};
+    {{ func.vec_buf_type }} _ffi_buf = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    size_t _byte_size = _ffi_buf.len * {{ func.vec_struct_size }};
     void* _buf = malloc(_byte_size);
-    if (!_buf) return NULL;
-    uintptr_t _written = 0;
-    {{ func.vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_buf, _len, &_written);
+    if (!_buf) {
+        {{ func.vec_free_fn }}(_ffi_buf);
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+        (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+        if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+        return NULL;
+    }
+    memcpy(_buf, _ffi_buf.ptr, _byte_size);
+    {{ func.vec_free_fn }}(_ffi_buf);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -108,13 +125,30 @@ JNIEXPORT {{ func.vec_jni_array_type }} JNICALL {{ func.jni_name }}(JNIEnv *env,
     jbyte* _{{ param.name }}_ptr = (*env)->GetByteArrayElements(env, {{ param.name }}, NULL);
 {%- endif %}
 {%- endfor %}
-    jlong _len = (jlong){{ func.vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    {{ func.vec_jni_array_type }} _result = (*env)->{{ func.vec_new_array_fn }}(env, (jsize)_len);
-    if (!_result) return NULL;
+    {{ func.vec_buf_type }} _ffi_buf = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    {{ func.vec_jni_array_type }} _result = (*env)->{{ func.vec_new_array_fn }}(env, (jsize)_ffi_buf.len);
+    if (!_result) {
+        {{ func.vec_free_fn }}(_ffi_buf);
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+        (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+        if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+        return NULL;
+    }
     {{ func.vec_c_type }}* _dst = ({{ func.vec_c_type }}*)(*env)->GetPrimitiveArrayCritical(env, _result, NULL);
-    uintptr_t _written = 0;
-    {{ func.vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_dst, (uintptr_t)_len, &_written);
+    memcpy(_dst, _ffi_buf.ptr, _ffi_buf.len * sizeof({{ func.vec_c_type }}));
     (*env)->ReleasePrimitiveArrayCritical(env, _result, _dst, 0);
+    {{ func.vec_free_fn }}(_ffi_buf);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -152,8 +186,8 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endif %}
 {%- endfor %}
 {%- if opt.is_vec_record() %}
-    int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    if (!_is_some) {
+    FfiOption_{{ func.option_vec_buf_type }} _opt = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    if (!_opt.isSome) {
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -170,10 +204,10 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
         return NULL;
     }
-    uintptr_t _len = {{ func.option_vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    size_t _byte_size = _len * {{ func.option_vec_struct_size }};
+    size_t _byte_size = _opt.value.len * {{ func.option_vec_struct_size }};
     void* _buf = malloc(_byte_size);
     if (!_buf) {
+        {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -190,8 +224,8 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
         return NULL;
     }
-    uintptr_t _written = 0;
-    {{ func.option_vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_buf, _len, &_written);
+    memcpy(_buf, _opt.value.ptr, _byte_size);
+    {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -208,8 +242,8 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
     return (*env)->NewDirectByteBuffer(env, _buf, (jlong)_byte_size);
 {%- else if opt.is_vec_primitive() %}
-    int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    if (!_is_some) {
+    FfiOption_{{ func.option_vec_buf_type }} _opt = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    if (!_opt.isSome) {
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -226,9 +260,9 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
         return NULL;
     }
-    uintptr_t _len = {{ func.option_vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    {{ func.option_vec_jni_array_type }} _result = (*env)->{{ func.option_vec_new_array_fn }}(env, (jsize)_len);
+    {{ func.option_vec_jni_array_type }} _result = (*env)->{{ func.option_vec_new_array_fn }}(env, (jsize)_opt.value.len);
     if (!_result) {
+        {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -246,9 +280,9 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
         return NULL;
     }
     {{ func.option_vec_c_type }}* _dst = ({{ func.option_vec_c_type }}*)(*env)->GetPrimitiveArrayCritical(env, _result, NULL);
-    uintptr_t _written = 0;
-    {{ func.option_vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_dst, (uintptr_t)_len, &_written);
+    memcpy(_dst, _opt.value.ptr, _opt.value.len * sizeof({{ func.option_vec_c_type }}));
     (*env)->ReleasePrimitiveArrayCritical(env, _result, _dst, 0);
+    {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -265,8 +299,8 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
     return _result;
 {%- else if opt.is_vec_string() %}
-    int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    if (!_is_some) {
+    FfiOption_{{ func.option_vec_buf_type }} _opt = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    if (!_opt.isSome) {
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -283,27 +317,6 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
         return NULL;
     }
-    uintptr_t _len = {{ func.option_vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    FfiString* _strings = (FfiString*)malloc(_len * sizeof(FfiString));
-    if (!_strings) {
-{%- for param in func.params %}
-{%- if param.is_primitive_array() %}
-        (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
-{%- endif %}
-{%- if param.is_record_buffer() %}
-        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
-{%- endif %}
-{%- if param.is_data_enum() %}
-        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
-{%- endif %}
-{%- if param.is_string %}
-        if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
-{%- endif %}
-{%- endfor %}
-        return NULL;
-    }
-    uintptr_t _written = 0;
-    {{ func.option_vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_strings, _len, &_written);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -319,8 +332,9 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endif %}
 {%- endfor %}
     jclass _str_cls = (*env)->FindClass(env, "java/lang/String");
-    jobjectArray _result = (*env)->NewObjectArray(env, (jsize)_written, _str_cls, NULL);
-    for (uintptr_t i = 0; i < _written; i++) {
+    jobjectArray _result = (*env)->NewObjectArray(env, (jsize)_opt.value.len, _str_cls, NULL);
+    FfiString* _strings = (FfiString*)_opt.value.ptr;
+    for (size_t i = 0; i < _opt.value.len; i++) {
         char* _tmp = (char*)malloc(_strings[i].len + 1);
         if (_tmp) {
             memcpy(_tmp, _strings[i].ptr, _strings[i].len);
@@ -329,13 +343,12 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
             (*env)->SetObjectArrayElement(env, _result, (jsize)i, _jstr);
             free(_tmp);
         }
-        {{ prefix }}_free_string(_strings[i]);
     }
-    free(_strings);
+    {{ func.option_vec_free_fn }}(_opt.value);
     return _result;
 {%- else if opt.is_vec_enum() %}
-    int32_t _is_some = {{ func.ffi_name }}_is_some({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    if (!_is_some) {
+    FfiOption_{{ func.option_vec_buf_type }} _opt = {{ func.ffi_name }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
+    if (!_opt.isSome) {
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -352,9 +365,23 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
 {%- endfor %}
         return NULL;
     }
-    uintptr_t _len = {{ func.option_vec_len_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}{% if !loop.last %}, {% endif %}{% endfor %});
-    jintArray _result = (*env)->NewIntArray(env, (jsize)_len);
+    jintArray _result = (*env)->NewIntArray(env, (jsize)_opt.value.len);
     if (!_result) {
+{%- for param in func.params %}
+{%- if param.is_primitive_array() %}
+        (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+{%- endif %}
+{%- if param.is_record_buffer() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_data_enum() %}
+        (*env)->ReleaseByteArrayElements(env, {{ param.name }}, _{{ param.name }}_ptr, JNI_ABORT);
+{%- endif %}
+{%- if param.is_string %}
+        if ({{ param.name }}) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
+{%- endif %}
+{%- endfor %}
+        {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
         (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
@@ -372,9 +399,9 @@ JNIEXPORT {{ func.jni_return }} JNICALL {{ func.jni_name }}(JNIEnv *env, jclass 
         return NULL;
     }
     int32_t* _dst = (int32_t*)(*env)->GetPrimitiveArrayCritical(env, _result, NULL);
-    uintptr_t _written = 0;
-    {{ func.option_vec_copy_ffi }}({% for param in func.params %}{{ param.ffi_arg() }}, {% endfor %}_dst, (uintptr_t)_len, &_written);
+    memcpy(_dst, _opt.value.ptr, _opt.value.len * sizeof(int32_t));
     (*env)->ReleasePrimitiveArrayCritical(env, _result, _dst, 0);
+    {{ func.option_vec_free_fn }}(_opt.value);
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
     (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});

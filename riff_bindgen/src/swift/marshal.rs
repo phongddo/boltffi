@@ -10,13 +10,12 @@ pub struct OptionView {
     pub is_struct: bool,
     pub is_data_enum: bool,
     pub struct_size: usize,
-    pub is_some_fn: String,
-    pub len_fn: String,
-    pub copy_fn: String,
+    pub buf_type: String,
+    pub free_fn: String,
 }
 
 impl OptionView {
-    pub fn from_type(inner: &Type, func_name: &str, module: &Module) -> Self {
+    pub fn from_type(inner: &Type, _func_name: &str, module: &Module) -> Self {
         let info = OptionInfo::from_type(inner);
         let is_data_enum = info.is_data_enum(module);
         let struct_size = info.struct_size(module);
@@ -27,15 +26,24 @@ impl OptionView {
             other => (other.swift_type(), other.is_struct()),
         };
 
+        let (buf_type, free_fn) = if let SwiftType::Vec(vec_inner) = &swift_inner {
+            let cbindgen_name = vec_inner.cbindgen_name();
+            (
+                format!("FfiBuf_{}", cbindgen_name),
+                format!("{}_free_buf_{}", naming::ffi_prefix(), cbindgen_name),
+            )
+        } else {
+            (String::new(), String::new())
+        };
+
         Self {
             info,
             inner_type,
             is_struct,
             is_data_enum,
             struct_size,
-            is_some_fn: format!("{}_is_some", naming::function_ffi_name(func_name)),
-            len_fn: naming::function_ffi_vec_len(func_name),
-            copy_fn: naming::function_ffi_vec_copy_into(func_name),
+            buf_type,
+            free_fn,
         }
     }
 
@@ -186,6 +194,15 @@ impl SwiftType {
         matches!(self, Self::Record(_))
     }
 
+    pub fn cbindgen_name(&self) -> String {
+        match self {
+            Self::Primitive(p) => p.cbindgen_name().to_string(),
+            Self::String => "FfiString".to_string(),
+            Self::Record(name) | Self::Enum(name) => name.clone(),
+            _ => "unknown".to_string(),
+        }
+    }
+
     pub fn unwrap_result(&self) -> &SwiftType {
         match self {
             Self::Result { ok } => ok.as_ref(),
@@ -215,8 +232,8 @@ pub enum ReturnKind {
     Vec {
         inner_type: String,
         is_struct: bool,
-        len_fn: String,
-        copy_fn: String,
+        buf_type: String,
+        free_fn: String,
     },
     Option(OptionView),
     Result {
@@ -236,7 +253,7 @@ impl ReturnKind {
         }
     }
 
-    fn from_type(ty: &Type, func_name: &str) -> Self {
+    fn from_type(ty: &Type, _func_name: &str) -> Self {
         let swift_ty = SwiftType::from_model(ty);
         match swift_ty {
             SwiftType::Void => Self::Void,
@@ -247,12 +264,15 @@ impl ReturnKind {
             SwiftType::Record(name) => Self::Record {
                 type_name: NamingConvention::class_name(&name),
             },
-            SwiftType::Vec(inner) => Self::Vec {
-                inner_type: inner.swift_type(),
-                is_struct: inner.is_struct(),
-                len_fn: naming::function_ffi_vec_len(func_name),
-                copy_fn: naming::function_ffi_vec_copy_into(func_name),
-            },
+            SwiftType::Vec(inner) => {
+                let cbindgen_name = inner.cbindgen_name();
+                Self::Vec {
+                    inner_type: inner.swift_type(),
+                    is_struct: inner.is_struct(),
+                    buf_type: format!("FfiBuf_{}", cbindgen_name),
+                    free_fn: format!("{}_free_buf_{}", naming::ffi_prefix(), cbindgen_name),
+                }
+            }
             SwiftType::Result { ok } => Self::Result {
                 ok_type: ok.swift_type(),
                 ok_is_vec: matches!(ok.as_ref(), SwiftType::Vec(_)),
@@ -372,16 +392,16 @@ impl ReturnKind {
         )
     }
 
-    pub fn vec_len_fn(&self) -> Option<&str> {
+    pub fn vec_buf_type(&self) -> Option<&str> {
         match self {
-            Self::Vec { len_fn, .. } => Some(len_fn),
+            Self::Vec { buf_type, .. } => Some(buf_type),
             _ => None,
         }
     }
 
-    pub fn vec_copy_fn(&self) -> Option<&str> {
+    pub fn vec_free_fn(&self) -> Option<&str> {
         match self {
-            Self::Vec { copy_fn, .. } => Some(copy_fn),
+            Self::Vec { free_fn, .. } => Some(free_fn),
             _ => None,
         }
     }
@@ -390,23 +410,16 @@ impl ReturnKind {
         matches!(self, Self::Option(opt) if opt.is_vec() && opt.is_struct)
     }
 
-    pub fn option_vec_is_some_fn(&self) -> Option<&str> {
+    pub fn option_vec_buf_type(&self) -> Option<&str> {
         match self {
-            Self::Option(opt) if opt.is_vec() => Some(&opt.is_some_fn),
+            Self::Option(opt) if opt.is_vec() => Some(&opt.buf_type),
             _ => None,
         }
     }
 
-    pub fn option_vec_len_fn(&self) -> Option<&str> {
+    pub fn option_vec_free_fn(&self) -> Option<&str> {
         match self {
-            Self::Option(opt) if opt.is_vec() => Some(&opt.len_fn),
-            _ => None,
-        }
-    }
-
-    pub fn option_vec_copy_fn(&self) -> Option<&str> {
-        match self {
-            Self::Option(opt) if opt.is_vec() => Some(&opt.copy_fn),
+            Self::Option(opt) if opt.is_vec() => Some(&opt.free_fn),
             _ => None,
         }
     }

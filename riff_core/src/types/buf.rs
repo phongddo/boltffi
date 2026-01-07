@@ -69,11 +69,12 @@ impl<T> Default for FfiBuf<T> {
     }
 }
 
+#[macro_export]
 macro_rules! define_ffi_buf_free {
     ($($ty:ty => $name:ident),* $(,)?) => {
         $(
             #[unsafe(no_mangle)]
-            pub extern "C" fn $name(buf: FfiBuf<$ty>) {
+            pub extern "C" fn $name(buf: $crate::FfiBuf<$ty>) {
                 drop(buf);
             }
         )*
@@ -91,6 +92,7 @@ define_ffi_buf_free! {
     u64 => riff_free_buf_u64,
     f32 => riff_free_buf_f32,
     f64 => riff_free_buf_f64,
+    crate::FfiString => riff_free_buf_FfiString,
 }
 
 #[cfg(test)]
