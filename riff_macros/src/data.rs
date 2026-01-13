@@ -1,6 +1,8 @@
 use proc_macro::TokenStream;
 use quote::quote;
 
+use crate::wire_gen;
+
 pub fn data_impl(item: TokenStream) -> TokenStream {
     let item_clone = item.clone();
 
@@ -9,7 +11,13 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
         if !has_repr {
             item_struct.attrs.insert(0, syn::parse_quote!(#[repr(C)]));
         }
-        return TokenStream::from(quote!(#item_struct));
+        
+        let wire_impls = wire_gen::generate_wire_impls(&item_struct);
+        
+        return TokenStream::from(quote! {
+            #item_struct
+            #wire_impls
+        });
     }
 
     if let Ok(mut item_enum) = syn::parse::<syn::ItemEnum>(item_clone) {

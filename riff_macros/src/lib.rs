@@ -10,6 +10,7 @@ mod params;
 mod returns;
 mod safety;
 mod util;
+mod wire_gen;
 
 #[proc_macro_derive(FfiType)]
 pub fn derive_ffi_type(input: TokenStream) -> TokenStream {
