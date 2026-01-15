@@ -26,6 +26,8 @@ pub enum ParamTransform {
     BoxedTrait(syn::Ident),
     VecPrimitive(syn::Type),
     VecWireEncoded(syn::Type),
+    OptionWireEncoded(syn::Type),
+    RecordWireEncoded(syn::Type),
 }
 
 pub fn extract_fn_arg_types(ty: &Type) -> Option<Vec<syn::Type>> {
@@ -90,6 +92,23 @@ pub fn extract_vec_param_inner(ty: &Type) -> Option<syn::Type> {
     None
 }
 
+pub fn extract_option_param_inner(ty: &Type) -> Option<syn::Type> {
+    if let Type::Path(type_path) = ty
+        && let Some(segment) = type_path.path.segments.last()
+        && segment.ident == "Option"
+        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
+        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
+    {
+        return Some(inner_ty.clone());
+    }
+    None
+}
+
+pub fn is_option_primitive(inner_ty: &Type) -> bool {
+    let inner_str = quote!(#inner_ty).to_string().replace(' ', "");
+    is_primitive_vec_inner(&inner_str)
+}
+
 pub fn is_primitive_vec_inner(s: &str) -> bool {
     matches!(
         s,
@@ -133,11 +152,40 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
         }
     }
 
+    if let Some(inner_ty) = extract_option_param_inner(ty) {
+        if !is_option_primitive(&inner_ty) {
+            return ParamTransform::OptionWireEncoded(inner_ty);
+        }
+    }
+
     if type_str == "&str" || (type_str.starts_with("&'") && type_str.ends_with("str")) {
         ParamTransform::StrRef
     } else if type_str == "String" || type_str == "std::string::String" {
         ParamTransform::OwnedString
+    } else if is_record_type(&type_str) {
+        ParamTransform::RecordWireEncoded(ty.clone())
     } else {
         ParamTransform::PassThrough
     }
+}
+
+fn is_record_type(type_str: &str) -> bool {
+    if is_primitive_type(type_str) {
+        return false;
+    }
+    if type_str.starts_with('&') || type_str.starts_with('*') {
+        return false;
+    }
+    if type_str.contains('<') || type_str.contains('>') {
+        return false;
+    }
+    type_str.chars().next().map_or(false, |c| c.is_uppercase())
+}
+
+fn is_primitive_type(s: &str) -> bool {
+    matches!(
+        s,
+        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" 
+        | "f32" | "f64" | "bool" | "isize" | "usize" | "()"
+    )
 }

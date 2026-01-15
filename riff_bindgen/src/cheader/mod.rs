@@ -28,7 +28,7 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_enums(&module.enums));
         out.push_str(&Self::generate_ffi_named_buf_types(module));
         out.push_str(&Self::generate_ffi_named_option_types(module));
-        out.push_str(&Self::generate_traits(&module.callback_traits, &prefix));
+        out.push_str(&Self::generate_traits(&module.callback_traits, &prefix, module));
         out.push_str(&Self::generate_functions(&module.functions, module));
         out.push_str(&Self::generate_classes(&module.classes, &prefix, module));
         out.push_str(&Self::generate_free_functions(&prefix));
@@ -320,77 +320,33 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     }
 
     fn generate_enum(e: &Enumeration) -> String {
-        let c_type = "int32_t";
-
-        if e.is_c_style() {
-            let mut out = format!("typedef {} {};\n", c_type, e.name);
-            let mut next_value: i64 = 0;
-
-            for variant in &e.variants {
-                let value = variant.discriminant.unwrap_or(next_value);
-                out.push_str(&format!("#define {}_{} {}\n", e.name, variant.name, value));
-                next_value = value + 1;
-            }
-            out.push('\n');
-            out
-        } else {
-            let mut out = format!(
-                "typedef struct {} {{\n  {} tag;\n  union {{\n",
-                e.name, c_type
-            );
-
-            for variant in &e.variants {
-                if variant.is_unit() {
-                    continue;
-                }
-
-                if variant.fields.len() == 1 {
-                    let field = &variant.fields[0];
-                    out.push_str(&format!(
-                        "    {} {};\n",
-                        Self::type_to_c(&field.field_type),
-                        variant.name
-                    ));
-                } else {
-                    out.push_str("    struct { ");
-                    for field in &variant.fields {
-                        out.push_str(&format!(
-                            "{} {}; ",
-                            Self::type_to_c(&field.field_type),
-                            field.name
-                        ));
-                    }
-                    out.push_str(&format!("}} {};\n", variant.name));
-                }
-            }
-
-            out.push_str("  } payload;\n");
-            out.push_str(&format!("}} {};\n", e.name));
-
-            let mut next_value: i64 = 0;
-            for variant in &e.variants {
-                let value = variant.discriminant.unwrap_or(next_value);
-                out.push_str(&format!(
-                    "#define {}_TAG_{} {}\n",
-                    e.name, variant.name, value
-                ));
-                next_value = value + 1;
-            }
-            out.push('\n');
-            out
+        if !e.is_c_style() {
+            return String::new();
         }
+
+        let hidden_name = format!("___{}", e.name);
+        let mut out = format!("typedef int32_t {};\n", hidden_name);
+
+        let mut next_value: i64 = 0;
+        for variant in &e.variants {
+            let value = variant.discriminant.unwrap_or(next_value);
+            out.push_str(&format!("#define {}_{} {}\n", hidden_name, variant.name, value));
+            next_value = value + 1;
+        }
+        out.push('\n');
+        out
     }
 
 
 
-    fn generate_traits(traits: &[CallbackTrait], prefix: &str) -> String {
+    fn generate_traits(traits: &[CallbackTrait], prefix: &str, module: &Module) -> String {
         traits
             .iter()
-            .map(|t| Self::generate_trait(t, prefix))
+            .map(|t| Self::generate_trait(t, prefix, module))
             .collect()
     }
 
-    fn generate_trait(t: &CallbackTrait, prefix: &str) -> String {
+    fn generate_trait(t: &CallbackTrait, prefix: &str, module: &Module) -> String {
         let trait_name = &t.name;
         let vtable_name = format!("{}VTable", trait_name);
         let foreign_name = format!("Foreign{}", trait_name);
@@ -402,7 +358,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         ];
 
         for method in &t.methods {
-            vtable_fields.push(Self::generate_trait_method_field(method));
+            vtable_fields.push(Self::generate_trait_method_field(method, module));
         }
 
         format!(
@@ -425,12 +381,12 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         )
     }
 
-    fn generate_trait_method_field(method: &TraitMethod) -> String {
+    fn generate_trait_method_field(method: &TraitMethod, module: &Module) -> String {
         let method_snake = naming::to_snake_case(&method.name);
         let mut params = vec!["uint64_t handle".to_string()];
 
         for param in &method.inputs {
-            let param_parts = Self::param_to_c(&param.name, &param.param_type);
+            let param_parts = Self::param_to_c(&param.name, &param.param_type, module);
             for (name, ty) in param_parts {
                 params.push(format!("{} {}", ty, name));
             }
@@ -488,7 +444,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
 
     fn generate_function(func: &Function, module: &Module) -> String {
         let ffi_name = naming::function_ffi_name(&func.name);
-        let params = Self::build_params(&func.inputs);
+        let params = Self::build_params(&func.inputs, module);
 
         if func.is_async {
             Self::generate_async_function(&ffi_name, &params, &func.returns)
@@ -512,17 +468,23 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 if Self::is_wire_encoded_type(ty, module) {
                     format!("FfiBuf_u8 {}({});\n", ffi_name, params_str)
                 } else {
-                    let ret_type = Self::type_to_c(ty);
+                    let ret_type = Self::type_to_c_return(ty);
                     format!("{} {}({});\n", ret_type, ffi_name, params_str)
                 }
             }
         }
     }
 
-    fn is_wire_encoded_type(ty: &Type, module: &Module) -> bool {
+    fn type_to_c_return(ty: &Type) -> String {
         match ty {
-            Type::String | Type::Vec(_) | Type::Option(_) | Type::Record(_) => true,
-            Type::Enum(name) => module.is_data_enum(name),
+            Type::Enum(name) => format!("___{}", name),
+            _ => Self::type_to_c(ty),
+        }
+    }
+
+    fn is_wire_encoded_type(ty: &Type, _module: &Module) -> bool {
+        match ty {
+            Type::String | Type::Vec(_) | Type::Option(_) | Type::Record(_) | Type::Enum(_) => true,
             Type::Primitive(_) | Type::Void | Type::Object(_) => false,
             Type::Bytes | Type::Slice(_) | Type::MutSlice(_) => false,
             Type::Closure(_) | Type::BoxedTrait(_) => false,
@@ -671,7 +633,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 let params: Vec<String> = ctor
                     .inputs
                     .iter()
-                    .flat_map(|p| Self::param_to_c(&p.name, &p.param_type))
+                    .flat_map(|p| Self::param_to_c(&p.name, &p.param_type, module))
                     .map(|(n, t)| format!("{} {}", t, n))
                     .collect();
                 out.push_str(&format!(
@@ -705,7 +667,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             vec![("handle".to_string(), format!("struct {} *", class_name))];
 
         for p in &method.inputs {
-            params.extend(Self::param_to_c(&p.name, &p.param_type));
+            params.extend(Self::param_to_c(&p.name, &p.param_type, module));
         }
 
         if method.is_async {
@@ -729,14 +691,14 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         )
     }
 
-    fn build_params(inputs: &[Parameter]) -> Vec<(String, String)> {
+    fn build_params(inputs: &[Parameter], module: &Module) -> Vec<(String, String)> {
         inputs
             .iter()
-            .flat_map(|p| Self::param_to_c(&p.name, &p.param_type))
+            .flat_map(|p| Self::param_to_c(&p.name, &p.param_type, module))
             .collect()
     }
 
-    fn param_to_c(name: &str, ty: &Type) -> Vec<(String, String)> {
+    fn param_to_c(name: &str, ty: &Type, module: &Module) -> Vec<(String, String)> {
         match ty {
             Type::String => vec![
                 (format!("{}_ptr", name), "const uint8_t*".to_string()),
@@ -769,7 +731,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 }
             }
             Type::Vec(inner) => {
-                if matches!(inner.as_ref(), Type::Record(_)) {
+                if matches!(inner.as_ref(), Type::Record(_) | Type::Vec(_) | Type::Enum(_)) {
                     vec![
                         (format!("{}_ptr", name), "const uint8_t*".to_string()),
                         (format!("{}_len", name), "uintptr_t".to_string()),
@@ -779,6 +741,16 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                         (format!("{}_ptr", name), format!("const {}*", Self::type_to_c(inner))),
                         (format!("{}_len", name), "uintptr_t".to_string()),
                     ]
+                }
+            }
+            Type::Option(inner) => {
+                if matches!(inner.as_ref(), Type::Record(_) | Type::Enum(_) | Type::Vec(_)) {
+                    vec![
+                        (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                        (format!("{}_len", name), "uintptr_t".to_string()),
+                    ]
+                } else {
+                    vec![(name.to_string(), Self::type_to_c(ty))]
                 }
             }
             Type::Closure(sig) => {
@@ -804,6 +776,10 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 ]
             }
             Type::Record(_) => vec![
+                (format!("{}_ptr", name), "const uint8_t*".to_string()),
+                (format!("{}_len", name), "uintptr_t".to_string()),
+            ],
+            Type::Enum(_) => vec![
                 (format!("{}_ptr", name), "const uint8_t*".to_string()),
                 (format!("{}_len", name), "uintptr_t".to_string()),
             ],

@@ -1,4 +1,4 @@
-public enum {{ class_name }}{% if is_error %}: Error{% endif %} {
+public enum {{ class_name }}: Hashable, Equatable, Sendable{% if is_error %}, Error{% endif %} {
 {%- for variant in variants %}
 {%- if variant.fields.is_empty() %}
     case {{ variant.swift_name }}
@@ -8,23 +8,6 @@ public enum {{ class_name }}{% if is_error %}: Error{% endif %} {
     case {{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}: {{ field.swift_type }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- endif %}
 {%- endfor %}
-
-    init(fromC c: {{ ffi_type }}) {
-        switch c.tag {
-{%- for variant in variants %}
-        case {{ variant.tag_constant }}:
-{%- if variant.fields.is_empty() %}
-            self = .{{ variant.swift_name }}
-{%- else if variant.is_single_tuple %}
-            self = .{{ variant.swift_name }}(c.payload.{{ variant.c_name }})
-{%- else %}
-            self = .{{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}: c.payload.{{ variant.c_name }}.{{ field.c_name }}{% if !loop.last %}, {% endif %}{% endfor %})
-{%- endif %}
-{%- endfor %}
-        default:
-            fatalError("Invalid {{ class_name }} tag: \(c.tag)")
-        }
-    }
 
     @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ class_name }}, size: Int) {
         let tag = wire.readI32(at: offset)
@@ -49,27 +32,67 @@ public enum {{ class_name }}{% if is_error %}: Error{% endif %} {
             fatalError("Invalid {{ class_name }} tag: \(tag)")
         }
     }
+}
 
-    var cValue: {{ ffi_type }} {
-        var c = {{ ffi_type }}()
+extension {{ class_name }}: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+
+    @inlinable func wireEncodedSize() -> Int {
         switch self {
 {%- for variant in variants %}
 {%- if variant.fields.is_empty() %}
         case .{{ variant.swift_name }}:
-            c.tag = {{ variant.tag_constant }}
+            return 4
+{%- else if variant.is_single_tuple %}
+        case .{{ variant.swift_name }}:
+            return 4 + {{ variant.fields[0].wire_size }}
+{%- else %}
+        case .{{ variant.swift_name }}:
+            return 4{% for field in variant.fields %} + {{ field.wire_size }}{% endfor %}
+{%- endif %}
+{%- endfor %}
+        }
+    }
+
+    @inlinable func wireEncodeTo(_ data: inout Data) {
+        switch self {
+{%- for variant in variants %}
+{%- if variant.fields.is_empty() %}
+        case .{{ variant.swift_name }}:
+            data.appendI32({{ loop.index0 }})
 {%- else if variant.is_single_tuple %}
         case let .{{ variant.swift_name }}(value):
-            c.tag = {{ variant.tag_constant }}
-            c.payload.{{ variant.c_name }} = value
+            data.appendI32({{ loop.index0 }})
+            {{ variant.wire_encode_single }}
 {%- else %}
         case let .{{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %}):
-            c.tag = {{ variant.tag_constant }}
+            data.appendI32({{ loop.index0 }})
 {%- for field in variant.fields %}
-            c.payload.{{ variant.c_name }}.{{ field.c_name }} = {{ field.swift_name }}
+            {{ field.wire_encode }}
 {%- endfor %}
 {%- endif %}
 {%- endfor %}
         }
-        return c
+    }
+
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
+        switch self {
+{%- for variant in variants %}
+{%- if variant.fields.is_empty() %}
+        case .{{ variant.swift_name }}:
+            bytes.appendI32({{ loop.index0 }})
+{%- else if variant.is_single_tuple %}
+        case let .{{ variant.swift_name }}(value):
+            bytes.appendI32({{ loop.index0 }})
+            {{ variant.wire_encode_bytes_single }}
+{%- else %}
+        case let .{{ variant.swift_name }}({% for field in variant.fields %}{{ field.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %}):
+            bytes.appendI32({{ loop.index0 }})
+{%- for field in variant.fields %}
+            {{ field.wire_encode_bytes }}
+{%- endfor %}
+{%- endif %}
+{%- endfor %}
+        }
     }
 }

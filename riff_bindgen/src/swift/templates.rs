@@ -70,12 +70,12 @@ pub struct RecordTemplate {
 }
 
 impl RecordTemplate {
-    pub fn from_record(record: &Record, _module: &Module) -> Self {
+    pub fn from_record(record: &Record, module: &Module) -> Self {
         let fields: Vec<FieldView> = record
             .fields
             .iter()
             .enumerate()
-            .map(|(idx, field)| Self::make_field(field, idx))
+            .map(|(idx, field)| Self::make_field(field, idx, module))
             .collect();
         let is_fixed_size = fields.iter().all(|f| f.is_fixed);
         let is_blittable = record.fields.iter().all(|f| Self::is_type_blittable(&f.field_type));
@@ -147,14 +147,14 @@ impl RecordTemplate {
         }
     }
 
-    fn make_field(field: &crate::model::RecordField, idx: usize) -> FieldView {
+    fn make_field(field: &crate::model::RecordField, idx: usize, module: &Module) -> FieldView {
         let swift_name = NamingConvention::property_name(&field.name);
         let swift_type = TypeMapper::map_type(&field.field_type);
         let (wire_size, is_fixed, wire_read, wire_decode) = Self::wire_info(&field.field_type, &swift_name, idx);
-        let wire_size_expr = Self::wire_size_expr(&field.field_type, &swift_name);
+        let wire_size_expr = Self::wire_size_expr(&field.field_type, &swift_name, module);
         let wire_decode_inline = Self::wire_decode_inline_expr(&field.field_type);
-        let wire_encode = Self::wire_encode_expr(&field.field_type, &swift_name);
-        let wire_encode_bytes = wire_encode.replace("data.", "bytes.");
+        let wire_encode = Self::wire_encode_expr(&field.field_type, &swift_name, module);
+        let wire_encode_bytes = Self::wire_encode_bytes_expr(&field.field_type, &swift_name, module);
         FieldView {
             swift_name,
             swift_type,
@@ -169,7 +169,7 @@ impl RecordTemplate {
         }
     }
     
-    fn wire_size_expr(ty: &Type, name: &str) -> String {
+    fn wire_size_expr(ty: &Type, name: &str, module: &Module) -> String {
         match ty {
             Type::Primitive(p) => Self::primitive_size(*p).to_string(),
             Type::String => format!("(4 + {}.utf8.count)", name),
@@ -181,11 +181,17 @@ impl RecordTemplate {
                 }
             }
             Type::Option(inner) => {
-                let inner_expr = Self::wire_size_expr(inner, "v");
+                let inner_expr = Self::wire_size_expr(inner, "v", module);
                 format!("({}.map {{ v in 1 + {} }} ?? 1)", name, inner_expr)
             }
             Type::Record(_) => format!("{}.wireEncodedSize()", name),
-            Type::Enum(_) => "4".into(),
+            Type::Enum(enum_name) => {
+                if module.is_data_enum(enum_name) {
+                    format!("{}.wireEncodedSize()", name)
+                } else {
+                    "4".into()
+                }
+            }
             _ => "0".into(),
         }
     }
@@ -209,6 +215,10 @@ impl RecordTemplate {
                 let inner_reader = Self::option_inner_reader(inner);
                 format!("{{ let (v, s) = wire.readOptional(at: pos, reader: {{ {} }}); pos += s; return v }}()", inner_reader)
             }
+            Type::Enum(name) => {
+                let class_name = NamingConvention::class_name(name);
+                format!("{{ let (v, s) = {}.decode(wireBuffer: wire, at: pos); pos += s; return v }}()", class_name)
+            }
             _ => "/* TODO */".into(),
         }
     }
@@ -221,6 +231,7 @@ impl RecordTemplate {
             }
             Type::String => "wire.readString(at: $0)".into(),
             Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            Type::Enum(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
             _ => "(/* TODO */, 0)".into(),
         }
     }
@@ -233,11 +244,12 @@ impl RecordTemplate {
             }
             Type::String => "(wire.readString(at: $0).value, wire.readString(at: $0).size)".into(),
             Type::Record(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
+            Type::Enum(name) => format!("{}.decode(wireBuffer: wire, at: $0)", NamingConvention::class_name(name)),
             _ => "(/* TODO */, 0)".into(),
         }
     }
 
-    fn wire_encode_expr(ty: &Type, name: &str) -> String {
+    fn wire_encode_expr(ty: &Type, name: &str, module: &Module) -> String {
         match ty {
             Type::Primitive(p) => {
                 let encode_fn = match p {
@@ -262,22 +274,93 @@ impl RecordTemplate {
                 match inner.as_ref() {
                     Type::Primitive(_) => format!("data.appendArray({})", name),
                     Type::String => format!("data.appendStringArray({})", name),
-                    Type::Record(_) => format!("data.appendU32(UInt32({}.count)); for item in {} {{ data.append(item.wireEncode()) }}", name, name),
-                    Type::Enum(_) => format!("data.appendU32(UInt32({}.count)); for item in {} {{ data.appendI32(item.rawValue) }}", name, name),
+                    Type::Record(_) => format!("data.appendU32(UInt32({}.count)); for item in {} {{ item.wireEncodeTo(&data) }}", name, name),
+                    Type::Enum(enum_name) => {
+                        if module.is_data_enum(enum_name) {
+                            format!("data.appendU32(UInt32({}.count)); for item in {} {{ item.wireEncodeTo(&data) }}", name, name)
+                        } else {
+                            format!("data.appendU32(UInt32({}.count)); for item in {} {{ data.appendI32(item.cValue) }}", name, name)
+                        }
+                    }
                     _ => {
-                        let inner_encode = Self::wire_encode_expr(inner, "item");
+                        let inner_encode = Self::wire_encode_expr(inner, "item", module);
                         format!("data.appendU32(UInt32({}.count)); for item in {} {{ {} }}", name, name, inner_encode)
                     }
                 }
             }
             Type::Option(inner) => {
-                let inner_encode = Self::wire_encode_expr(inner, "v");
+                let inner_encode = Self::wire_encode_expr(inner, "v", module);
                 format!(
                     "if let v = {} {{ data.appendU8(1); {} }} else {{ data.appendU8(0) }}",
                     name, inner_encode
                 )
             }
-            Type::Record(_) => format!("data.append({}.wireEncode())", name),
+            Type::Record(_) => format!("{}.wireEncodeTo(&data)", name),
+            Type::Enum(enum_name) => {
+                if module.is_data_enum(enum_name) {
+                    format!("{}.wireEncodeTo(&data)", name)
+                } else {
+                    format!("data.appendI32({}.cValue)", name)
+                }
+            }
+            _ => format!("/* TODO: encode {} */", name),
+        }
+    }
+
+    fn wire_encode_bytes_expr(ty: &Type, name: &str, module: &Module) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                    Primitive::Usize => "appendU64",
+                    Primitive::Isize => "appendI64",
+                };
+                format!("bytes.{}({})", encode_fn, name)
+            }
+            Type::String => format!("bytes.appendString({})", name),
+            Type::Vec(inner) => {
+                match inner.as_ref() {
+                    Type::Primitive(_) => format!("bytes.appendArray({})", name),
+                    Type::String => format!("bytes.appendStringArray({})", name),
+                    Type::Record(_) => format!("bytes.appendU32(UInt32({}.count)); for item in {} {{ item.wireEncodeToBytes(&bytes) }}", name, name),
+                    Type::Enum(enum_name) => {
+                        if module.is_data_enum(enum_name) {
+                            format!("bytes.appendU32(UInt32({}.count)); for item in {} {{ item.wireEncodeToBytes(&bytes) }}", name, name)
+                        } else {
+                            format!("bytes.appendU32(UInt32({}.count)); for item in {} {{ bytes.appendI32(item.cValue) }}", name, name)
+                        }
+                    }
+                    _ => {
+                        let inner_encode = Self::wire_encode_bytes_expr(inner, "item", module);
+                        format!("bytes.appendU32(UInt32({}.count)); for item in {} {{ {} }}", name, name, inner_encode)
+                    }
+                }
+            }
+            Type::Option(inner) => {
+                let inner_encode = Self::wire_encode_bytes_expr(inner, "v", module);
+                format!(
+                    "if let v = {} {{ bytes.appendU8(1); {} }} else {{ bytes.appendU8(0) }}",
+                    name, inner_encode
+                )
+            }
+            Type::Record(_) => format!("{}.wireEncodeToBytes(&bytes)", name),
+            Type::Enum(enum_name) => {
+                if module.is_data_enum(enum_name) {
+                    format!("{}.wireEncodeToBytes(&bytes)", name)
+                } else {
+                    format!("bytes.appendI32({}.cValue)", name)
+                }
+            }
             _ => format!("/* TODO: encode {} */", name),
         }
     }
@@ -437,6 +520,7 @@ impl FunctionTemplate {
             function
                 .non_callback_params()
                 .map(|p| (p.name.as_str(), &p.param_type)),
+            module,
         );
 
         let callback_args = params_info
@@ -617,17 +701,33 @@ impl DataEnumTemplate {
                             let swift_name = NamingConvention::param_name(&field.name);
                             let c_name = field.name.clone();
                             let wire_decode = Self::enum_field_wire_decode(&field.field_type, &swift_name, idx);
+                            let wire_size = Self::enum_field_wire_size(&field.field_type, &swift_name);
+                            let wire_encode = Self::enum_field_wire_encode(&field.field_type, &swift_name);
+                            let wire_encode_bytes = Self::enum_field_wire_encode_bytes(&field.field_type, &swift_name);
                             EnumFieldView {
                                 needs_alias: swift_name != c_name,
                                 swift_name,
                                 c_name,
                                 swift_type: TypeMapper::map_type(&field.field_type),
                                 wire_decode,
+                                wire_size,
+                                wire_encode,
+                                wire_encode_bytes,
                             }
                         })
                         .collect();
                     let single_wire_decode = if is_single_tuple && !variant.fields.is_empty() {
                         Self::single_tuple_wire_decode(&variant.fields[0].field_type)
+                    } else {
+                        String::new()
+                    };
+                    let wire_encode_single = if is_single_tuple && !variant.fields.is_empty() {
+                        Self::single_tuple_wire_encode(&variant.fields[0].field_type)
+                    } else {
+                        String::new()
+                    };
+                    let wire_encode_bytes_single = if is_single_tuple && !variant.fields.is_empty() {
+                        Self::single_tuple_wire_encode_bytes(&variant.fields[0].field_type)
                     } else {
                         String::new()
                     };
@@ -637,6 +737,8 @@ impl DataEnumTemplate {
                         tag_constant: format!("{}_TAG_{}", enumeration.name, variant.name),
                         is_single_tuple,
                         wire_decode: single_wire_decode,
+                        wire_encode_single,
+                        wire_encode_bytes_single,
                         fields,
                     }
                 })
@@ -712,6 +814,119 @@ impl DataEnumTemplate {
                 )
             }
             _ => format!("/* unsupported field type for {} */", name),
+        }
+    }
+
+    fn enum_field_wire_size(ty: &Type, name: &str) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let size = match p {
+                    Primitive::Bool | Primitive::U8 | Primitive::I8 => 1,
+                    Primitive::U16 | Primitive::I16 => 2,
+                    Primitive::U32 | Primitive::I32 | Primitive::F32 => 4,
+                    Primitive::U64 | Primitive::I64 | Primitive::F64 | Primitive::Usize | Primitive::Isize => 8,
+                };
+                size.to_string()
+            }
+            Type::String => format!("(4 + {}.utf8.count)", name),
+            Type::Record(_) => format!("{}.wireEncodedSize()", name),
+            _ => "0".into(),
+        }
+    }
+
+    fn enum_field_wire_encode(ty: &Type, name: &str) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 | Primitive::Usize => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 | Primitive::Isize => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                };
+                format!("data.{}({})", encode_fn, name)
+            }
+            Type::String => format!("data.appendString({})", name),
+            Type::Record(_) => format!("{}.wireEncodeTo(&data)", name),
+            _ => format!("/* unsupported encode for {} */", name),
+        }
+    }
+
+    fn single_tuple_wire_encode(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 | Primitive::Usize => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 | Primitive::Isize => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                };
+                format!("data.{}(value)", encode_fn)
+            }
+            Type::String => "data.appendString(value)".into(),
+            Type::Record(_) => "value.wireEncodeTo(&data)".into(),
+            _ => "/* unsupported single tuple encode */".into(),
+        }
+    }
+
+    fn enum_field_wire_encode_bytes(ty: &Type, name: &str) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 | Primitive::Usize => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 | Primitive::Isize => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                };
+                format!("bytes.{}({})", encode_fn, name)
+            }
+            Type::String => format!("bytes.appendString({})", name),
+            Type::Record(_) => format!("{}.wireEncodeToBytes(&bytes)", name),
+            _ => format!("/* unsupported encode for {} */", name),
+        }
+    }
+
+    fn single_tuple_wire_encode_bytes(ty: &Type) -> String {
+        match ty {
+            Type::Primitive(p) => {
+                let encode_fn = match p {
+                    Primitive::Bool => "appendBool",
+                    Primitive::U8 => "appendU8",
+                    Primitive::U16 => "appendU16",
+                    Primitive::U32 => "appendU32",
+                    Primitive::U64 | Primitive::Usize => "appendU64",
+                    Primitive::I8 => "appendI8",
+                    Primitive::I16 => "appendI16",
+                    Primitive::I32 => "appendI32",
+                    Primitive::I64 | Primitive::Isize => "appendI64",
+                    Primitive::F32 => "appendF32",
+                    Primitive::F64 => "appendF64",
+                };
+                format!("bytes.{}(value)", encode_fn)
+            }
+            Type::String => "bytes.appendString(value)".into(),
+            Type::Record(_) => "value.wireEncodeToBytes(&bytes)".into(),
+            _ => "/* unsupported single tuple encode */".into(),
         }
     }
 }
@@ -841,6 +1056,9 @@ pub struct EnumFieldView {
     pub swift_type: String,
     pub needs_alias: bool,
     pub wire_decode: String,
+    pub wire_size: String,
+    pub wire_encode: String,
+    pub wire_encode_bytes: String,
 }
 
 pub struct DataVariantView {
@@ -849,6 +1067,8 @@ pub struct DataVariantView {
     pub tag_constant: String,
     pub is_single_tuple: bool,
     pub wire_decode: String,
+    pub wire_encode_single: String,
+    pub wire_encode_bytes_single: String,
     pub fields: Vec<EnumFieldView>,
 }
 
@@ -1013,12 +1233,13 @@ pub struct SyncMethodBodyTemplate {
 }
 
 impl SyncMethodBodyTemplate {
-    pub fn from_method(method: &Method, class: &Class, _module: &Module) -> Self {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
         let ffi_name = naming::method_ffi_name(&class.name, &method.name);
         let call_builder = SyncCallBuilder::new(&ffi_name, true).with_params(
             method
                 .non_callback_params()
                 .map(|p| (p.name.as_str(), &p.param_type)),
+            module,
         );
 
         Self {
@@ -1046,12 +1267,13 @@ pub struct CallbackMethodBodyTemplate {
 }
 
 impl CallbackMethodBodyTemplate {
-    pub fn from_method(method: &Method, class: &Class, _module: &Module) -> Self {
+    pub fn from_method(method: &Method, class: &Class, module: &Module) -> Self {
         let ffi_name = naming::method_ffi_name(&class.name, &method.name);
         let call_builder = SyncCallBuilder::new(&ffi_name, true).with_params(
             method
                 .non_callback_params()
                 .map(|p| (p.name.as_str(), &p.param_type)),
+            module,
         );
 
         let params_info = super::conversion::ParamsInfo::from_inputs(
@@ -1103,6 +1325,7 @@ impl ThrowingMethodBodyTemplate {
                 .inputs
                 .iter()
                 .map(|p| (p.name.as_str(), &p.param_type)),
+            module,
         );
         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
 

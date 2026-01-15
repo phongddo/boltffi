@@ -117,7 +117,11 @@ pub fn classify_return(output: &ReturnType) -> ReturnKind {
                 }
             }
 
-            ReturnKind::Primitive
+            if is_primitive_type(&type_str) {
+                ReturnKind::Primitive
+            } else {
+                ReturnKind::WireEncoded(ty.as_ref().clone())
+            }
         }
     }
 }
@@ -148,7 +152,7 @@ pub fn classify_async_return_abi(output: &ReturnType) -> AsyncReturnAbi {
                     rust_type: quote! { #ty },
                 }
             } else {
-                AsyncReturnAbi::Direct {
+                AsyncReturnAbi::WireEncoded {
                     rust_type: quote! { #ty },
                 }
             }

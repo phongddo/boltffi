@@ -166,7 +166,7 @@ pub struct ParamConversion {
 }
 
 impl ParamConversion {
-    pub fn from_param(name: &str, ty: &Type) -> Self {
+    pub fn from_param(name: &str, ty: &Type, _module: &Module) -> Self {
         let swift_ty = SwiftType::from_model(ty);
         let swift_name = NamingConvention::param_name(name);
 
@@ -252,7 +252,21 @@ impl ParamConversion {
                 Some("}".into()),
                 true,
             ),
-            SwiftType::Enum(_) => (None, vec![format!("{}.cValue", swift_name)], None, false),
+            SwiftType::Enum(_) => (
+                Some(format!(
+                    "{}.wireEncode().withUnsafeBytes {{ {}Ptr in",
+                    swift_name, swift_name
+                )),
+                vec![
+                    format!(
+                        "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
+                        swift_name
+                    ),
+                    format!("UInt({}Ptr.count)", swift_name),
+                ],
+                Some("}".into()),
+                false,
+            ),
             SwiftType::BoxedTrait(trait_name) => (
                 None,
                 vec![format!(
@@ -265,19 +279,41 @@ impl ParamConversion {
             ),
             SwiftType::Record(_) => (
                 Some(format!(
-                    "let {}Encoded = {}.wireEncode(); {}Encoded.withUnsafeBytes {{ {}Ptr in",
-                    swift_name, swift_name, swift_name, swift_name
+                    "{}.wireEncode().withUnsafeBytes {{ {}Ptr in",
+                    swift_name, swift_name
                 )),
                 vec![
                     format!(
                         "{}Ptr.baseAddress!.assumingMemoryBound(to: UInt8.self)",
                         swift_name
                     ),
-                    format!("UInt({}Encoded.count)", swift_name),
+                    format!("UInt({}Ptr.count)", swift_name),
                 ],
                 Some("}".into()),
                 false,
             ),
+            SwiftType::Option(inner)
+                if matches!(
+                    inner.as_ref(),
+                    SwiftType::Record(_) | SwiftType::Enum(_) | SwiftType::Vec(_)
+                ) =>
+            {
+                (
+                    Some(format!(
+                        "withWireEncodedOptional({}) {{ {}Ptr in",
+                        swift_name, swift_name
+                    )),
+                    vec![
+                        format!(
+                            "{}Ptr?.baseAddress?.assumingMemoryBound(to: UInt8.self)",
+                            swift_name
+                        ),
+                        format!("UInt({}Ptr?.count ?? 0)", swift_name),
+                    ],
+                    Some("}".into()),
+                    false,
+                )
+            }
             _ => (None, vec![swift_name.clone()], None, false),
         };
 
@@ -310,9 +346,9 @@ impl SyncCallBuilder {
         }
     }
 
-    pub fn with_params<'a>(mut self, params: impl Iterator<Item = (&'a str, &'a Type)>) -> Self {
+    pub fn with_params<'a>(mut self, params: impl Iterator<Item = (&'a str, &'a Type)>, module: &Module) -> Self {
         self.params = params
-            .map(|(n, t)| ParamConversion::from_param(n, t))
+            .map(|(n, t)| ParamConversion::from_param(n, t, module))
             .collect();
         self
     }
@@ -378,21 +414,11 @@ impl ReturnAbi {
                 swift_type: SwiftType::from_model(ty).swift_type(),
                 conversion: None,
             },
-            Type::Enum(name) => {
-                let is_data = module.enums.iter().any(|e| &e.name == name && e.is_data_enum());
-                if is_data {
-                    Self::WireEncoded {
-                        swift_type: NamingConvention::class_name(name),
-                        decode_expr: format!("{}.decode(wireBuffer: wire, at: 0).value", NamingConvention::class_name(name)),
-                        throws: false,
-                    }
-                } else {
-                    Self::Direct {
-                        swift_type: NamingConvention::class_name(name),
-                        conversion: Some(format!("{}(fromC: $0)", NamingConvention::class_name(name))),
-                    }
-                }
-            }
+            Type::Enum(name) => Self::WireEncoded {
+                swift_type: NamingConvention::class_name(name),
+                decode_expr: format!("{}.decode(wireBuffer: wire, at: 0).value", NamingConvention::class_name(name)),
+                throws: false,
+            },
             Type::Record(name) => Self::WireEncoded {
                 swift_type: NamingConvention::class_name(name),
                 decode_expr: format!("{}.decode(wireBuffer: wire, at: 0).value", NamingConvention::class_name(name)),
@@ -509,7 +535,21 @@ impl ReturnAbi {
                 format!("wire.readArray(at: {}, reader: {{ wire.readString(at: $0) }}).value", offset)
             }
             Type::Record(name) => {
-                format!("wire.readArray(at: {}, reader: {{ {}.decode(wireBuffer: wire, at: $0) }}).value", offset, NamingConvention::class_name(name))
+                let is_blittable = module
+                    .records
+                    .iter()
+                    .find(|r| &r.name == name)
+                    .map(|r| r.is_blittable())
+                    .unwrap_or(false);
+                if is_blittable {
+                    format!("wire.readBlittableArray(at: {}, as: {}.self)", offset, NamingConvention::class_name(name))
+                } else {
+                    format!("wire.readArray(at: {}, reader: {{ {}.decode(wireBuffer: wire, at: $0) }}).value", offset, NamingConvention::class_name(name))
+                }
+            }
+            Type::Vec(nested_inner) => {
+                let inner_reader = Self::vec_inner_reader(nested_inner, module);
+                format!("wire.readArray(at: {}, reader: {{ wire.readArray(at: $0, reader: {{ {} }}) }}).value", offset, inner_reader)
             }
             _ => "/* unsupported */".into(),
         }
@@ -536,7 +576,20 @@ impl ReturnAbi {
                     format!("({}(fromC: wire.readI32(at: $0)), 4)", NamingConvention::class_name(name))
                 }
             }
-            Type::Vec(elem) => format!("wire.readArray(at: $0, reader: {{ {} }})", Self::vec_inner_reader(elem, module)),
+            Type::Vec(elem) => {
+                if let Type::Record(name) = elem.as_ref() {
+                    let is_blittable = module
+                        .records
+                        .iter()
+                        .find(|r| &r.name == name)
+                        .map(|r| r.is_blittable())
+                        .unwrap_or(false);
+                    if is_blittable {
+                        return format!("wire.readBlittableArrayWithSize(at: $0, as: {}.self)", NamingConvention::class_name(name));
+                    }
+                }
+                format!("wire.readArray(at: $0, reader: {{ {} }})", Self::vec_inner_reader(elem, module))
+            }
             _ => "(/* unsupported */, 0)".into(),
         }
     }

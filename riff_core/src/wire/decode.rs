@@ -73,13 +73,14 @@ impl WireDecode for usize {
 }
 
 impl WireDecode for String {
+    #[inline]
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let len = u32::from_le_bytes(
             buf.get(..4).ok_or(DecodeError::BufferTooSmall)?.try_into().unwrap()
         ) as usize;
         let total_size = 4 + len;
         let string_bytes = buf.get(4..total_size).ok_or(DecodeError::BufferTooSmall)?;
-        let string = unsafe { String::from_utf8_unchecked(string_bytes.to_vec()) };
+        let string = unsafe { core::str::from_utf8_unchecked(string_bytes) }.to_owned();
         Ok((string, total_size))
     }
 }

@@ -1,7 +1,7 @@
 use quote::quote;
 use syn::{FnArg, Pat};
 
-use crate::util::{ParamTransform, classify_param_transform, is_primitive_vec_inner, len_ident, ptr_ident};
+use crate::util::{ParamTransform, classify_param_transform, is_primitive_vec_inner, len_ident, ptr_ident, extract_option_param_inner};
 
 pub struct FfiParams {
     pub ffi_params: Vec<proc_macro2::TokenStream>,
@@ -184,6 +184,41 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
 
                     call_args.push(quote! { #name });
                 }
+                ParamTransform::OptionWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            None
+                        } else {
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::RecordWireEncoded(record_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: #record_ty = {
+                            assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
                 ParamTransform::PassThrough => {
                     let ty = &pat_type.ty;
                     ffi_params.push(quote! { #name: #ty });
@@ -337,6 +372,43 @@ pub fn transform_params_async(
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::OptionWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            None
+                        } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::RecordWireEncoded(record_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: #record_ty = {
+                            assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
                             crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };
@@ -539,6 +611,41 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
 
                     call_args.push(quote! { #name });
                 }
+                ParamTransform::OptionWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            None
+                        } else {
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::RecordWireEncoded(record_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    conversions.push(quote! {
+                        let #name: #record_ty = {
+                            assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
+                            let __bytes = core::slice::from_raw_parts(#ptr_name, #len_name);
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    call_args.push(quote! { #name });
+                }
                 ParamTransform::PassThrough => {
                     let ty = &pat_type.ty;
                     ffi_params.push(quote! { #name: #ty });
@@ -655,6 +762,43 @@ pub fn transform_method_params_async(inputs: impl Iterator<Item = syn::FnArg>) -
                         let #name: Vec<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
                             Vec::new()
                         } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::OptionWireEncoded(inner_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: Option<#inner_ty> = if #ptr_name.is_null() || #len_name == 0 {
+                            None
+                        } else {
+                            let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
+                            crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
+                        };
+                    });
+
+                    move_vars.push(name.clone());
+                    call_args.push(quote! { #name });
+                }
+                ParamTransform::RecordWireEncoded(record_ty) => {
+                    let ptr_name = ptr_ident(&name);
+                    let len_name = len_ident(&name);
+
+                    ffi_params.push(quote! { #ptr_name: *const u8 });
+                    ffi_params.push(quote! { #len_name: usize });
+
+                    pre_spawn.push(quote! {
+                        let #name: #record_ty = {
+                            assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
                             let __bytes = unsafe { core::slice::from_raw_parts(#ptr_name, #len_name) };
                             crate::wire::decode(__bytes).expect(concat!(stringify!(#name), ": wire decode failed"))
                         };

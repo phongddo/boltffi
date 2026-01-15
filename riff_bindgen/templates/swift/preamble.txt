@@ -131,6 +131,24 @@ final class FfiFutureState<T>: @unchecked Sendable {
         }
         return (result, pos - offset)
     }
+    @inlinable func readBlittableArray<T>(at offset: Int, as type: T.Type) -> [T] {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return [] }
+        return data.withUnsafeBytes { rawBuffer in
+            let ptr = rawBuffer.baseAddress!.advanced(by: offset + 4).assumingMemoryBound(to: T.self)
+            return Array(UnsafeBufferPointer(start: ptr, count: count))
+        }
+    }
+    @inlinable func readBlittableArrayWithSize<T>(at offset: Int, as type: T.Type) -> (value: [T], size: Int) {
+        let count = Int(readU32(at: offset))
+        guard count > 0 else { return ([], 4) }
+        let size = 4 + count * MemoryLayout<T>.stride
+        let arr = data.withUnsafeBytes { rawBuffer in
+            let ptr = rawBuffer.baseAddress!.advanced(by: offset + 4).assumingMemoryBound(to: T.self)
+            return Array(UnsafeBufferPointer(start: ptr, count: count))
+        }
+        return (arr, size)
+    }
     @inlinable func readBytes(at offset: Int) -> [UInt8] {
         let count = Int(readU32(at: offset))
         guard count > 0 else { return [] }
@@ -157,6 +175,21 @@ extension WireEncodable {
         var data = Data(capacity: wireEncodedSize())
         wireEncodeTo(&data)
         return data
+    }
+}
+
+extension Array: WireEncodable where Element: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { false }
+    @inlinable func wireEncodedSize() -> Int {
+        4 + reduce(0) { $0 + $1.wireEncodedSize() }
+    }
+    @inlinable func wireEncodeTo(_ data: inout Data) {
+        data.appendU32(UInt32(count))
+        for item in self { item.wireEncodeTo(&data) }
+    }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
+        bytes.appendU32(UInt32(count))
+        for item in self { item.wireEncodeToBytes(&bytes) }
     }
 }
 
@@ -204,6 +237,17 @@ extension WireEncodable {
         }
         return bytes.withUnsafeBytes { body($0) }
     }
+}
+
+@inlinable func withWireEncodedOptional<T: WireEncodable, R>(_ item: T?, body: (UnsafeRawBufferPointer?) -> R) -> R {
+    guard let value = item else {
+        return body(nil)
+    }
+    var bytes = [UInt8]()
+    bytes.reserveCapacity(1 + value.wireEncodedSize())
+    bytes.append(1)
+    value.wireEncodeToBytes(&bytes)
+    return bytes.withUnsafeBytes { body($0) }
 }
 
 extension Data {

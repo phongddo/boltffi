@@ -1,8 +1,19 @@
-public enum {{ class_name }}: Int32{% if is_error %}, Error{% endif %} {
+public enum {{ class_name }}: Int32, Hashable, Sendable, CaseIterable{% if is_error %}, Error{% endif %} {
 {%- for variant in variants %}
     case {{ variant.swift_name }} = {{ variant.discriminant }}
 {%- endfor %}
 
-    init(fromC c: Int32) { self = {{ class_name }}(rawValue: c)! }
-    var cValue: Int32 { rawValue }
+    @inlinable public init(fromC c: Int32) { self = {{ class_name }}(rawValue: c)! }
+    @usableFromInline var cValue: Int32 { rawValue }
+
+    @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ class_name }}, size: Int) {
+        ({{ class_name }}(rawValue: wire.readI32(at: offset))!, 4)
+    }
+}
+
+extension {{ class_name }}: WireEncodable {
+    @usableFromInline static var isBlittable: Bool { true }
+    @inlinable func wireEncodedSize() -> Int { 4 }
+    @inlinable func wireEncodeTo(_ data: inout Data) { data.appendI32(rawValue) }
+    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { bytes.appendI32(rawValue) }
 }
