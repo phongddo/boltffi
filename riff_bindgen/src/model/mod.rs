@@ -29,4 +29,4 @@ pub use module::Module;
 pub use option_info::OptionInfo;
 pub use record::{Record, RecordField};
 pub use stream::{StreamMethod, StreamMode};
-pub use types::{ClosureSignature, Deprecation, Primitive, Receiver, ReturnType, Type};
+pub use types::{BuiltinId, ClosureSignature, Deprecation, Primitive, Receiver, ReturnType, Type};

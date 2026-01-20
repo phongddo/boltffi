@@ -1,6 +1,6 @@
 use std::borrow::Cow;
 
-use super::{DataEnumLayout, Module, Primitive, ReturnType, Type};
+use super::{BuiltinId, DataEnumLayout, Module, Primitive, ReturnType, Type};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CallContract {
@@ -81,6 +81,7 @@ impl PassThroughType {
             Type::Primitive(primitive) => Some(Self::Primitive(*primitive)),
             Type::String => Some(Self::String),
             Type::Bytes => Some(Self::Bytes),
+            Type::Builtin(_) => None,
             Type::Vec(inner) => inner
                 .as_ref()
                 .primitive()
@@ -182,6 +183,7 @@ pub enum AbiType {
     Primitive(Primitive),
     String,
     Bytes,
+    Builtin(BuiltinId),
     Vec(Box<AbiType>),
     Option(Box<AbiType>),
     Result { ok: Box<AbiType>, err: Box<AbiType> },
@@ -196,6 +198,7 @@ impl AbiType {
             Type::Primitive(primitive) => Self::Primitive(*primitive),
             Type::String => Self::String,
             Type::Bytes => Self::Bytes,
+            Type::Builtin(id) => Self::Builtin(*id),
             Type::Vec(inner) => Self::Vec(Box::new(Self::from_model(inner, module))),
             Type::Option(inner) => Self::Option(Box::new(Self::from_model(inner, module))),
             Type::Result { ok, err } => Self::Result {

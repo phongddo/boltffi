@@ -260,7 +260,7 @@ impl ClosureSignature {
         self.returns.is_void()
     }
 
-    pub fn signature_id(&self) -> String {
+pub fn signature_id(&self) -> String {
         let params_id = self
             .params
             .iter()
@@ -282,11 +282,72 @@ impl ClosureSignature {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum BuiltinId {
+    Duration,
+    SystemTime,
+    Uuid,
+    Url,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BuiltinSpec {
+    pub id: BuiltinId,
+    pub rust_paths: &'static [&'static str],
+}
+
+const BUILTIN_SPECS: &[BuiltinSpec] = &[
+    BuiltinSpec {
+        id: BuiltinId::Duration,
+        rust_paths: &["std::time::Duration", "core::time::Duration"],
+    },
+    BuiltinSpec {
+        id: BuiltinId::SystemTime,
+        rust_paths: &["std::time::SystemTime", "chrono::DateTime"],
+    },
+    BuiltinSpec {
+        id: BuiltinId::Uuid,
+        rust_paths: &["uuid::Uuid"],
+    },
+    BuiltinSpec {
+        id: BuiltinId::Url,
+        rust_paths: &["url::Url"],
+    },
+];
+
+impl BuiltinId {
+    pub fn from_rust_path(path: &str) -> Option<Self> {
+        let trimmed = path.trim();
+        BUILTIN_SPECS
+            .iter()
+            .find_map(|spec| spec.rust_paths.iter().any(|p| *p == trimmed).then_some(spec.id))
+    }
+
+    pub fn type_id(self) -> &'static str {
+        match self {
+            Self::Duration => "Duration",
+            Self::SystemTime => "SystemTime",
+            Self::Uuid => "Uuid",
+            Self::Url => "Url",
+        }
+    }
+
+    pub fn fixed_wire_size(self) -> Option<usize> {
+        match self {
+            Self::Duration => Some(12),
+            Self::SystemTime => Some(12),
+            Self::Uuid => Some(16),
+            Self::Url => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Type {
     Primitive(Primitive),
     String,
     Bytes,
+    Builtin(BuiltinId),
     Slice(Box<Type>),
     MutSlice(Box<Type>),
     Vec(Box<Type>),
@@ -379,6 +440,13 @@ impl Type {
         }
     }
 
+    pub fn builtin_id(&self) -> Option<BuiltinId> {
+        match self {
+            Self::Builtin(id) => Some(*id),
+            _ => None,
+        }
+    }
+
     pub fn record_name(&self) -> Option<&str> {
         match self {
             Self::Record(name) => Some(name),
@@ -406,6 +474,7 @@ impl Type {
             Self::Primitive(p) => p.type_id().into(),
             Self::String => "String".into(),
             Self::Bytes => "Bytes".into(),
+            Self::Builtin(id) => id.type_id().into(),
             Self::Vec(inner) => format!("Vec{}", inner.type_id()),
             Self::Option(inner) => format!("Opt{}", inner.type_id()),
             Self::Slice(inner) => format!("Slice{}", inner.type_id()),
@@ -431,7 +500,9 @@ impl CLayout for Type {
                 Layout::new(24, 8)
             }
             Self::Object(_) | Self::BoxedTrait(_) | Self::Closure(_) => Layout::new(8, 8),
-            Self::Record(_) | Self::Enum(_) | Self::Custom { .. } => Layout::new(8, 8),
+            Self::Builtin(_) | Self::Record(_) | Self::Enum(_) | Self::Custom { .. } => {
+                Layout::new(8, 8)
+            }
             Self::Option(inner) => {
                 let inner_layout = inner.c_layout();
                 Layout::new(
