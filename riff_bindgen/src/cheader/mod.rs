@@ -59,14 +59,15 @@ impl CHeaderGenerator {
 #include <stddef.h>
 #include <stdatomic.h>
 
-typedef struct {{ int32_t code; }} FfiStatus;
-typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiString;
-typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiBuf_u8;
-typedef struct {{ FfiString message; }} FfiError;
+	typedef struct {{ int32_t code; }} FfiStatus;
+	typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiString;
+	typedef struct {{ uint8_t* ptr; size_t len; size_t cap; }} FfiBuf_u8;
+	typedef struct {{ FfiString message; }} FfiError;
+	typedef struct {{ uint64_t handle; const void* vtable; }} RiffCallbackHandle;
 
-static inline bool {prefix}_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{
-    return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);
-}}
+	static inline bool {prefix}_atomic_u8_cas(uint8_t* state, uint8_t expected, uint8_t desired) {{
+	    return atomic_compare_exchange_strong_explicit((_Atomic uint8_t*)state, &expected, desired, memory_order_acq_rel, memory_order_acquire);
+	}}
 
 static inline uint64_t {prefix}_atomic_u64_exchange(uint64_t* slot, uint64_t value) {{
     return atomic_exchange_explicit((_Atomic uint64_t*)slot, value, memory_order_acq_rel);
@@ -361,7 +362,6 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     fn generate_trait(t: &CallbackTrait, prefix: &str, module: &Module) -> String {
         let trait_name = &t.name;
         let vtable_name = format!("{}VTable", trait_name);
-        let foreign_name = format!("Foreign{}", trait_name);
         let snake_name = naming::to_snake_case(trait_name);
 
         let mut vtable_fields = vec![
@@ -375,19 +375,14 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
 
         format!(
             "typedef struct {} {{\n{}\n}} {};\n\n\
-             typedef struct {} {{\n  const struct {} *vtable;\n  uint64_t handle;\n}} {};\n\n\
              void {}_register_{}_vtable(const struct {} *vtable);\n\
-             struct {} *{}_create_{}(uint64_t handle);\n\n",
+             RiffCallbackHandle {}_create_{}_handle(uint64_t handle);\n\n",
             vtable_name,
             vtable_fields.join("\n"),
             vtable_name,
-            foreign_name,
-            vtable_name,
-            foreign_name,
             prefix,
             snake_name,
             vtable_name,
-            foreign_name,
             prefix,
             snake_name,
         )
@@ -446,7 +441,9 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
 
     fn trait_param_to_c(name: &str, ty: &Type, _module: &Module) -> Vec<(String, String)> {
         match ty {
-            Type::Primitive(_) => vec![(name.to_string(), Self::type_to_c(ty))],
+            Type::Primitive(_) | Type::Object(_) | Type::BoxedTrait(_) => {
+                vec![(name.to_string(), Self::type_to_c(ty))]
+            }
             Type::Closure(signature) => {
                 let params_c: Vec<String> = signature
                     .params
@@ -469,7 +466,6 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                     (format!("{}_ud", name), "void*".to_string()),
                 ]
             }
-            Type::BoxedTrait(_) | Type::Object(_) => vec![(name.to_string(), Self::type_to_c(ty))],
             _other => {
                 vec![
                     (format!("{}_ptr", name), "const uint8_t*".to_string()),
@@ -956,7 +952,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             Type::Record(name) | Type::Enum(name) => name.clone(),
             Type::Custom { repr, .. } => Self::type_to_c(repr),
             Type::Object(name) => format!("struct {}*", name),
-            Type::BoxedTrait(name) => format!("struct Foreign{}*", name),
+            Type::BoxedTrait(_) => "RiffCallbackHandle".to_string(),
             Type::Vec(inner) => format!("{}*", Self::type_to_c(inner)),
             Type::Option(inner) => Self::type_to_c(inner),
             Type::Slice(inner) => format!("const {}*", Self::type_to_c(inner)),

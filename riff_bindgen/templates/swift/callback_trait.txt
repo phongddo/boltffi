@@ -27,9 +27,14 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
         {{ method.ffi_name }}: { handle{% for param in method.params %}{% for arg in param.ffi_args %}, {{ arg }}{% endfor %}{% endfor %}{% if method.has_out_param %}{% if method.wire_encoded_return %}, outPtr, outLen{% else %}, outPtr{% endif %}{% endif %}{% if !method.is_async %}, statusPtr{% endif %}{% if method.is_async %}, callback, callbackData{% endif %} in
             guard handle != 0 else { {% if !method.is_async %}statusPtr?.pointee = FfiStatus(code: 1); {% endif %}return }
             let wrapper = Unmanaged<{{ wrapper_class }}>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(handle))!).takeUnretainedValue()
+{%- for param in method.params %}
+{%- match param.decode_prelude %}{% when Some with (prelude) %}
+            {{ prelude }}
+{%- when None %}{% endmatch %}
+{%- endfor %}
 {%- if method.is_async %}
             Task {
-                {% if method.has_return %}let result = {% endif %}{% if method.throws %}try {% endif %}await wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.call_expr }}{% if !loop.last %}, {% endif %}{% endfor %})
+                {% if method.has_return %}let result = {% endif %}{% if method.throws %}try {% endif %}await wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.call_arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- if method.has_return %}
 {%- if method.wire_encoded_return %}
 {%- if let Some(encoded) = method.wire_return_encode %}
@@ -46,7 +51,7 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
 {%- endif %}
             }
 {%- else %}
-            {% if method.has_return %}let result = {% endif %}wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.call_expr }}{% if !loop.last %}, {% endif %}{% endfor %})
+            {% if method.has_return %}let result = {% endif %}wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.call_arg }}{% if !loop.last %}, {% endif %}{% endfor %})
 {%- if method.has_out_param %}
 {%- if method.wire_encoded_return %}
 {%- if let Some(encoded) = method.wire_return_encode %}
@@ -66,21 +71,21 @@ private var {{ vtable_var }}: {{ vtable_type }} = {
     )
 }()
 
-public enum {{ bridge_name }} {
+enum {{ bridge_name }} {
     private static var isRegistered = false
     
-    public static func register() {
+    static func register() {
         guard !isRegistered else { return }
         {{ register_fn }}(&{{ vtable_var }})
         isRegistered = true
     }
     
-    /// Creates a foreign handle for the given implementation.
+    /// Creates a callback handle for the given implementation.
     /// Ownership: Rust takes ownership and will call vtable.free exactly once.
-    public static func create(_ impl: {{ protocol_name }}) -> UnsafeMutablePointer<{{ foreign_type }}> {
+    static func create(_ impl: {{ protocol_name }}) -> RiffCallbackHandle {
         register()
         let wrapper = {{ wrapper_class }}(impl)
         let handle = UInt64(UInt(bitPattern: Unmanaged.passRetained(wrapper).toOpaque()))
-        return {{ create_fn }}(handle)!
+        return {{ create_fn }}(handle)
     }
 }

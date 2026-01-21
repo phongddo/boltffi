@@ -229,7 +229,7 @@ impl ParamConversion {
                 (
                     None,
                     vec![format!(
-                        "{}.map {{ {}Bridge.create($0) }}",
+                        "{}.map {{ {}Bridge.create($0) }} ?? RiffCallbackHandle(handle: 0, vtable: nil)",
                         swift_name,
                         NamingConvention::class_name(trait_name)
                     )],

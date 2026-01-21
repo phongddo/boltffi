@@ -28,7 +28,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         trait_name.span(),
     );
     let create_fn = syn::Ident::new(
-        &format!("{}_create_{}", naming::ffi_prefix(), trait_name_snake),
+        &format!("{}_create_{}_handle", naming::ffi_prefix(), trait_name_snake),
         trait_name.span(),
     );
 
@@ -105,12 +105,32 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         }
 
         #[unsafe(no_mangle)]
-        pub extern "C" fn #create_fn(handle: u64) -> *mut #foreign_name {
+        pub extern "C" fn #create_fn(handle: u64) -> ::riff::__private::CallbackHandle {
             let vtable = #vtable_static.load(std::sync::atomic::Ordering::Acquire);
             if vtable.is_null() {
-                return std::ptr::null_mut();
+                return ::riff::__private::CallbackHandle::NULL;
             }
-            Box::into_raw(Box::new(#foreign_name { vtable, handle }))
+            ::riff::__private::CallbackHandle::new(handle, vtable as *const std::ffi::c_void)
+        }
+
+        impl ::riff::__private::FromCallbackHandle for dyn #trait_name {
+            unsafe fn arc_from_callback_handle(handle: ::riff::__private::CallbackHandle) -> std::sync::Arc<Self> {
+                debug_assert!(!handle.is_null());
+                let foreign = #foreign_name {
+                    vtable: handle.vtable() as *const #vtable_name,
+                    handle: handle.handle(),
+                };
+                std::sync::Arc::new(foreign)
+            }
+
+            unsafe fn box_from_callback_handle(handle: ::riff::__private::CallbackHandle) -> Box<Self> {
+                debug_assert!(!handle.is_null());
+                let foreign = #foreign_name {
+                    vtable: handle.vtable() as *const #vtable_name,
+                    handle: handle.handle(),
+                };
+                Box::new(foreign)
+            }
         }
     };
 

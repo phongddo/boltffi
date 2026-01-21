@@ -3,6 +3,7 @@ use super::{NamingConvention, TypeMapper};
 use crate::model::{
     ClosureSignature, DataEnumLayout, Module, OptionInfo, Primitive, ReturnType, Type,
 };
+use riff_ffi_rules::naming;
 
 #[derive(Debug, Clone)]
 pub struct OptionView {
@@ -882,7 +883,6 @@ pub struct JniParamInfo {
     pub name: String,
     pub jni_type: String,
     pub is_string: bool,
-    pub is_handle: bool,
     pub is_wire_param: bool,
     pub array_primitive: Option<Primitive>,
     pub array_is_mutable: bool,
@@ -892,6 +892,7 @@ pub struct JniParamInfo {
     pub data_enum_name: Option<String>,
     pub data_enum_struct_size: usize,
     pub closure_info: Option<ClosureParamInfo>,
+    handle_kind: HandleKind,
 }
 
 #[derive(Debug, Clone)]
@@ -902,12 +903,44 @@ pub struct ClosureParamInfo {
     pub return_type: Type,
 }
 
+#[derive(Debug, Clone)]
+enum HandleKind {
+    None,
+    Opaque,
+    Callback { create_fn: String },
+}
+
 impl JniParamInfo {
-    fn is_handle_type(ty: &Type) -> bool {
+    fn handle_kind(ty: &Type, module: Option<&Module>) -> HandleKind {
         match ty {
-            Type::Object(_) | Type::BoxedTrait(_) => true,
-            Type::Option(inner) => matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_)),
-            _ => false,
+            Type::Object(_) => HandleKind::Opaque,
+            Type::BoxedTrait(name) => module
+                .and_then(|module| {
+                    module
+                        .callback_traits
+                        .iter()
+                        .any(|t| t.name == *name)
+                        .then(|| HandleKind::Callback {
+                            create_fn: naming::callback_create_fn(name),
+                        })
+                })
+                .unwrap_or(HandleKind::Opaque),
+            Type::Option(inner) => match inner.as_ref() {
+                Type::Object(_) => HandleKind::Opaque,
+                Type::BoxedTrait(name) => module
+                    .and_then(|module| {
+                        module
+                            .callback_traits
+                            .iter()
+                            .any(|t| t.name == *name)
+                            .then(|| HandleKind::Callback {
+                                create_fn: naming::callback_create_fn(name),
+                            })
+                    })
+                    .unwrap_or(HandleKind::Opaque),
+                _ => HandleKind::None,
+            },
+            _ => HandleKind::None,
         }
     }
 
@@ -936,7 +969,6 @@ impl JniParamInfo {
             name: name.to_string(),
             jni_type: TypeMapper::c_jni_type(ty),
             is_string: matches!(ty, Type::String),
-            is_handle: Self::is_handle_type(ty),
             is_wire_param: false,
             array_primitive: array_info.primitive,
             array_is_mutable: array_info.is_mutable,
@@ -946,6 +978,7 @@ impl JniParamInfo {
             data_enum_name: None,
             data_enum_struct_size: 0,
             closure_info,
+            handle_kind: Self::handle_kind(ty, None),
         }
     }
 
@@ -972,7 +1005,6 @@ impl JniParamInfo {
             name: name.to_string(),
             jni_type,
             is_string: matches!(ty, Type::String),
-            is_handle: Self::is_handle_type(ty),
             is_wire_param,
             array_primitive: array_info.primitive,
             array_is_mutable: array_info.is_mutable,
@@ -982,6 +1014,7 @@ impl JniParamInfo {
             data_enum_name: enum_info.name,
             data_enum_struct_size: enum_info.struct_size,
             closure_info,
+            handle_kind: Self::handle_kind(ty, Some(module)),
         }
     }
 
@@ -1106,8 +1139,10 @@ impl JniParamInfo {
                 "(const uint8_t*)_{}_ptr, (uintptr_t)_{}_len",
                 self.name, self.name
             )
-        } else if self.is_handle {
+        } else if matches!(self.handle_kind, HandleKind::Opaque) {
             format!("(void*){}", self.name)
+        } else if let HandleKind::Callback { create_fn } = &self.handle_kind {
+            format!("{}((uint64_t){})", create_fn, self.name)
         } else if let Some(closure) = &self.closure_info {
             format!("{}, (void*)_{}_ref", closure.trampoline_name, self.name)
         } else {

@@ -159,7 +159,7 @@ pub mod naming {
     }
 
     pub fn callback_create_fn(trait_name: &str) -> String {
-        format!("{}_create_{}", FFI_PREFIX, to_snake_case(trait_name))
+        format!("{}_create_{}_handle", FFI_PREFIX, to_snake_case(trait_name))
     }
 
     pub fn module_name(crate_name: &str) -> String {

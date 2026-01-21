@@ -39,7 +39,8 @@ pub struct TraitParamView {
     pub label: String,
     pub swift_type: String,
     pub ffi_args: Vec<String>,
-    pub call_expr: String,
+    pub call_arg: String,
+    pub decode_prelude: Option<String>,
 }
 
 impl CallbackTraitTemplate {
@@ -70,16 +71,24 @@ impl CallbackTraitTemplate {
                             .map(|param| {
                                 let swift_name = NamingConvention::param_name(&param.name);
                                 let ffi_args = callback_ffi_args(&swift_name, &param.param_type);
-                                let call_expr = if ffi_args.len() == 2 {
-                                    wire_decode_expr(&param.param_type, module, &ffi_args[0], &ffi_args[1])
-                                } else {
-                                    swift_name.clone()
-                                };
+                                let decode_prelude = (ffi_args.len() == 2).then(|| {
+                                    format!(
+                                        "let {} = {}",
+                                        swift_name,
+                                        wire_decode_expr(
+                                            &param.param_type,
+                                            module,
+                                            &ffi_args[0],
+                                            &ffi_args[1]
+                                        )
+                                    )
+                                });
                                 TraitParamView {
                                     label: swift_name.clone(),
                                     swift_type: TypeMapper::map_type(&param.param_type),
                                     ffi_args,
-                                    call_expr,
+                                    call_arg: swift_name,
+                                    decode_prelude,
                                 }
                             })
                             .collect(),

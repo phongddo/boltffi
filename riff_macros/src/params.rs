@@ -11,15 +11,6 @@ pub struct FfiParams {
     pub call_args: Vec<proc_macro2::TokenStream>,
 }
 
-fn foreign_trait_path(trait_path: &syn::Path) -> syn::Path {
-    let mut foreign_path = trait_path.clone();
-    if let Some(last) = foreign_path.segments.last_mut() {
-        last.ident = syn::Ident::new(&format!("Foreign{}", last.ident), last.ident.span());
-        last.arguments = syn::PathArguments::None;
-    }
-    foreign_path
-}
-
 pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![,]>) -> FfiParams {
     inputs
         .iter()
@@ -162,50 +153,39 @@ pub fn transform_params(inputs: &syn::punctuated::Punctuated<FnArg, syn::Token![
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::BoxedDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let foreign_ident = syn::Ident::new(&format!("__{}_foreign", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
-                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #foreign_ident: Box<#foreign_path> = Box::from_raw(#name);
-                        let #name: Box<dyn #trait_path> = #foreign_ident;
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                        let #name: Box<dyn #trait_path> = unsafe {
+                            <dyn #trait_path as ::riff::__private::FromCallbackHandle>::box_from_callback_handle(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::ArcDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
-                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
-                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
-                        let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
-                        let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                        let #name: ::std::sync::Arc<dyn #trait_path> = unsafe {
+                            <dyn #trait_path as ::riff::__private::FromCallbackHandle>::arc_from_callback_handle(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::OptionArcDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
-                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
                         let #name: Option<::std::sync::Arc<dyn #trait_path>> = if #name.is_null() {
                             None
                         } else {
-                            let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
-                            let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
-                            let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
-                            Some(#name)
+                            Some(unsafe {
+                                <dyn #trait_path as ::riff::__private::FromCallbackHandle>::arc_from_callback_handle(#name)
+                            })
                         };
                     });
 
@@ -638,50 +618,39 @@ pub fn transform_method_params(inputs: impl Iterator<Item = syn::FnArg>) -> FfiP
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::BoxedDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let foreign_ident = syn::Ident::new(&format!("__{}_foreign", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
-                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #foreign_ident: Box<#foreign_path> = Box::from_raw(#name);
-                        let #name: Box<dyn #trait_path> = #foreign_ident;
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                        let #name: Box<dyn #trait_path> = unsafe {
+                            <dyn #trait_path as ::riff::__private::FromCallbackHandle>::box_from_callback_handle(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::ArcDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
-                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
-                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                        let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
-                        let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
-                        let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
+                        assert!(!#name.is_null(), concat!(stringify!(#name), ": null callback handle"));
+                        let #name: ::std::sync::Arc<dyn #trait_path> = unsafe {
+                            <dyn #trait_path as ::riff::__private::FromCallbackHandle>::arc_from_callback_handle(#name)
+                        };
                     });
 
                     acc.call_args.push(quote! { #name });
                 }
                 ParamTransform::OptionArcDynTrait(trait_path) => {
-                    let foreign_path = foreign_trait_path(&trait_path);
-                    let boxed_ident = syn::Ident::new(&format!("__{}_foreign_box", name), name.span());
-                    let arc_ident = syn::Ident::new(&format!("__{}_foreign_arc", name), name.span());
-
-                    acc.ffi_params.push(quote! { #name: *mut #foreign_path });
+                    acc.ffi_params.push(quote! { #name: ::riff::__private::CallbackHandle });
 
                     acc.conversions.push(quote! {
                         let #name: Option<::std::sync::Arc<dyn #trait_path>> = if #name.is_null() {
                             None
                         } else {
-                            let #boxed_ident: Box<#foreign_path> = Box::from_raw(#name);
-                            let #arc_ident: ::std::sync::Arc<#foreign_path> = #boxed_ident.into();
-                            let #name: ::std::sync::Arc<dyn #trait_path> = #arc_ident;
-                            Some(#name)
+                            Some(unsafe {
+                                <dyn #trait_path as ::riff::__private::FromCallbackHandle>::arc_from_callback_handle(#name)
+                            })
                         };
                     });
 

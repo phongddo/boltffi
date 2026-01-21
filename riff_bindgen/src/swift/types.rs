@@ -83,7 +83,7 @@ impl TypeMapper {
             Type::Object(_) => "OpaquePointer".into(),
             Type::Record(_) | Type::Custom { .. } => "UnsafePointer<UInt8>?, UInt".into(),
             Type::Enum(_) => "Int32".into(),
-            Type::BoxedTrait(_) => "OpaquePointer".into(),
+            Type::BoxedTrait(_) => "RiffCallbackHandle".into(),
             Type::Void => "Void".into(),
         }
     }

@@ -2,6 +2,9 @@ import Foundation
 {%- if let Some(ffi_module_name) = ffi_module_name %}
 import {{ ffi_module_name }}
 {%- endif %}
+{%- if let Some(ffi_module) = ffi_module_name %}
+typealias RiffCallbackHandle = {{ ffi_module }}.RiffCallbackHandle
+{%- endif %}
 
 public struct FfiError: Error {
     public let message: String

@@ -4,8 +4,9 @@ extern crate self as riff_core;
 #[global_allocator]
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
-pub mod handle;
+pub mod callback;
 pub mod custom_ffi;
+pub mod handle;
 pub mod pending;
 pub mod ringbuffer;
 pub mod rustfuture;
@@ -15,8 +16,9 @@ pub mod subscription;
 pub mod types;
 pub mod wire;
 
-pub use handle::HandleBox;
+pub use callback::{CallbackHandle, FromCallbackHandle};
 pub use custom_ffi::CustomFfiConvertible;
+pub use handle::HandleBox;
 pub use pending::{CancellationToken, PendingHandle};
 pub use riff_macros::{
     Data, FfiType, custom_ffi, data, error, export, ffi_class, ffi_export, ffi_stream, ffi_trait,
