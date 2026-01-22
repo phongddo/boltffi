@@ -49,14 +49,23 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
 
 fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
     let output_dir = output.unwrap_or_else(|| config.apple_swift_output());
-    let output_path = output_dir.join(format!("{}.swift", config.swift_module_name()));
+    let library_name = config.library_name();
+    let capitalized = library_name
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_default()
+        + &library_name[1..];
+    let output_path = output_dir.join(format!("{}Riff.swift", capitalized));
 
     std::fs::create_dir_all(&output_dir).map_err(|source| CliError::CreateDirectoryFailed {
         path: output_dir.clone(),
         source,
     })?;
 
-    let crate_dir = PathBuf::from(".");
+    let crate_dir = std::env::current_dir()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
     let module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
@@ -96,7 +105,9 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
         source,
     })?;
 
-    let crate_dir = PathBuf::from(".");
+    let crate_dir = std::env::current_dir()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
     let module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {
@@ -148,7 +159,9 @@ fn generate_header(config: &Config, output: Option<PathBuf>) -> Result<()> {
         source,
     })?;
 
-    let crate_dir = PathBuf::from(".");
+    let crate_dir = std::env::current_dir()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
     let module = scan_crate(&crate_dir, crate_name).map_err(|e| CliError::CommandFailed {

@@ -304,6 +304,10 @@ let package = Package(
 }
 
 fn relative_path(from_dir: &std::path::Path, to_path: &std::path::Path) -> PathBuf {
+    if from_dir == std::path::Path::new(".") || from_dir == std::path::Path::new("") {
+        return to_path.to_path_buf();
+    }
+
     let from_components = from_dir.components().collect::<Vec<_>>();
     let to_components = to_path.components().collect::<Vec<_>>();
 

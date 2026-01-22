@@ -117,9 +117,7 @@ impl<'a> DefaultExprResolver<'a> {
             Type::Option(_) => Some("nil".to_string()),
             Type::Record(name) => self.default_record_expr(name),
             Type::Enum(name) => self.default_enum_expr(name),
-            Type::Custom { name, repr } => self
-                .default_expr(repr)
-                .map(|repr_default| format!("{}({})", NamingConvention::class_name(name), repr_default)),
+            Type::Custom { name: _, repr } => self.default_expr(repr),
             Type::Void
             | Type::Slice(_)
             | Type::MutSlice(_)

@@ -239,10 +239,10 @@ fn generate_apple_bindings(config: &Config, layout: SpmLayout, package_root: &Pa
     let swift_output_dir = match layout {
         SpmLayout::Bundled => config
             .apple_spm_wrapper_sources()
-            .map(|path| package_root.join(path).join("RiffGenerated"))
-            .unwrap_or_else(|| package_root.join("Sources").join("RiffGenerated")),
-        SpmLayout::FfiOnly => package_root.join("Sources").join("RiffGenerated"),
-        SpmLayout::Split => config.apple_swift_output().join("RiffGenerated"),
+            .map(|path| package_root.join(path).join("Riff"))
+            .unwrap_or_else(|| package_root.join("Sources").join("Riff")),
+        SpmLayout::FfiOnly => package_root.join("Sources").join("Riff"),
+        SpmLayout::Split => config.apple_swift_output().join("Riff"),
     };
 
     run_generate_with_output(

@@ -3,6 +3,8 @@ use quote::{format_ident, quote};
 use riff_ffi_rules::naming;
 use syn::{FnArg, Pat, ReturnType, Type};
 
+use crate::custom_types;
+
 pub fn ffi_trait_impl(item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
     expand_ffi_trait(item_trait)
@@ -11,6 +13,7 @@ pub fn ffi_trait_impl(item: TokenStream) -> TokenStream {
 }
 
 fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStream, syn::Error> {
+    let custom_types = custom_types::registry_for_current_crate()?;
     let trait_name = &item_trait.ident;
     let trait_name_snake = to_snake_case_ident(&trait_name.to_string());
     let vtable_name = syn::Ident::new(&format!("{}VTable", trait_name), trait_name.span());
@@ -55,7 +58,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
             syn::TraitItem::Fn(method) => Some(method),
             _ => None,
         })
-        .map(|method| expand_method(method, &mut vtable_fields))
+        .map(|method| expand_method(method, &mut vtable_fields, &custom_types))
         .collect::<Result<Vec<_>, _>>()?;
 
     let expanded = quote! {
@@ -140,6 +143,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
 fn expand_method(
     method: &syn::TraitItemFn,
     vtable_fields: &mut Vec<proc_macro2::TokenStream>,
+    custom_types: &custom_types::CustomTypeRegistry,
 ) -> Result<proc_macro2::TokenStream, syn::Error> {
     let method_name = &method.sig.ident;
     let method_name_snake = to_snake_case_ident(&method_name.to_string());
@@ -156,7 +160,9 @@ fn expand_method(
             },
             FnArg::Receiver(_) => None,
         })
-        .map(|(param_name, param_type)| lower_callback_param(&param_name, &param_type))
+        .map(|(param_name, param_type)| {
+            lower_callback_param(&param_name, &param_type, custom_types)
+        })
         .fold(
             (Vec::new(), Vec::new(), Vec::new(), Vec::new()),
             |(mut ffi, mut rust, mut call, mut preludes), lowering| {
@@ -430,7 +436,11 @@ struct CallbackParamLowering {
     prelude: Option<proc_macro2::TokenStream>,
 }
 
-fn lower_callback_param(param_name: &syn::Ident, param_type: &syn::Type) -> CallbackParamLowering {
+fn lower_callback_param(
+    param_name: &syn::Ident,
+    param_type: &syn::Type,
+    custom_types: &custom_types::CustomTypeRegistry,
+) -> CallbackParamLowering {
     let rust_param = quote! { #param_name: #param_type };
 
     let type_str = quote!(#param_type).to_string().replace(' ', "");
@@ -447,11 +457,23 @@ fn lower_callback_param(param_name: &syn::Ident, param_type: &syn::Type) -> Call
     let len_name = format_ident!("{}_len", param_name);
     let wire_name = format_ident!("{}_wire", param_name);
 
+    let prelude = if custom_types::contains_custom_types(param_type, custom_types) {
+        let wire_ty = custom_types::wire_type_for(param_type, custom_types);
+        let wire_value_name = format_ident!("{}_wire_value", param_name);
+        let to_wire = custom_types::to_wire_expr_owned(param_type, custom_types, param_name);
+        quote! {
+            let #wire_value_name: #wire_ty = { #to_wire };
+            let #wire_name = ::riff::__private::wire::encode(&#wire_value_name);
+        }
+    } else {
+        quote! { let #wire_name = ::riff::__private::wire::encode(&#param_name); }
+    };
+
     CallbackParamLowering {
         ffi_param: quote! { #ptr_name: *const u8, #len_name: usize },
         rust_param,
         call_arg: quote! { #wire_name.as_ptr(), #wire_name.len() },
-        prelude: Some(quote! { let #wire_name = ::riff::__private::wire::encode(&#param_name); }),
+        prelude: Some(prelude),
     }
 }
 

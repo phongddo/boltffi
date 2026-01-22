@@ -49,7 +49,7 @@ impl CallbackTraitTemplate {
 
         Self {
             doc: callback_trait.doc.clone(),
-            protocol_name: format!("{}Protocol", trait_name),
+            protocol_name: trait_name.clone(),
             wrapper_class: format!("{}Wrapper", trait_name),
             vtable_var: format!("{}VTableInstance", to_camel_case(trait_name)),
             vtable_type: naming::callback_vtable_name(trait_name),

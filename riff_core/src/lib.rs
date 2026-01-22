@@ -21,8 +21,8 @@ pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
 pub use pending::{CancellationToken, PendingHandle};
 pub use riff_macros::{
-    Data, FfiType, custom_ffi, data, error, export, ffi_class, ffi_export, ffi_stream, ffi_trait,
-    name, skip,
+    Data, FfiType, custom_ffi, custom_type, data, error, export, ffi_class, ffi_export, ffi_stream,
+    ffi_trait, name, skip,
 };
 pub use ringbuffer::SpscRingBuffer;
 pub use rustfuture::{
@@ -46,6 +46,17 @@ impl std::fmt::Display for UnexpectedFfiCallbackError {
 }
 
 impl std::error::Error for UnexpectedFfiCallbackError {}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CustomTypeConversionError;
+
+impl std::fmt::Display for CustomTypeConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "custom type conversion failed")
+    }
+}
+
+impl std::error::Error for CustomTypeConversionError {}
 
 pub const VERSION_MAJOR: u32 = 0;
 pub const VERSION_MINOR: u32 = 1;

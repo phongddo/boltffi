@@ -85,7 +85,7 @@ impl SwiftType {
             Self::Enum(name) | Self::Record(name) | Self::Object(name) => {
                 NamingConvention::class_name(name)
             }
-            Self::BoxedTrait(name) => format!("{}Protocol", NamingConvention::class_name(name)),
+            Self::BoxedTrait(name) => NamingConvention::class_name(name),
             Self::Closure { params, returns } => {
                 let params_str = params
                     .iter()

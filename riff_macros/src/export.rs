@@ -3,6 +3,7 @@ use quote::quote;
 use riff_ffi_rules::naming;
 use syn::ItemFn;
 
+use crate::custom_types;
 use crate::params::{FfiParams, transform_params, transform_params_async};
 use crate::returns::{
     OptionReturnAbi, ReturnKind, classify_async_return_abi, classify_return,
@@ -66,6 +67,11 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
         return TokenStream::from(safety::violations_to_compile_errors(&violations));
     }
 
+    let custom_types = match custom_types::registry_for_current_crate() {
+        Ok(registry) => registry,
+        Err(error) => return error.to_compile_error().into(),
+    };
+
     let fn_name = &input.sig.ident;
     let fn_inputs = &input.sig.inputs;
     let fn_output = &input.sig.output;
@@ -73,7 +79,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
     let is_async = input.sig.asyncness.is_some();
 
     if is_async {
-        return generate_async_export(&input);
+        return generate_async_export(&input, &custom_types);
     }
 
     let export_name = format!("{}_{}", naming::ffi_prefix(), fn_name);
@@ -83,7 +89,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
         ffi_params,
         conversions,
         call_args,
-    } = transform_params(fn_inputs);
+    } = transform_params(fn_inputs, &custom_types);
 
     let has_params = !ffi_params.is_empty();
     let has_conversions = !conversions.is_empty();
@@ -166,16 +172,24 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
             }
         }
         ReturnKind::WireEncoded(inner_ty) => {
-            let body = if has_conversions {
+            let needs_custom = custom_types::contains_custom_types(&inner_ty, &custom_types);
+            let result_ident = syn::Ident::new("result", fn_name.span());
+
+            let encode_body = if needs_custom {
+                let wire_ty = custom_types::wire_type_for(&inner_ty, &custom_types);
+                let wire_value_ident = syn::Ident::new("__riff_wire_value", fn_name.span());
+                let to_wire = custom_types::to_wire_expr_owned(&inner_ty, &custom_types, &result_ident);
                 quote! {
                     #(#conversions)*
-                    let result: #inner_ty = #fn_name(#(#call_args),*);
-                    ::riff::__private::FfiBuf::wire_encode(&result)
+                    let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
+                    let #wire_value_ident: #wire_ty = { #to_wire };
+                    ::riff::__private::FfiBuf::wire_encode(&#wire_value_ident)
                 }
             } else {
                 quote! {
-                    let result: #inner_ty = #fn_name(#(#call_args),*);
-                    ::riff::__private::FfiBuf::wire_encode(&result)
+                    #(#conversions)*
+                    let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
+                    ::riff::__private::FfiBuf::wire_encode(&#result_ident)
                 }
             };
 
@@ -187,7 +201,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                     #fn_vis unsafe extern "C" fn #export_ident(
                         #(#ffi_params),*
                     ) -> ::riff::__private::FfiBuf<u8> {
-                        #body
+                        #encode_body
                     }
                 }
             } else {
@@ -196,7 +210,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
 
                     #[unsafe(no_mangle)]
                     #fn_vis extern "C" fn #export_ident() -> ::riff::__private::FfiBuf<u8> {
-                        #body
+                        #encode_body
                     }
                 }
             }
@@ -212,7 +226,7 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn generate_async_export(input: &ItemFn) -> TokenStream {
+fn generate_async_export(input: &ItemFn, custom_types: &custom_types::CustomTypeRegistry) -> TokenStream {
     let fn_name = &input.sig.ident;
     let fn_inputs = &input.sig.inputs;
     let fn_output = &input.sig.output;
@@ -226,7 +240,7 @@ fn generate_async_export(input: &ItemFn) -> TokenStream {
     let cancel_ident = syn::Ident::new(&format!("{}_cancel", base_name), fn_name.span());
     let free_ident = syn::Ident::new(&format!("{}_free", base_name), fn_name.span());
 
-    let params = transform_params_async(fn_inputs);
+    let params = transform_params_async(fn_inputs, custom_types);
     let return_abi = classify_async_return_abi(fn_output);
 
     let ffi_return_type = get_async_ffi_return_type(&return_abi);

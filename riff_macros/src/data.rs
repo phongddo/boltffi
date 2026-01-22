@@ -1,6 +1,7 @@
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 
+use crate::custom_types;
 use crate::wire_gen;
 
 pub fn data_impl(item: TokenStream) -> TokenStream {
@@ -15,7 +16,11 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
         let struct_name = &item_struct.ident;
         let free_fn_name = format_ident!("riff_free_buf_{}", struct_name);
 
-        let wire_impls = wire_gen::generate_wire_impls(&item_struct);
+        let custom_types = match custom_types::registry_for_current_crate() {
+            Ok(registry) => registry,
+            Err(error) => return error.to_compile_error().into(),
+        };
+        let wire_impls = wire_gen::generate_wire_impls(&item_struct, &custom_types);
 
         return TokenStream::from(quote! {
             #item_struct
@@ -42,7 +47,11 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
             }
         }
 
-        let wire_impls = wire_gen::generate_enum_wire_impls(&item_enum);
+        let custom_types = match custom_types::registry_for_current_crate() {
+            Ok(registry) => registry,
+            Err(error) => return error.to_compile_error().into(),
+        };
+        let wire_impls = wire_gen::generate_enum_wire_impls(&item_enum, &custom_types);
 
         return TokenStream::from(quote! {
             #item_enum

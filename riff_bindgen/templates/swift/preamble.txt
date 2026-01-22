@@ -282,26 +282,7 @@ extension URL: WireEncodable {
 }
 
 {%- for custom in custom_types %}
-
-public struct {{ custom.class_name }}: Sendable {
-    public let value: {{ custom.repr_swift_type }}
-
-    @inlinable public init(_ value: {{ custom.repr_swift_type }}) {
-        self.value = value
-    }
-
-    @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ custom.class_name }}, size: Int) {
-        let (value, size) = {{ custom.repr_decode_tuple_expr }}
-        return ({{ custom.class_name }}(value), size)
-    }
-}
-
-extension {{ custom.class_name }}: WireEncodable {
-    @usableFromInline static var isBlittable: Bool { false }
-    @inlinable func wireEncodedSize() -> Int { {{ custom.repr_size_expr }} }
-    @inlinable func wireEncodeTo(_ data: inout Data) { {{ custom.repr_encode_to_data }} }
-    @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) { {{ custom.repr_encode_to_bytes }} }
-}
+public typealias {{ custom.class_name }} = {{ custom.repr_swift_type }}
 {%- endfor %}
 
 extension Array: WireEncodable where Element: WireEncodable {

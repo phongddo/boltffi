@@ -2,6 +2,8 @@ use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Fields, ItemEnum, ItemStruct, Type};
 
+use crate::custom_types::{CustomTypeRegistry, contains_custom_types};
+
 fn is_primitive_type(ty: &Type) -> bool {
     match ty {
         Type::Path(type_path) => {
@@ -35,7 +37,7 @@ fn is_struct_blittable(field_types: &[&Type]) -> bool {
     field_types.iter().all(|ty| is_primitive_type(ty))
 }
 
-pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
+pub fn generate_wire_impls(item_struct: &ItemStruct, custom_types: &CustomTypeRegistry) -> TokenStream {
     let struct_name = &item_struct.ident;
     let (impl_generics, ty_generics, where_clause) = item_struct.generics.split_for_impl();
 
@@ -61,6 +63,7 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         where_clause,
         &field_names,
         &field_types,
+        custom_types,
         is_blittable,
     );
 
@@ -70,6 +73,8 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         &ty_generics,
         where_clause,
         &field_names,
+        &field_types,
+        custom_types,
         is_blittable,
     );
 
@@ -80,6 +85,7 @@ pub fn generate_wire_impls(item_struct: &ItemStruct) -> TokenStream {
         where_clause,
         &field_names,
         &field_types,
+        custom_types,
         is_blittable,
     );
 
@@ -123,6 +129,7 @@ fn generate_wire_size_impl(
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
     field_types: &[&Type],
+    custom_types: &CustomTypeRegistry,
     is_blittable: bool,
 ) -> TokenStream {
     if is_blittable {
@@ -136,16 +143,27 @@ fn generate_wire_size_impl(
     }
 
     let all_fixed_check = field_types.iter().map(|ty| {
-        quote! { <#ty as ::riff::__private::wire::WireSize>::is_fixed_size() }
+        if contains_custom_types(ty, custom_types) {
+            let wire_ty = wire_type_for(ty, custom_types);
+            quote! { <#wire_ty as ::riff::__private::wire::WireSize>::is_fixed_size() }
+        } else {
+            quote! { <#ty as ::riff::__private::wire::WireSize>::is_fixed_size() }
+        }
     });
 
     let fixed_size_sum = field_types.iter().map(|ty| {
-        quote! { <#ty as ::riff::__private::wire::WireSize>::fixed_size().unwrap_or(0) }
+        if contains_custom_types(ty, custom_types) {
+            let wire_ty = wire_type_for(ty, custom_types);
+            quote! { <#wire_ty as ::riff::__private::wire::WireSize>::fixed_size().unwrap_or(0) }
+        } else {
+            quote! { <#ty as ::riff::__private::wire::WireSize>::fixed_size().unwrap_or(0) }
+        }
     });
 
-    let field_wire_sizes = field_names.iter().map(|name| {
-        quote! { ::riff::__private::wire::WireSize::wire_size(&self.#name) }
-    });
+    let field_wire_sizes = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| wire_size_expr(ty, custom_types, quote! { &self.#name }));
 
     quote! {
         impl #impl_generics ::riff::__private::wire::WireSize for #struct_name #ty_generics #where_clause {
@@ -176,6 +194,8 @@ fn generate_wire_encode_impl(
     ty_generics: &syn::TypeGenerics,
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
+    field_types: &[&Type],
+    custom_types: &CustomTypeRegistry,
     is_blittable: bool,
 ) -> TokenStream {
     if is_blittable {
@@ -193,11 +213,17 @@ fn generate_wire_encode_impl(
         };
     }
 
-    let encode_fields = field_names.iter().map(|name| {
-        quote! {
-            written += ::riff::__private::wire::WireEncode::encode_to(&self.#name, &mut buf[written..]);
-        }
-    });
+    let encode_fields = field_names
+        .iter()
+        .zip(field_types.iter())
+        .map(|(name, ty)| {
+            let field_buf = syn::Ident::new(&format!("__riff_buf_{}", name), name.span());
+            let encode_expr = encode_to_expr(ty, custom_types, quote! { &self.#name }, quote! { #field_buf });
+            quote! {
+                let #field_buf = &mut buf[written..];
+                written += #encode_expr;
+            }
+        });
 
     quote! {
         impl #impl_generics ::riff::__private::wire::WireEncode for #struct_name #ty_generics #where_clause {
@@ -217,6 +243,7 @@ fn generate_wire_decode_impl(
     where_clause: Option<&syn::WhereClause>,
     field_names: &[&syn::Ident],
     field_types: &[&Type],
+    custom_types: &CustomTypeRegistry,
     is_blittable: bool,
 ) -> TokenStream {
     let field_names_for_struct: Vec<_> = field_names.iter().map(|n| quote! { #n }).collect();
@@ -239,8 +266,9 @@ fn generate_wire_decode_impl(
     }
 
     let decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
+        let decode_expr = decode_from_expr(ty, custom_types, quote! { &buf[position..] });
         quote! {
-            let (#name, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
+            let (#name, size) = #decode_expr?;
             position += size;
         }
     });
@@ -258,7 +286,361 @@ fn generate_wire_decode_impl(
     }
 }
 
-pub fn generate_enum_wire_impls(item_enum: &ItemEnum) -> TokenStream {
+fn wire_type_for(ty: &Type, custom_types: &CustomTypeRegistry) -> Type {
+    if let Some(entry) = custom_types.lookup(ty) {
+        return entry.repr_type().unwrap_or_else(|_| ty.clone());
+    }
+
+    let Type::Path(type_path) = ty else {
+        return ty.clone();
+    };
+
+    let Some(segment) = type_path.path.segments.last() else {
+        return ty.clone();
+    };
+
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return ty.clone();
+    };
+
+    match segment.ident.to_string().as_str() {
+        "Vec" => args.args.first().and_then(type_arg).map(|inner| {
+            let inner_wire = wire_type_for(inner, custom_types);
+            syn::parse_quote!(Vec<#inner_wire>)
+        }).unwrap_or_else(|| ty.clone()),
+        "Option" => args.args.first().and_then(type_arg).map(|inner| {
+            let inner_wire = wire_type_for(inner, custom_types);
+            syn::parse_quote!(Option<#inner_wire>)
+        }).unwrap_or_else(|| ty.clone()),
+        "Result" => {
+            let ok = args.args.first().and_then(type_arg);
+            let err = args.args.iter().nth(1).and_then(type_arg);
+            match (ok, err) {
+                (Some(ok), Some(err)) => {
+                    let ok_wire = wire_type_for(ok, custom_types);
+                    let err_wire = wire_type_for(err, custom_types);
+                    syn::parse_quote!(Result<#ok_wire, #err_wire>)
+                }
+                _ => ty.clone(),
+            }
+        }
+        _ => ty.clone(),
+    }
+}
+
+fn type_arg(arg: &syn::GenericArgument) -> Option<&Type> {
+    match arg {
+        syn::GenericArgument::Type(ty) => Some(ty),
+        _ => None,
+    }
+}
+
+fn wire_size_expr(
+    ty: &Type,
+    custom_types: &CustomTypeRegistry,
+    value_expr: TokenStream,
+) -> TokenStream {
+    if let Some(entry) = custom_types.lookup(ty) {
+        let into_fn = entry.into_fn_path();
+        return quote! { ::riff::__private::wire::WireSize::wire_size(&#into_fn(#value_expr)) };
+    }
+
+    let Type::Path(type_path) = ty else {
+        return quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) };
+    };
+
+    let Some(segment) = type_path.path.segments.last() else {
+        return quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) };
+    };
+
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) };
+    };
+
+    match segment.ident.to_string().as_str() {
+        "Vec" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_size = wire_size_expr(inner, custom_types, quote! { element });
+                quote! {
+                    ::riff::__private::wire::VEC_COUNT_SIZE
+                        + (#value_expr)
+                            .iter()
+                            .map(|element| #inner_size)
+                            .sum::<usize>()
+                }
+            })
+            .unwrap_or_else(|| quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) }),
+        "Option" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_size = wire_size_expr(inner, custom_types, quote! { value });
+                quote! {
+                    match #value_expr {
+                        Some(value) => ::riff::__private::wire::OPTION_FLAG_SIZE + #inner_size,
+                        None => ::riff::__private::wire::OPTION_FLAG_SIZE,
+                    }
+                }
+            })
+            .unwrap_or_else(|| quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) }),
+        "Result" => {
+            let ok = args.args.first().and_then(type_arg);
+            let err = args.args.iter().nth(1).and_then(type_arg);
+
+            match (ok, err) {
+                (Some(ok), Some(err))
+                    if contains_custom_types(ok, custom_types) || contains_custom_types(err, custom_types) =>
+                {
+                    let ok_size = wire_size_expr(ok, custom_types, quote! { ok_value });
+                    let err_size = wire_size_expr(err, custom_types, quote! { err_value });
+                    quote! {
+                        match #value_expr {
+                            Ok(ok_value) => ::riff::__private::wire::RESULT_TAG_SIZE + #ok_size,
+                            Err(err_value) => ::riff::__private::wire::RESULT_TAG_SIZE + #err_size,
+                        }
+                    }
+                }
+                _ => quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) },
+            }
+        }
+        _ => quote! { ::riff::__private::wire::WireSize::wire_size(#value_expr) },
+    }
+}
+
+fn encode_to_expr(
+    ty: &Type,
+    custom_types: &CustomTypeRegistry,
+    value_expr: TokenStream,
+    buf_expr: TokenStream,
+) -> TokenStream {
+    if let Some(entry) = custom_types.lookup(ty) {
+        let into_fn = entry.into_fn_path();
+        return quote! {
+            {
+                let __riff_custom_value = #into_fn(#value_expr);
+                ::riff::__private::wire::WireEncode::encode_to(&__riff_custom_value, #buf_expr)
+            }
+        };
+    }
+
+    let Type::Path(type_path) = ty else {
+        return quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) };
+    };
+
+    let Some(segment) = type_path.path.segments.last() else {
+        return quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) };
+    };
+
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) };
+    };
+
+    match segment.ident.to_string().as_str() {
+        "Vec" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_encode = encode_to_expr(inner, custom_types, quote! { element }, quote! { &mut #buf_expr[::riff::__private::wire::VEC_COUNT_SIZE + offset..] });
+                quote! {
+                    {
+                        let count = (#value_expr).len() as u32;
+                        #buf_expr[..::riff::__private::wire::VEC_COUNT_SIZE].copy_from_slice(&count.to_le_bytes());
+                        let payload_written = (#value_expr).iter().fold(0usize, |offset, element| {
+                            offset + #inner_encode
+                        });
+                        ::riff::__private::wire::VEC_COUNT_SIZE + payload_written
+                    }
+                }
+            })
+            .unwrap_or_else(|| quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) }),
+        "Option" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_encode = encode_to_expr(inner, custom_types, quote! { value }, quote! { &mut #buf_expr[::riff::__private::wire::OPTION_FLAG_SIZE..] });
+                quote! {
+                    match #value_expr {
+                        Some(value) => {
+                            #buf_expr[0] = 1;
+                            ::riff::__private::wire::OPTION_FLAG_SIZE + #inner_encode
+                        }
+                        None => {
+                            #buf_expr[0] = 0;
+                            ::riff::__private::wire::OPTION_FLAG_SIZE
+                        }
+                    }
+                }
+            })
+            .unwrap_or_else(|| quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) }),
+        "Result" => {
+            let ok = args.args.first().and_then(type_arg);
+            let err = args.args.iter().nth(1).and_then(type_arg);
+
+            match (ok, err) {
+                (Some(ok), Some(err))
+                    if contains_custom_types(ok, custom_types) || contains_custom_types(err, custom_types) =>
+                {
+                    let ok_encode = encode_to_expr(ok, custom_types, quote! { ok_value }, quote! { &mut #buf_expr[::riff::__private::wire::RESULT_TAG_SIZE..] });
+                    let err_encode = encode_to_expr(err, custom_types, quote! { err_value }, quote! { &mut #buf_expr[::riff::__private::wire::RESULT_TAG_SIZE..] });
+                    quote! {
+                        match #value_expr {
+                            Ok(ok_value) => {
+                                #buf_expr[0] = 0;
+                                ::riff::__private::wire::RESULT_TAG_SIZE + #ok_encode
+                            }
+                            Err(err_value) => {
+                                #buf_expr[0] = 1;
+                                ::riff::__private::wire::RESULT_TAG_SIZE + #err_encode
+                            }
+                        }
+                    }
+                }
+                _ => quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) },
+            }
+        }
+        _ => quote! { ::riff::__private::wire::WireEncode::encode_to(#value_expr, #buf_expr) },
+    }
+}
+
+fn decode_from_expr(
+    ty: &Type,
+    custom_types: &CustomTypeRegistry,
+    buf_expr: TokenStream,
+) -> TokenStream {
+    if let Some(entry) = custom_types.lookup(ty) {
+        let repr_ty = entry.repr_type().unwrap_or_else(|_| syn::parse_quote!(()));
+        let try_from_fn = entry.try_from_fn_path();
+        return quote! {
+            {
+                match <#repr_ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) {
+                    Ok((repr_value, used)) => match #try_from_fn(repr_value) {
+                        Ok(value) => Ok((value, used)),
+                        Err(_) => Err(::riff::__private::wire::DecodeError::InvalidValue),
+                    },
+                    Err(error) => Err(error),
+                }
+            }
+        };
+    }
+
+    let Type::Path(type_path) = ty else {
+        return quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) };
+    };
+
+    let Some(segment) = type_path.path.segments.last() else {
+        return quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) };
+    };
+
+    let syn::PathArguments::AngleBracketed(args) = &segment.arguments else {
+        return quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) };
+    };
+
+    match segment.ident.to_string().as_str() {
+        "Vec" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_decode = decode_from_expr(inner, custom_types, quote! { inner_buf });
+                quote! {
+                    {
+                        let buffer = #buf_expr;
+                        let (count, count_used) = <u32 as ::riff::__private::wire::WireDecode>::decode_from(buffer)?;
+                        let count = count as usize;
+                        let initial = (Vec::with_capacity(count), 0usize);
+                        let (values, payload_used) = (0..count).try_fold(initial, |(mut values, offset), _| {
+                            let inner_buf = buffer.get(count_used + offset..).ok_or(::riff::__private::wire::DecodeError::BufferTooSmall)?;
+                            let (value, used) = #inner_decode?;
+                            values.push(value);
+                            Ok((values, offset + used))
+                        })?;
+                        Ok((values, count_used + payload_used))
+                    }
+                }
+            })
+            .unwrap_or_else(|| quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) }),
+        "Option" => args
+            .args
+            .first()
+            .and_then(type_arg)
+            .filter(|inner| contains_custom_types(inner, custom_types))
+            .map(|inner| {
+                let inner_decode = decode_from_expr(inner, custom_types, quote! { inner_buf });
+                quote! {
+                    {
+                        let buffer = #buf_expr;
+                        if buffer.is_empty() {
+                            Err(::riff::__private::wire::DecodeError::BufferTooSmall)
+                        } else {
+                            match buffer[0] {
+                                0 => Ok((None, ::riff::__private::wire::OPTION_FLAG_SIZE)),
+                                1 => {
+                                    let inner_buf = buffer.get(::riff::__private::wire::OPTION_FLAG_SIZE..).ok_or(::riff::__private::wire::DecodeError::BufferTooSmall)?;
+                                    let (value, used) = #inner_decode?;
+                                    Ok((Some(value), ::riff::__private::wire::OPTION_FLAG_SIZE + used))
+                                }
+                                _ => Err(::riff::__private::wire::DecodeError::InvalidBool),
+                            }
+                        }
+                    }
+                }
+            })
+            .unwrap_or_else(|| quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) }),
+        "Result" => {
+            let ok = args.args.first().and_then(type_arg);
+            let err = args.args.iter().nth(1).and_then(type_arg);
+
+            match (ok, err) {
+                (Some(ok), Some(err))
+                    if contains_custom_types(ok, custom_types) || contains_custom_types(err, custom_types) =>
+                {
+                    let ok_decode = decode_from_expr(ok, custom_types, quote! { inner_buf });
+                    let err_decode = decode_from_expr(err, custom_types, quote! { inner_buf });
+                    quote! {
+                        {
+                            let buffer = #buf_expr;
+                            if buffer.is_empty() {
+                                Err(::riff::__private::wire::DecodeError::BufferTooSmall)
+                            } else {
+                                match buffer[0] {
+                                    0 => {
+                                        let inner_buf = buffer.get(::riff::__private::wire::RESULT_TAG_SIZE..).ok_or(::riff::__private::wire::DecodeError::BufferTooSmall)?;
+                                        let (value, used) = #ok_decode?;
+                                        Ok((Ok(value), ::riff::__private::wire::RESULT_TAG_SIZE + used))
+                                    }
+                                    1 => {
+                                        let inner_buf = buffer.get(::riff::__private::wire::RESULT_TAG_SIZE..).ok_or(::riff::__private::wire::DecodeError::BufferTooSmall)?;
+                                        let (value, used) = #err_decode?;
+                                        Ok((Err(value), ::riff::__private::wire::RESULT_TAG_SIZE + used))
+                                    }
+                                    _ => Err(::riff::__private::wire::DecodeError::InvalidBool),
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) },
+            }
+        }
+        _ => quote! { <#ty as ::riff::__private::wire::WireDecode>::decode_from(#buf_expr) },
+    }
+}
+
+pub fn generate_enum_wire_impls(
+    item_enum: &ItemEnum,
+    custom_types: &CustomTypeRegistry,
+) -> TokenStream {
     let enum_name = &item_enum.ident;
     let (impl_generics, ty_generics, where_clause) = item_enum.generics.split_for_impl();
 
@@ -274,6 +656,7 @@ pub fn generate_enum_wire_impls(item_enum: &ItemEnum) -> TokenStream {
         &ty_generics,
         where_clause,
         &variants,
+        custom_types,
     );
 
     let wire_encode_impl = generate_enum_wire_encode_impl(
@@ -282,6 +665,7 @@ pub fn generate_enum_wire_impls(item_enum: &ItemEnum) -> TokenStream {
         &ty_generics,
         where_clause,
         &variants,
+        custom_types,
     );
 
     let wire_decode_impl = generate_enum_wire_decode_impl(
@@ -290,6 +674,7 @@ pub fn generate_enum_wire_impls(item_enum: &ItemEnum) -> TokenStream {
         &ty_generics,
         where_clause,
         &variants,
+        custom_types,
     );
 
     quote! {
@@ -305,6 +690,7 @@ fn generate_enum_wire_size_impl(
     ty_generics: &syn::TypeGenerics,
     where_clause: Option<&syn::WhereClause>,
     variants: &[&syn::Variant],
+    custom_types: &CustomTypeRegistry,
 ) -> TokenStream {
     let all_unit = variants.iter().all(|v| v.fields.is_empty());
 
@@ -315,12 +701,17 @@ fn generate_enum_wire_size_impl(
                 quote! { Self::#variant_name => 4 }
             }
             Fields::Unnamed(fields) => {
+                let field_types: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
                 let field_bindings: Vec<_> = (0..fields.unnamed.len())
                     .map(|i| quote::format_ident!("f{}", i))
                     .collect();
+                let field_wire_sizes = field_bindings
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(binding, ty)| wire_size_expr(ty, custom_types, quote! { #binding }));
                 quote! {
                     Self::#variant_name(#(#field_bindings),*) => {
-                        4 + #( ::riff::__private::wire::WireSize::wire_size(#field_bindings) )+*
+                        4 + #( #field_wire_sizes )+*
                     }
                 }
             }
@@ -330,9 +721,14 @@ fn generate_enum_wire_size_impl(
                     .iter()
                     .filter_map(|f| f.ident.as_ref())
                     .collect();
+                let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
+                let field_wire_sizes = field_names
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(binding, ty)| wire_size_expr(ty, custom_types, quote! { #binding }));
                 quote! {
                     Self::#variant_name { #(#field_names),* } => {
-                        4 + #( ::riff::__private::wire::WireSize::wire_size(#field_names) )+*
+                        4 + #( #field_wire_sizes )+*
                     }
                 }
             }
@@ -368,6 +764,7 @@ fn generate_enum_wire_encode_impl(
     ty_generics: &syn::TypeGenerics,
     where_clause: Option<&syn::WhereClause>,
     variants: &[&syn::Variant],
+    custom_types: &CustomTypeRegistry,
 ) -> TokenStream {
     let encode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
         let variant_name = &variant.ident;
@@ -383,12 +780,22 @@ fn generate_enum_wire_encode_impl(
                 }
             }
             Fields::Unnamed(fields) => {
+                let field_types: Vec<_> = fields.unnamed.iter().map(|f| &f.ty).collect();
                 let field_bindings: Vec<_> = (0..fields.unnamed.len())
                     .map(|i| quote::format_ident!("f{}", i))
                     .collect();
-                let encode_fields = field_bindings.iter().map(|f| {
-                    quote! { written += ::riff::__private::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
-                });
+                let encode_fields = field_bindings
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(binding, ty)| {
+                        let field_buf = quote::format_ident!("__riff_buf_{}", binding);
+                        let encode_expr =
+                            encode_to_expr(ty, custom_types, quote! { #binding }, quote! { #field_buf });
+                        quote! {
+                            let #field_buf = &mut buf[written..];
+                            written += #encode_expr;
+                        }
+                    });
                 quote! {
                     Self::#variant_name(#(#field_bindings),*) => {
                         buf[0..4].copy_from_slice(&(#discriminant_i32 as i32).to_le_bytes());
@@ -402,9 +809,19 @@ fn generate_enum_wire_encode_impl(
                 let field_names: Vec<_> = fields.named.iter()
                     .filter_map(|f| f.ident.as_ref())
                     .collect();
-                let encode_fields = field_names.iter().map(|f| {
-                    quote! { written += ::riff::__private::wire::WireEncode::encode_to(#f, &mut buf[written..]); }
-                });
+                let field_types: Vec<_> = fields.named.iter().map(|f| &f.ty).collect();
+                let encode_fields = field_names
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(binding, ty)| {
+                        let field_buf = quote::format_ident!("__riff_buf_{}", binding);
+                        let encode_expr =
+                            encode_to_expr(ty, custom_types, quote! { #binding }, quote! { #field_buf });
+                        quote! {
+                            let #field_buf = &mut buf[written..];
+                            written += #encode_expr;
+                        }
+                    });
                 quote! {
                     Self::#variant_name { #(#field_names),* } => {
                         buf[0..4].copy_from_slice(&(#discriminant_i32 as i32).to_le_bytes());
@@ -434,6 +851,7 @@ fn generate_enum_wire_decode_impl(
     ty_generics: &syn::TypeGenerics,
     where_clause: Option<&syn::WhereClause>,
     variants: &[&syn::Variant],
+    custom_types: &CustomTypeRegistry,
 ) -> TokenStream {
     let decode_arms = variants.iter().enumerate().map(|(discriminant, variant)| {
         let variant_name = &variant.ident;
@@ -452,12 +870,16 @@ fn generate_enum_wire_decode_impl(
                 let field_bindings: Vec<_> = (0..fields.unnamed.len())
                     .map(|i| quote::format_ident!("f{}", i))
                     .collect();
-                let decode_fields = field_bindings.iter().zip(field_types.iter()).map(|(binding, ty)| {
-                    quote! {
-                        let (#binding, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
-                        position += size;
-                    }
-                });
+                let decode_fields = field_bindings
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(binding, ty)| {
+                        let decode_expr = decode_from_expr(ty, custom_types, quote! { &buf[position..] });
+                        quote! {
+                            let (#binding, size) = #decode_expr?;
+                            position += size;
+                        }
+                    });
                 quote! {
                     #discriminant_i32 => {
                         let mut position = 4usize;
@@ -473,12 +895,16 @@ fn generate_enum_wire_decode_impl(
                 let field_types: Vec<_> = fields.named.iter()
                     .map(|f| &f.ty)
                     .collect();
-                let decode_fields = field_names.iter().zip(field_types.iter()).map(|(name, ty)| {
-                    quote! {
-                        let (#name, size) = <#ty as ::riff::__private::wire::WireDecode>::decode_from(&buf[position..])?;
-                        position += size;
-                    }
-                });
+                let decode_fields = field_names
+                    .iter()
+                    .zip(field_types.iter())
+                    .map(|(name, ty)| {
+                        let decode_expr = decode_from_expr(ty, custom_types, quote! { &buf[position..] });
+                        quote! {
+                            let (#name, size) = #decode_expr?;
+                            position += size;
+                        }
+                    });
                 quote! {
                     #discriminant_i32 => {
                         let mut position = 4usize;

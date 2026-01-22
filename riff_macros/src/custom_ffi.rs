@@ -93,4 +93,3 @@ pub fn custom_ffi_impl(item: TokenStream) -> TokenStream {
 
     expanded.into()
 }
-

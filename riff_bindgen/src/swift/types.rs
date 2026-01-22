@@ -43,7 +43,7 @@ impl TypeMapper {
             Type::Object(name) => NamingConvention::class_name(name),
             Type::Record(name) => NamingConvention::class_name(name),
             Type::Enum(name) => NamingConvention::class_name(name),
-            Type::BoxedTrait(name) => format!("{}Protocol", NamingConvention::class_name(name)),
+            Type::BoxedTrait(name) => NamingConvention::class_name(name),
             Type::Void => "Void".into(),
         }
     }

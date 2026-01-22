@@ -3,6 +3,7 @@ use quote::quote;
 use riff_ffi_rules::naming;
 use syn::{FnArg, ReturnType, Type};
 
+use crate::custom_types;
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
 use crate::returns::{
     OptionReturnAbi, ReturnKind, classify_async_return_abi, classify_return,
@@ -12,6 +13,11 @@ use crate::returns::{
 
 pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
     let input = syn::parse_macro_input!(item as syn::ItemImpl);
+
+    let custom_types = match custom_types::registry_for_current_crate() {
+        Ok(registry) => registry,
+        Err(error) => return error.to_compile_error().into(),
+    };
 
     let self_ty = match input.self_ty.as_ref() {
         Type::Path(path) => path.path.segments.last().map(|s| s.ident.clone()),
@@ -48,9 +54,14 @@ pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
                         ));
                     }
                     if method.sig.asyncness.is_some() {
-                        return generate_async_method_export(&type_name, &type_name_str, method);
+                        return generate_async_method_export(
+                            &type_name,
+                            &type_name_str,
+                            method,
+                            &custom_types,
+                        );
                     }
-                    return generate_method_export(&type_name, &type_name_str, method);
+                    return generate_method_export(&type_name, &type_name_str, method, &custom_types);
                 }
             }
             None
@@ -174,6 +185,7 @@ fn generate_factory_constructor_export(
     type_name: &syn::Ident,
     class_name: &str,
     method: &syn::ImplItemFn,
+    custom_types: &custom_types::CustomTypeRegistry,
 ) -> Option<proc_macro2::TokenStream> {
     let method_name = &method.sig.ident;
     let export_name_str = if method_name == "new" {
@@ -188,7 +200,7 @@ fn generate_factory_constructor_export(
         ffi_params,
         conversions,
         call_args,
-    } = transform_method_params(inputs);
+    } = transform_method_params(inputs, custom_types);
 
     let call_expr = quote! { #type_name::#method_name(#(#call_args),*) };
 
@@ -254,6 +266,7 @@ fn generate_method_export(
     type_name: &syn::Ident,
     class_name: &str,
     method: &syn::ImplItemFn,
+    custom_types: &custom_types::CustomTypeRegistry,
 ) -> Option<proc_macro2::TokenStream> {
     let method_name = &method.sig.ident;
     let export_name = syn::Ident::new(
@@ -270,9 +283,9 @@ fn generate_method_export(
 
     if !has_self {
         if is_factory_constructor(method, type_name) {
-            return generate_factory_constructor_export(type_name, class_name, method);
+            return generate_factory_constructor_export(type_name, class_name, method, custom_types);
         }
-        return None;
+        return generate_static_method_export(type_name, class_name, method, custom_types);
     }
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
@@ -280,7 +293,7 @@ fn generate_method_export(
         ffi_params,
         conversions,
         call_args,
-    } = transform_method_params(other_inputs);
+    } = transform_method_params(other_inputs, custom_types);
 
     let has_conversions = !conversions.is_empty();
 
@@ -322,16 +335,24 @@ fn generate_method_export(
             (body, quote! { #fn_output })
         }
         ReturnKind::WireEncoded(inner_ty) => {
-            let body = if has_conversions {
+            let needs_custom = custom_types::contains_custom_types(&inner_ty, custom_types);
+            let result_ident = syn::Ident::new("result", method_name.span());
+
+            let body = if needs_custom {
+                let wire_ty = custom_types::wire_type_for(&inner_ty, custom_types);
+                let wire_value_ident = syn::Ident::new("__riff_wire_value", method_name.span());
+                let to_wire = custom_types::to_wire_expr_owned(&inner_ty, custom_types, &result_ident);
                 quote! {
                     #(#conversions)*
-                    let result: #inner_ty = #call_expr;
-                    ::riff::__private::FfiBuf::wire_encode(&result)
+                    let #result_ident: #inner_ty = #call_expr;
+                    let #wire_value_ident: #wire_ty = { #to_wire };
+                    ::riff::__private::FfiBuf::wire_encode(&#wire_value_ident)
                 }
             } else {
                 quote! {
-                    let result: #inner_ty = #call_expr;
-                    ::riff::__private::FfiBuf::wire_encode(&result)
+                    #(#conversions)*
+                    let #result_ident: #inner_ty = #call_expr;
+                    ::riff::__private::FfiBuf::wire_encode(&#result_ident)
                 }
             };
             (body, quote! { -> ::riff::__private::FfiBuf<u8> })
@@ -366,10 +387,123 @@ fn generate_method_export(
     }
 }
 
+fn generate_static_method_export(
+    type_name: &syn::Ident,
+    class_name: &str,
+    method: &syn::ImplItemFn,
+    custom_types: &custom_types::CustomTypeRegistry,
+) -> Option<proc_macro2::TokenStream> {
+    let method_name = &method.sig.ident;
+    let export_name = syn::Ident::new(
+        &naming::method_ffi_name(class_name, &method_name.to_string()),
+        method_name.span(),
+    );
+
+    let all_inputs = method.sig.inputs.iter().cloned();
+    let FfiParams {
+        ffi_params,
+        conversions,
+        call_args,
+    } = transform_method_params(all_inputs, custom_types);
+
+    let has_conversions = !conversions.is_empty();
+    let call_expr = quote! { #type_name::#method_name(#(#call_args),*) };
+
+    let return_kind = classify_return(&method.sig.output);
+    let return_kind = if should_wire_encode(&return_kind) {
+        convert_to_wire_encoded(return_kind)
+    } else {
+        return_kind
+    };
+
+    let (body, return_type) = match return_kind {
+        ReturnKind::Unit => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    #call_expr;
+                    ::riff::__private::FfiStatus::OK
+                }
+            } else {
+                quote! {
+                    #call_expr;
+                    ::riff::__private::FfiStatus::OK
+                }
+            };
+            (body, quote! { -> ::riff::__private::FfiStatus })
+        }
+        ReturnKind::Primitive => {
+            let fn_output = &method.sig.output;
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    #call_expr
+                }
+            } else {
+                call_expr
+            };
+            (body, quote! { #fn_output })
+        }
+        ReturnKind::WireEncoded(inner_ty) => {
+            let needs_custom = custom_types::contains_custom_types(&inner_ty, custom_types);
+            let result_ident = syn::Ident::new("result", method_name.span());
+
+            let body = if needs_custom {
+                let wire_ty = custom_types::wire_type_for(&inner_ty, custom_types);
+                let wire_value_ident = syn::Ident::new("__riff_wire_value", method_name.span());
+                if has_conversions {
+                    quote! {
+                        #(#conversions)*
+                        let #result_ident = #call_expr;
+                        let #wire_value_ident: #wire_ty = ::riff::__private::IntoWire::into_wire(#result_ident);
+                        ::riff::__private::FfiBuf::wire_encode(&#wire_value_ident)
+                    }
+                } else {
+                    quote! {
+                        let #result_ident = #call_expr;
+                        let #wire_value_ident: #wire_ty = ::riff::__private::IntoWire::into_wire(#result_ident);
+                        ::riff::__private::FfiBuf::wire_encode(&#wire_value_ident)
+                    }
+                }
+            } else if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    let #result_ident = #call_expr;
+                    ::riff::__private::FfiBuf::wire_encode(&#result_ident)
+                }
+            } else {
+                quote! {
+                    let #result_ident = #call_expr;
+                    ::riff::__private::FfiBuf::wire_encode(&#result_ident)
+                }
+            };
+            (body, quote! { -> ::riff::__private::FfiBuf<u8> })
+        }
+        _ => return None,
+    };
+
+    if ffi_params.is_empty() {
+        Some(quote! {
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name() #return_type {
+                #body
+            }
+        })
+    } else {
+        Some(quote! {
+            #[unsafe(no_mangle)]
+            pub unsafe extern "C" fn #export_name(#(#ffi_params),*) #return_type {
+                #body
+            }
+        })
+    }
+}
+
 fn generate_async_method_export(
     type_name: &syn::Ident,
     class_name: &str,
     method: &syn::ImplItemFn,
+    custom_types: &custom_types::CustomTypeRegistry,
 ) -> Option<proc_macro2::TokenStream> {
     let method_name = &method.sig.ident;
     let method_name_str = method_name.to_string();
@@ -393,7 +527,7 @@ fn generate_async_method_export(
     let free_ident = syn::Ident::new(&format!("{}_free", base_name), method_name.span());
 
     let other_inputs = method.sig.inputs.iter().skip(1).cloned();
-    let params = transform_method_params_async(other_inputs);
+    let params = transform_method_params_async(other_inputs, custom_types);
 
     let fn_output = &method.sig.output;
     let return_abi = classify_async_return_abi(fn_output);

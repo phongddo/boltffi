@@ -1,5 +1,8 @@
 use quote::quote;
+use proc_macro2::Span;
 use syn::{ReturnType, Type};
+
+use crate::custom_types;
 
 pub enum OptionReturnAbi {
     OutValue { inner: syn::Type },
@@ -198,10 +201,32 @@ pub fn get_async_complete_conversion(abi: &AsyncReturnAbi) -> proc_macro2::Token
             if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::OK; }
             result
         },
-        AsyncReturnAbi::WireEncoded { .. } => quote! {
-            if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::OK; }
-            ::riff::__private::FfiBuf::wire_encode(&result)
-        },
+        AsyncReturnAbi::WireEncoded { rust_type } => {
+            let registry = custom_types::registry_for_current_crate().ok();
+            let rust_type: syn::Type = syn::parse2(rust_type.clone())
+                .unwrap_or_else(|_| syn::parse_quote!(::core::ffi::c_void));
+            let needs_custom = registry
+                .as_ref()
+                .is_some_and(|r| custom_types::contains_custom_types(&rust_type, r));
+
+            if needs_custom {
+                let registry = registry.expect("custom types registry missing");
+                let wire_ty = custom_types::wire_type_for(&rust_type, &registry);
+                let result_ident = syn::Ident::new("result", Span::call_site());
+                let wire_value_ident = syn::Ident::new("__riff_wire_value", Span::call_site());
+                let to_wire = custom_types::to_wire_expr_owned(&rust_type, &registry, &result_ident);
+                quote! {
+                    if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::OK; }
+                    let #wire_value_ident: #wire_ty = { #to_wire };
+                    ::riff::__private::FfiBuf::wire_encode(&#wire_value_ident)
+                }
+            } else {
+                quote! {
+                    if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::OK; }
+                    ::riff::__private::FfiBuf::wire_encode(&result)
+                }
+            }
+        }
     }
 }
 

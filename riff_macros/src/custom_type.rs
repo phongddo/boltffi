@@ -1,0 +1,103 @@
+use proc_macro::TokenStream;
+use quote::{format_ident, quote};
+use syn::parse::Parse;
+
+struct CustomTypeSpec {
+    visibility: syn::Visibility,
+    name: syn::Ident,
+    remote: syn::Type,
+    repr: syn::Type,
+    error: syn::Type,
+    into_ffi: syn::Expr,
+    try_from_ffi: syn::Expr,
+}
+
+impl Parse for CustomTypeSpec {
+    fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
+        let visibility: syn::Visibility = input.parse()?;
+        let name: syn::Ident = input.parse()?;
+        input.parse::<syn::Token![,]>()?;
+
+        let mut remote: Option<syn::Type> = None;
+        let mut repr: Option<syn::Type> = None;
+        let mut error: Option<syn::Type> = None;
+        let mut into_ffi: Option<syn::Expr> = None;
+        let mut try_from_ffi: Option<syn::Expr> = None;
+
+        while !input.is_empty() {
+            let key: syn::Ident = input.parse()?;
+            input.parse::<syn::Token![=]>()?;
+            match key.to_string().as_str() {
+                "remote" => {
+                    remote = Some(input.parse()?);
+                }
+                "repr" => {
+                    repr = Some(input.parse()?);
+                }
+                "error" => {
+                    error = Some(input.parse()?);
+                }
+                "into_ffi" => {
+                    into_ffi = Some(input.parse()?);
+                }
+                "try_from_ffi" => {
+                    try_from_ffi = Some(input.parse()?);
+                }
+                _ => {
+                    let _: syn::Expr = input.parse()?;
+                }
+            }
+
+            if input.peek(syn::Token![,]) {
+                input.parse::<syn::Token![,]>()?;
+            }
+        }
+
+        let remote = remote.ok_or_else(|| input.error("custom_type!: missing `remote = ...`"))?;
+        let repr = repr.ok_or_else(|| input.error("custom_type!: missing `repr = ...`"))?;
+        let error = error.unwrap_or_else(|| syn::parse_quote!(::riff::CustomTypeConversionError));
+        let into_ffi = into_ffi.ok_or_else(|| input.error("custom_type!: missing `into_ffi = ...`"))?;
+        let try_from_ffi =
+            try_from_ffi.ok_or_else(|| input.error("custom_type!: missing `try_from_ffi = ...`"))?;
+
+        Ok(Self {
+            visibility,
+            name,
+            remote,
+            repr,
+            error,
+            into_ffi,
+            try_from_ffi,
+        })
+    }
+}
+
+pub fn custom_type_impl(item: TokenStream) -> TokenStream {
+    let spec = syn::parse_macro_input!(item as CustomTypeSpec);
+
+    let CustomTypeSpec {
+        visibility,
+        name,
+        remote,
+        repr,
+        error,
+        into_ffi,
+        try_from_ffi,
+    } = spec;
+
+    let into_fn_name = format_ident!("__riff_custom_type_{}_into_ffi", name);
+    let try_from_fn_name = format_ident!("__riff_custom_type_{}_try_from_ffi", name);
+
+    TokenStream::from(quote! {
+        #[doc(hidden)]
+        #visibility fn #into_fn_name(value: &#remote) -> #repr {
+            (#into_ffi)(value)
+        }
+
+        #[doc(hidden)]
+        #visibility fn #try_from_fn_name(value: #repr) -> ::core::result::Result<#remote, #error> {
+            (#try_from_ffi)(value)
+        }
+    })
+}
+
