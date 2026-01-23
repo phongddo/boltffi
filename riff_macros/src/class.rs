@@ -61,7 +61,12 @@ pub fn ffi_class_impl(item: TokenStream) -> TokenStream {
                             &custom_types,
                         );
                     }
-                    return generate_method_export(&type_name, &type_name_str, method, &custom_types);
+                    return generate_method_export(
+                        &type_name,
+                        &type_name_str,
+                        method,
+                        &custom_types,
+                    );
                 }
             }
             None
@@ -283,7 +288,12 @@ fn generate_method_export(
 
     if !has_self {
         if is_factory_constructor(method, type_name) {
-            return generate_factory_constructor_export(type_name, class_name, method, custom_types);
+            return generate_factory_constructor_export(
+                type_name,
+                class_name,
+                method,
+                custom_types,
+            );
         }
         return generate_static_method_export(type_name, class_name, method, custom_types);
     }
@@ -341,7 +351,8 @@ fn generate_method_export(
             let body = if needs_custom {
                 let wire_ty = custom_types::wire_type_for(&inner_ty, custom_types);
                 let wire_value_ident = syn::Ident::new("__riff_wire_value", method_name.span());
-                let to_wire = custom_types::to_wire_expr_owned(&inner_ty, custom_types, &result_ident);
+                let to_wire =
+                    custom_types::to_wire_expr_owned(&inner_ty, custom_types, &result_ident);
                 quote! {
                     #(#conversions)*
                     let #result_ident: #inner_ty = #call_expr;

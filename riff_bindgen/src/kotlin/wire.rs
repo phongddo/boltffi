@@ -118,18 +118,13 @@ fn decode_custom(name: &str) -> KotlinCodec {
 
 fn decode_builtin(id: BuiltinId) -> KotlinCodec {
     match id {
-        BuiltinId::Duration => KotlinCodec::fixed(
-            format!("wire.readDuration({})", OFFSET_PLACEHOLDER),
-            12,
-        ),
-        BuiltinId::SystemTime => KotlinCodec::fixed(
-            format!("wire.readInstant({})", OFFSET_PLACEHOLDER),
-            12,
-        ),
-        BuiltinId::Uuid => KotlinCodec::fixed(
-            format!("wire.readUuid({})", OFFSET_PLACEHOLDER),
-            16,
-        ),
+        BuiltinId::Duration => {
+            KotlinCodec::fixed(format!("wire.readDuration({})", OFFSET_PLACEHOLDER), 12)
+        }
+        BuiltinId::SystemTime => {
+            KotlinCodec::fixed(format!("wire.readInstant({})", OFFSET_PLACEHOLDER), 12)
+        }
+        BuiltinId::Uuid => KotlinCodec::fixed(format!("wire.readUuid({})", OFFSET_PLACEHOLDER), 16),
         BuiltinId::Url => KotlinCodec::variable(format!("wire.readUri({})", OFFSET_PLACEHOLDER)),
     }
 }
@@ -330,11 +325,9 @@ fn encode_vec(inner: &Type, name: &str, module: &Module) -> KotlinEncoder {
 
     let size_expr = match inner {
         Type::Primitive(p) => format!("(4 + {}.size * {})", name, p.size_bytes()),
-        Type::Builtin(id) if id.fixed_wire_size().is_some() => format!(
-            "(4 + {}.size * {})",
-            name,
-            id.fixed_wire_size().unwrap()
-        ),
+        Type::Builtin(id) if id.fixed_wire_size().is_some() => {
+            format!("(4 + {}.size * {})", name, id.fixed_wire_size().unwrap())
+        }
         Type::Record(_) if record_struct_size.is_some() => {
             format!("(4 + {}.size * {})", name, record_struct_size.unwrap())
         }

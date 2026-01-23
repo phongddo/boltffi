@@ -574,7 +574,7 @@ mod records {
         let original = User {
             id: 42,
             name: "Alice".to_string(),
-            score: 3.14,
+            score: 3.5,
         };
 
         assert!(!User::is_fixed_size());
@@ -925,8 +925,8 @@ mod records {
             short: -1000,
             int: 42,
             long: i64::MAX,
-            float: 3.14,
-            double: 2.718281828,
+            float: 3.5,
+            double: 2.5,
             text: "kitchen sink".to_string(),
             maybe: Some(100),
             list: vec![1, 2, 3],
@@ -1149,7 +1149,7 @@ mod enums {
         let (decoded, _) = Value::decode_from(&buf).unwrap();
         assert_eq!(decoded, int_val);
 
-        let float_val = Value::Float(3.14);
+        let float_val = Value::Float(3.5);
         assert_eq!(float_val.wire_size(), 4 + 8);
         let mut buf = vec![0u8; float_val.wire_size()];
         float_val.encode_to(&mut buf);

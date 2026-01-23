@@ -56,9 +56,10 @@ impl Parse for CustomTypeSpec {
         let remote = remote.ok_or_else(|| input.error("custom_type!: missing `remote = ...`"))?;
         let repr = repr.ok_or_else(|| input.error("custom_type!: missing `repr = ...`"))?;
         let error = error.unwrap_or_else(|| syn::parse_quote!(::riff::CustomTypeConversionError));
-        let into_ffi = into_ffi.ok_or_else(|| input.error("custom_type!: missing `into_ffi = ...`"))?;
-        let try_from_ffi =
-            try_from_ffi.ok_or_else(|| input.error("custom_type!: missing `try_from_ffi = ...`"))?;
+        let into_ffi =
+            into_ffi.ok_or_else(|| input.error("custom_type!: missing `into_ffi = ...`"))?;
+        let try_from_ffi = try_from_ffi
+            .ok_or_else(|| input.error("custom_type!: missing `try_from_ffi = ...`"))?;
 
         Ok(Self {
             visibility,
@@ -100,4 +101,3 @@ pub fn custom_type_impl(item: TokenStream) -> TokenStream {
         }
     })
 }
-

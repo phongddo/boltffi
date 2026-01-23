@@ -76,7 +76,11 @@ enum Commands {
         #[arg(value_enum)]
         target: Option<GenerateTargetArg>,
 
-        #[arg(short, long, help = "Override output directory (default comes from riff.toml)")]
+        #[arg(
+            short,
+            long,
+            help = "Override output directory (default comes from riff.toml)"
+        )]
         output: Option<PathBuf>,
     },
 
@@ -269,9 +273,7 @@ fn execute_command(command: Commands) -> Result<()> {
             run_build(&config, options).map(|_| ())
         }
 
-        Commands::Pack {
-            target,
-        } => {
+        Commands::Pack { target } => {
             let config = load_config()?;
             let command = match target {
                 PackTargetArg::Apple {

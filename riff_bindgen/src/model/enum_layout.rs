@@ -38,29 +38,27 @@ impl DataEnumLayout {
             .variants
             .iter()
             .map(|variant| {
-                variant
-                    .fields
-                    .is_empty()
-                    .then_some(DataEnumVariantLayout {
+                if variant.fields.is_empty() {
+                    DataEnumVariantLayout {
                         field_offsets: Vec::new(),
                         payload_layout: Layout::new(0, 1),
-                    })
-                    .unwrap_or_else(|| {
-                        let struct_layout = StructLayout::from_layouts(
-                            variant
-                                .fields
-                                .iter()
-                                .map(|field| field.field_type.c_layout()),
-                        );
+                    }
+                } else {
+                    let struct_layout = StructLayout::from_layouts(
+                        variant
+                            .fields
+                            .iter()
+                            .map(|field| field.field_type.c_layout()),
+                    );
 
-                        DataEnumVariantLayout {
-                            field_offsets: struct_layout.offsets().collect(),
-                            payload_layout: Layout {
-                                size: struct_layout.total_size(),
-                                alignment: struct_layout.alignment(),
-                            },
-                        }
-                    })
+                    DataEnumVariantLayout {
+                        field_offsets: struct_layout.offsets().collect(),
+                        payload_layout: Layout {
+                            size: struct_layout.total_size(),
+                            alignment: struct_layout.alignment(),
+                        },
+                    }
+                }
             })
             .collect();
 

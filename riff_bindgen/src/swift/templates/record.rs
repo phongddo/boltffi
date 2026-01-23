@@ -22,7 +22,9 @@ impl RecordTemplate {
             .fields
             .iter()
             .enumerate()
-            .map(|(index, field)| Self::make_field(field, module, &mut default_expr_resolver, index))
+            .map(|(index, field)| {
+                Self::make_field(field, module, &mut default_expr_resolver, index)
+            })
             .collect();
         let is_blittable = record
             .fields
@@ -152,8 +154,10 @@ impl<'a> DefaultExprResolver<'a> {
             .then(|| NamingConvention::class_name(record_name))
             .map(|name| format!("{}()", name));
 
-        self.records
-            .insert(record_name.to_string(), DefaultExprState::Known(default_expr.clone()));
+        self.records.insert(
+            record_name.to_string(),
+            DefaultExprState::Known(default_expr.clone()),
+        );
 
         default_expr
     }
@@ -168,64 +172,64 @@ impl<'a> DefaultExprResolver<'a> {
         self.enums
             .insert(enum_name.to_string(), DefaultExprState::Visiting);
 
-        let default_expr = self
-            .module
-            .find_enum(enum_name)
-            .and_then(|enumeration| {
-                if !enumeration.is_data_enum() {
-                    return enumeration
-                        .variants
-                        .first()
-                        .map(|variant| NamingConvention::enum_case_name(&variant.name))
-                        .map(|case_name| format!(".{}", case_name));
+        let default_expr = self.module.find_enum(enum_name).and_then(|enumeration| {
+            if !enumeration.is_data_enum() {
+                return enumeration
+                    .variants
+                    .first()
+                    .map(|variant| NamingConvention::enum_case_name(&variant.name))
+                    .map(|case_name| format!(".{}", case_name));
+            }
+
+            enumeration.variants.iter().find_map(|variant| {
+                if variant.fields.is_empty() {
+                    return Some(format!(
+                        ".{}",
+                        NamingConvention::enum_case_name(&variant.name)
+                    ));
                 }
 
-                enumeration.variants.iter().find_map(|variant| {
-                    if variant.fields.is_empty() {
-                        return Some(format!(
-                            ".{}",
-                            NamingConvention::enum_case_name(&variant.name)
-                        ));
-                    }
+                let is_single_tuple =
+                    variant.fields.len() == 1 && variant.fields[0].name.starts_with('_');
+                let field_defaults: Vec<Option<String>> = variant
+                    .fields
+                    .iter()
+                    .map(|field| self.default_expr(&field.field_type))
+                    .collect();
 
-                    let is_single_tuple = variant.fields.len() == 1 && variant.fields[0].name.starts_with('_');
-                    let field_defaults: Vec<Option<String>> = variant
-                        .fields
-                        .iter()
-                        .map(|field| self.default_expr(&field.field_type))
-                        .collect();
+                if field_defaults.iter().any(|value| value.is_none()) {
+                    return None;
+                }
 
-                    if field_defaults.iter().any(|value| value.is_none()) {
-                        return None;
-                    }
+                let case_name = NamingConvention::enum_case_name(&variant.name);
+                let defaults = field_defaults.into_iter().flatten().collect::<Vec<_>>();
 
-                    let case_name = NamingConvention::enum_case_name(&variant.name);
-                    let defaults = field_defaults.into_iter().flatten().collect::<Vec<_>>();
+                if is_single_tuple {
+                    return defaults
+                        .first()
+                        .cloned()
+                        .map(|default_value| format!(".{}({})", case_name, default_value));
+                }
 
-                    if is_single_tuple {
-                        return defaults
-                            .first()
-                            .cloned()
-                            .map(|default_value| format!(".{}({})", case_name, default_value));
-                    }
+                let labeled_defaults = variant
+                    .fields
+                    .iter()
+                    .zip(defaults.iter())
+                    .map(|(field, default_value)| {
+                        let swift_name = NamingConvention::param_name(&field.name);
+                        format!("{}: {}", swift_name, default_value)
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ");
 
-                    let labeled_defaults = variant
-                        .fields
-                        .iter()
-                        .zip(defaults.iter())
-                        .map(|(field, default_value)| {
-                            let swift_name = NamingConvention::param_name(&field.name);
-                            format!("{}: {}", swift_name, default_value)
-                        })
-                        .collect::<Vec<_>>()
-                        .join(", ");
+                Some(format!(".{}({})", case_name, labeled_defaults))
+            })
+        });
 
-                    Some(format!(".{}({})", case_name, labeled_defaults))
-                })
-            });
-
-        self.enums
-            .insert(enum_name.to_string(), DefaultExprState::Known(default_expr.clone()));
+        self.enums.insert(
+            enum_name.to_string(),
+            DefaultExprState::Known(default_expr.clone()),
+        );
 
         default_expr
     }
@@ -235,7 +239,9 @@ fn builtin_default_expr(builtin: BuiltinId) -> Option<String> {
     match builtin {
         BuiltinId::Duration => Some("0".to_string()),
         BuiltinId::SystemTime => Some("Date(timeIntervalSince1970: 0)".to_string()),
-        BuiltinId::Uuid => Some("UUID(uuidString: \"00000000-0000-0000-0000-000000000000\")!".to_string()),
+        BuiltinId::Uuid => {
+            Some("UUID(uuidString: \"00000000-0000-0000-0000-000000000000\")!".to_string())
+        }
         BuiltinId::Url => Some("URL(string: \"about:blank\")!".to_string()),
     }
 }

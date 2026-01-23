@@ -15,12 +15,16 @@ impl TypeMapper {
             Type::Slice(inner) | Type::Vec(inner) => Self::map_sequence(inner),
             Type::MutSlice(inner) => Self::map_mutable_sequence(inner),
             Type::Option(inner) => format!("{}?", Self::map_type(inner)),
-            Type::Result { ok, err } => format!("RiffResult<{}, {}>", Self::map_type(ok), Self::map_type(err)),
+            Type::Result { ok, err } => format!(
+                "RiffResult<{}, {}>",
+                Self::map_type(ok),
+                Self::map_type(err)
+            ),
             Type::Closure(sig) => {
                 let params = sig
                     .params
                     .iter()
-                    .map(|p| Self::map_type(p))
+                    .map(Self::map_type)
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret = if sig.returns.is_void() {
@@ -107,7 +111,9 @@ impl TypeMapper {
                 Type::Record(_) => "ByteBuffer".into(),
                 _ => "Long".into(),
             },
-            Type::Option(inner) if matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_)) => {
+            Type::Option(inner)
+                if matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_)) =>
+            {
                 "Long".into()
             }
             Type::Option(inner) => format!("{}?", Self::jni_type(inner)),

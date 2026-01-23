@@ -178,7 +178,8 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
             let encode_body = if needs_custom {
                 let wire_ty = custom_types::wire_type_for(&inner_ty, &custom_types);
                 let wire_value_ident = syn::Ident::new("__riff_wire_value", fn_name.span());
-                let to_wire = custom_types::to_wire_expr_owned(&inner_ty, &custom_types, &result_ident);
+                let to_wire =
+                    custom_types::to_wire_expr_owned(&inner_ty, &custom_types, &result_ident);
                 quote! {
                     #(#conversions)*
                     let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
@@ -226,7 +227,10 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
     TokenStream::from(expanded)
 }
 
-fn generate_async_export(input: &ItemFn, custom_types: &custom_types::CustomTypeRegistry) -> TokenStream {
+fn generate_async_export(
+    input: &ItemFn,
+    custom_types: &custom_types::CustomTypeRegistry,
+) -> TokenStream {
     let fn_name = &input.sig.ident;
     let fn_inputs = &input.sig.inputs;
     let fn_output = &input.sig.output;

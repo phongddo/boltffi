@@ -45,7 +45,9 @@ fn pack_apple(config: &Config, options: PackAppleOptions) -> Result<()> {
     }
 
     if !options.no_build {
-        run_step("Building Apple targets", || build_apple_targets(config, options.release))?;
+        run_step("Building Apple targets", || {
+            build_apple_targets(config, options.release)
+        })?;
     }
 
     let layout = options.layout.unwrap_or_else(|| config.apple_spm_layout());
@@ -99,8 +101,10 @@ fn pack_apple(config: &Config, options: PackAppleOptions) -> Result<()> {
                             existing_xcframework_checksum(config)
                         })
                     })?;
-                let version =
-                    options.version.or_else(detect_version).unwrap_or_else(|| "0.1.0".to_string());
+                let version = options
+                    .version
+                    .or_else(detect_version)
+                    .unwrap_or_else(|| "0.1.0".to_string());
                 (Some(checksum), Some(version))
             }
         };
@@ -143,7 +147,9 @@ fn pack_apple(config: &Config, options: PackAppleOptions) -> Result<()> {
 
 fn pack_android(config: &Config, options: PackAndroidOptions) -> Result<()> {
     if !options.no_build {
-        run_step("Building Android targets", || build_android_targets(config, options.release))?;
+        run_step("Building Android targets", || {
+            build_android_targets(config, options.release)
+        })?;
     }
 
     if options.regenerate {
@@ -269,10 +275,9 @@ fn discover_built_libraries(library_name: &str, release: bool) -> Vec<BuiltLibra
 }
 
 fn existing_xcframework_checksum(config: &Config) -> Result<String> {
-    let xcframework_zip = config.apple_xcframework_output().join(format!(
-        "{}.xcframework.zip",
-        config.xcframework_name()
-    ));
+    let xcframework_zip = config
+        .apple_xcframework_output()
+        .join(format!("{}.xcframework.zip", config.xcframework_name()));
 
     if xcframework_zip.exists() {
         return compute_checksum(&xcframework_zip);
@@ -299,8 +304,7 @@ fn detect_version() -> Option<String> {
 fn run_step<T>(label: &str, action: impl FnOnce() -> Result<T>) -> Result<T> {
     print!("{}... ", label);
     io::stdout().flush().ok();
-    action().map(|value| {
+    action().inspect(|_value| {
         println!("✓");
-        value
     })
 }

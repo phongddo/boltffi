@@ -31,7 +31,11 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         trait_name.span(),
     );
     let create_fn = syn::Ident::new(
-        &format!("{}_create_{}_handle", naming::ffi_prefix(), trait_name_snake),
+        &format!(
+            "{}_create_{}_handle",
+            naming::ffi_prefix(),
+            trait_name_snake
+        ),
         trait_name.span(),
     );
 
@@ -169,7 +173,10 @@ fn expand_method(
                 ffi.push(lowering.ffi_param);
                 rust.push(lowering.rust_param);
                 call.push(lowering.call_arg);
-                lowering.prelude.into_iter().for_each(|stmt| preludes.push(stmt));
+                lowering
+                    .prelude
+                    .into_iter()
+                    .for_each(|stmt| preludes.push(stmt));
                 (ffi, rust, call, preludes)
             },
         );
@@ -480,8 +487,7 @@ fn lower_callback_param(
 fn is_ffi_primitive(type_str: &str) -> bool {
     matches!(
         type_str,
-        "i8"
-            | "i16"
+        "i8" | "i16"
             | "i32"
             | "i64"
             | "u8"

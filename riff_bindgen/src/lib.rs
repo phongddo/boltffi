@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod build;
 pub mod cheader;
 pub mod kotlin;
@@ -71,7 +73,11 @@ mod tests {
                 Type::Primitive(Primitive::I64),
             ))
             .with_record(event)
-            .with_function(Function::new("echo_instant").with_param(Parameter::new("value", instant.clone())).with_output(instant))
+            .with_function(
+                Function::new("echo_instant")
+                    .with_param(Parameter::new("value", instant.clone()))
+                    .with_output(instant),
+            )
     }
 
     #[test]
@@ -146,11 +152,7 @@ mod tests {
     fn test_custom_type_codegen_swift_preamble() {
         let module = create_test_module_with_custom_type();
         let preamble = swift::Swift::render_preamble(&module);
-        assert!(preamble.contains("public struct UtcDateTime"));
-        assert!(preamble.contains("public let value: Int64"));
-        assert!(preamble.contains("public init(_ value: Int64)"));
-        assert!(preamble.contains("extension UtcDateTime: WireEncodable"));
-        assert!(preamble.contains("static func decode(wireBuffer wire: WireBuffer, at offset: Int)"));
+        assert!(preamble.contains("public typealias UtcDateTime = Int64"));
     }
 
     #[test]

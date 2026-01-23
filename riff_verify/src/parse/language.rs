@@ -18,7 +18,7 @@ pub trait LanguageParser: Send {
     fn can_parse(&self, path: &Path) -> bool {
         path.extension()
             .and_then(|ext| ext.to_str())
-            .map(|ext| self.file_extensions().iter().any(|e| *e == ext))
+            .map(|ext| self.file_extensions().contains(&ext))
             .unwrap_or(false)
     }
 }

@@ -91,7 +91,10 @@ impl Swift {
         Self::render_module_with_ffi_module_name(module, None)
     }
 
-    pub fn render_module_with_ffi_module_name(module: &Module, ffi_module_name: Option<String>) -> String {
+    pub fn render_module_with_ffi_module_name(
+        module: &Module,
+        ffi_module_name: Option<String>,
+    ) -> String {
         let mut sections = Vec::new();
 
         sections.push(

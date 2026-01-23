@@ -158,6 +158,12 @@ fn wire_encode_data_expr(ty: &Type, module: &Module, value_name: &str) -> String
 fn to_camel_case(name: &str) -> String {
     name.chars()
         .enumerate()
-        .map(|(index, ch)| (index == 0).then_some(ch.to_ascii_lowercase()).unwrap_or(ch))
+        .map(|(index, ch)| {
+            if index == 0 {
+                ch.to_ascii_lowercase()
+            } else {
+                ch
+            }
+        })
         .collect()
 }

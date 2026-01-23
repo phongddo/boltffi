@@ -9,7 +9,9 @@ use serde::Deserialize;
 use syn::{LitStr, Type};
 
 fn runner_dir(crate_path: &Path) -> PathBuf {
-    crate_path.join("target").join("riff_bindgen_type_resolution")
+    crate_path
+        .join("target")
+        .join("riff_bindgen_type_resolution")
 }
 
 fn write_if_changed(path: &Path, contents: &str) -> Result<(), String> {

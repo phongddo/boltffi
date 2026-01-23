@@ -32,18 +32,18 @@ impl Rule for BufferBoundsCheck {
             }
 
             Effect::BufferWrite { pointer, size } => {
-                if let Some(alloc_info) = allocations.get(pointer) {
-                    if !capacities_compatible(&alloc_info.capacity, size) {
-                        violations.push(Violation::new(
-                            ViolationKind::BufferOverflow {
-                                pointer: *pointer,
-                                capacity: alloc_info.capacity.clone(),
-                                access_size: size.clone(),
-                            },
-                            self.id(),
-                            entry.span.clone(),
-                        ));
-                    }
+                if let Some(alloc_info) = allocations.get(pointer)
+                    && !capacities_compatible(&alloc_info.capacity, size)
+                {
+                    violations.push(Violation::new(
+                        ViolationKind::BufferOverflow {
+                            pointer: *pointer,
+                            capacity: alloc_info.capacity.clone(),
+                            access_size: size.clone(),
+                        },
+                        self.id(),
+                        entry.span.clone(),
+                    ));
                 }
             }
 

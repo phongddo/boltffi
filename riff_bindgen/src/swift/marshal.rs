@@ -49,7 +49,9 @@ impl SwiftType {
                 inner: Box::new(Self::from_model(inner)),
                 mutable: true,
             },
-            Type::Vec(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => Self::Bytes,
+            Type::Vec(inner) if matches!(inner.as_ref(), Type::Primitive(Primitive::U8)) => {
+                Self::Bytes
+            }
             Type::Vec(inner) => Self::Vec(Box::new(Self::from_model(inner))),
             Type::Option(inner) => Self::Option(Box::new(Self::from_model(inner))),
             Type::Result { ok, .. } => Self::Result {
@@ -61,7 +63,7 @@ impl SwiftType {
             Type::Object(name) => Self::Object(name.clone()),
             Type::BoxedTrait(name) => Self::BoxedTrait(name.clone()),
             Type::Closure(sig) => Self::Closure {
-                params: sig.params.iter().map(|p| Self::from_model(p)).collect(),
+                params: sig.params.iter().map(Self::from_model).collect(),
                 returns: Box::new(Self::from_model(&sig.returns)),
             },
         }
@@ -267,7 +269,10 @@ impl ParamConversion {
             SwiftType::Option(inner)
                 if matches!(
                     inner.as_ref(),
-                    SwiftType::Builtin(_) | SwiftType::Record(_) | SwiftType::Enum(_) | SwiftType::Vec(_)
+                    SwiftType::Builtin(_)
+                        | SwiftType::Record(_)
+                        | SwiftType::Enum(_)
+                        | SwiftType::Vec(_)
                 ) =>
             {
                 (
@@ -403,13 +408,11 @@ impl ReturnAbi {
             | Type::Custom { .. }
             | Type::Enum(_)
             | Type::Vec(_)
-            | Type::Option(_) => {
-                Self::WireEncoded {
-                    swift_type: SwiftType::from_model(ty).swift_type(),
-                    decode_expr: wire::decode_value_at_offset(ty, module, "0"),
-                    throws: false,
-                }
-            }
+            | Type::Option(_) => Self::WireEncoded {
+                swift_type: SwiftType::from_model(ty).swift_type(),
+                decode_expr: wire::decode_value_at_offset(ty, module, "0"),
+                throws: false,
+            },
             _ => Self::Direct {
                 swift_type: SwiftType::from_model(ty).swift_type(),
                 conversion: None,

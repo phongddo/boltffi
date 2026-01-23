@@ -15,8 +15,8 @@ use super::layout::{KotlinBufferRead, KotlinBufferWrite};
 use super::marshal::OptionView;
 use super::primitives;
 use super::return_abi::ReturnAbi;
-use super::{FactoryStyle, KotlinOptions, NamingConvention, TypeMapper};
 use super::wire;
+use super::{FactoryStyle, KotlinOptions, NamingConvention, TypeMapper};
 
 use self::MethodImpl::{AsyncMethod, SyncMethod};
 
@@ -74,15 +74,17 @@ impl PreambleTemplate {
             .iter()
             .any(|t| t.async_methods().count() > 0);
 
-        let coroutine_imports = has_async_callbacks
-            .then(|| {
+        let coroutine_imports = if has_async_callbacks {
+            {
                 vec![
                     "kotlinx.coroutines.DelicateCoroutinesApi".to_string(),
                     "kotlinx.coroutines.GlobalScope".to_string(),
                     "kotlinx.coroutines.launch".to_string(),
                 ]
-            })
-            .unwrap_or_default();
+            }
+        } else {
+            Default::default()
+        };
 
         builtin_imports
             .into_iter()
@@ -109,10 +111,9 @@ impl PreambleTemplate {
             });
 
             class.methods.iter().for_each(|method| {
-                method
-                    .inputs
-                    .iter()
-                    .for_each(|param| Self::collect_builtins_from_type(&param.param_type, &mut used));
+                method.inputs.iter().for_each(|param| {
+                    Self::collect_builtins_from_type(&param.param_type, &mut used)
+                });
                 Self::collect_builtins_from_return(&method.returns, &mut used);
             });
 
@@ -121,17 +122,18 @@ impl PreambleTemplate {
             });
         });
 
-        module
-            .records
-            .iter()
-            .for_each(|record| record.fields.iter().for_each(|f| Self::collect_builtins_from_type(&f.field_type, &mut used)));
+        module.records.iter().for_each(|record| {
+            record
+                .fields
+                .iter()
+                .for_each(|f| Self::collect_builtins_from_type(&f.field_type, &mut used))
+        });
 
         module.enums.iter().for_each(|enumeration| {
             enumeration.variants.iter().for_each(|variant| {
-                variant
-                    .fields
-                    .iter()
-                    .for_each(|field| Self::collect_builtins_from_type(&field.field_type, &mut used));
+                variant.fields.iter().for_each(|field| {
+                    Self::collect_builtins_from_type(&field.field_type, &mut used)
+                });
             });
         });
 
@@ -182,10 +184,9 @@ impl PreambleTemplate {
             Type::Builtin(id) => {
                 out.insert(*id);
             }
-            Type::Vec(inner)
-            | Type::Option(inner)
-            | Type::Slice(inner)
-            | Type::MutSlice(inner) => Self::collect_builtins_from_type(inner, out),
+            Type::Vec(inner) | Type::Option(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {
+                Self::collect_builtins_from_type(inner, out)
+            }
             Type::Result { ok, err } => {
                 Self::collect_builtins_from_type(ok, out);
                 Self::collect_builtins_from_type(err, out);
@@ -224,7 +225,9 @@ impl CustomTypeView {
 
         let repr_codec = wire::decode_type(&custom_type.repr, module);
         let repr_decode_pair_expr = match repr_codec.size_kind {
-            wire::SizeKind::Fixed(size) => format!("({}) to {}", repr_codec.value_at("offset"), size),
+            wire::SizeKind::Fixed(size) => {
+                format!("({}) to {}", repr_codec.value_at("offset"), size)
+            }
             wire::SizeKind::Variable => repr_codec.reader_expr.replace("OFFSET", "offset"),
         };
 
@@ -408,7 +411,7 @@ impl DataEnumCodecTemplate {
                                 .name
                                 .chars()
                                 .nth(1)
-                                .map_or(false, |c| c.is_ascii_digit());
+                                .is_some_and(|c| c.is_ascii_digit());
                         let param_name = if field_is_tuple {
                             format!("value{}", field_index)
                         } else {
@@ -496,7 +499,11 @@ impl SealedEnumTemplate {
                     .iter()
                     .map(|custom| NamingConvention::class_name(&custom.name)),
             )
-            .chain(["Duration", "Instant", "UUID", "URI"].into_iter().map(str::to_string))
+            .chain(
+                ["Duration", "Instant", "UUID", "URI"]
+                    .into_iter()
+                    .map(str::to_string),
+            )
             .collect::<HashSet<_>>();
 
         let mut used_variant_names = HashSet::<String>::new();
@@ -508,7 +515,7 @@ impl SealedEnumTemplate {
             .map(|(tag, variant)| {
                 let is_tuple = variant.fields.iter().any(|f| {
                     f.name.starts_with('_')
-                        && f.name.chars().nth(1).map_or(false, |c| c.is_ascii_digit())
+                        && f.name.chars().nth(1).is_some_and(|c| c.is_ascii_digit())
                 });
 
                 let base_variant_name = NamingConvention::class_name(&variant.name);
@@ -538,7 +545,7 @@ impl SealedEnumTemplate {
                                     .name
                                     .chars()
                                     .nth(1)
-                                    .map_or(false, |c| c.is_ascii_digit());
+                                    .is_some_and(|c| c.is_ascii_digit());
                             let name = if field_is_tuple {
                                 format!("value{}", i)
                             } else {
@@ -745,9 +752,7 @@ impl<'a> KotlinDefaults<'a> {
             | Type::Vec(_)
             | Type::Slice(_)
             | Type::MutSlice(_)
-            | Type::Option(_) => {
-                Some(TypeMapper::default_value(ty))
-            }
+            | Type::Option(_) => Some(TypeMapper::default_value(ty)),
             Type::Void => Some("Unit".to_string()),
             Type::Result { ok, .. } => self
                 .default_expr(ok)
@@ -756,23 +761,21 @@ impl<'a> KotlinDefaults<'a> {
                 let class_name = NamingConvention::class_name(name);
                 format!("{}({})", class_name, repr_default)
             }),
-            Type::Record(name) => self
-                .record_is_defaultable(name)
-                .then(|| {
-                    let class_name = NamingConvention::class_name(name);
-                    let is_unit_record = self
-                        .module
-                        .records
-                        .iter()
-                        .find(|record| record.name == *name)
-                        .is_some_and(|record| record.fields.is_empty());
+            Type::Record(name) => self.record_is_defaultable(name).then(|| {
+                let class_name = NamingConvention::class_name(name);
+                let is_unit_record = self
+                    .module
+                    .records
+                    .iter()
+                    .find(|record| record.name == *name)
+                    .is_some_and(|record| record.fields.is_empty());
 
-                    if is_unit_record {
-                        class_name
-                    } else {
-                        format!("{}()", class_name)
-                    }
-                }),
+                if is_unit_record {
+                    class_name
+                } else {
+                    format!("{}()", class_name)
+                }
+            }),
             Type::Enum(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::Closure(_) => None,
         }
     }
@@ -804,7 +807,12 @@ impl<'a> KotlinDefaults<'a> {
             .records
             .iter()
             .find(|record| record.name == record_name)
-            .map(|record| record.fields.iter().all(|field| self.default_expr(&field.field_type).is_some()))
+            .map(|record| {
+                record
+                    .fields
+                    .iter()
+                    .all(|field| self.default_expr(&field.field_type).is_some())
+            })
             .unwrap_or(false);
 
         self.record_defaultable.insert(
@@ -1472,7 +1480,9 @@ impl NativeTemplate {
                 let ctors: Vec<NativeCtorView> = class
                     .constructors
                     .iter()
-                    .filter(|ctor| ConstructorCallPlan::try_for_constructor(&ctor.inputs, module).is_some())
+                    .filter(|ctor| {
+                        ConstructorCallPlan::try_for_constructor(&ctor.inputs, module).is_some()
+                    })
                     .map(|ctor| NativeCtorView {
                         ffi_name: if ctor.is_default() {
                             format!("{}_new", ffi_prefix)
@@ -1840,8 +1850,11 @@ impl CallbackTraitTemplate {
             .iter()
             .map(|param| {
                 let kotlin_name = NamingConvention::param_name(&param.name);
-                let (jni_type, conversion) =
-                    Self::callback_param_jni_and_conversion(&kotlin_name, &param.param_type, module);
+                let (jni_type, conversion) = Self::callback_param_jni_and_conversion(
+                    &kotlin_name,
+                    &param.param_type,
+                    module,
+                );
                 TraitParamView {
                     name: kotlin_name.clone(),
                     ffi_name: param.name.clone(),
@@ -1884,12 +1897,10 @@ impl CallbackTraitTemplate {
     }
 
     fn is_supported_callback_method(method: &TraitMethod, module: &Module) -> bool {
-        let supported_return = match method.returns.ok_type() {
-            None => true,
-            Some(Type::Void) => true,
-            Some(Type::Primitive(_)) => true,
-            _ => false,
-        };
+        let supported_return = matches!(
+            method.returns.ok_type(),
+            None | Some(Type::Void) | Some(Type::Primitive(_))
+        );
 
         let supported_params = method
             .inputs

@@ -23,7 +23,7 @@ impl CustomTypeEntry {
         Ok(qualify_type_for_module(repr, &self.module_path))
     }
 
-    pub fn into_fn_path(&self) -> proc_macro2::TokenStream {
+    pub fn to_fn_path(&self) -> proc_macro2::TokenStream {
         let fn_name = format_ident!("__riff_custom_type_{}_into_ffi", self.name);
         let module_path = self
             .module_path
@@ -105,22 +105,23 @@ fn qualify_type_path_for_module(type_path: syn::TypePath, module_path: &[String]
     };
 
     let ident = segment.ident.to_string();
-    let should_qualify = ident
-        .chars()
-        .next()
-        .is_some_and(|ch| ch.is_uppercase())
-        && !is_std_global_ident(&ident);
+    let should_qualify =
+        ident.chars().next().is_some_and(|ch| ch.is_uppercase()) && !is_std_global_ident(&ident);
 
-    should_qualify
-        .then(|| {
+    if should_qualify {
+        {
             let module_segments = module_path
                 .iter()
                 .map(|segment| syn::Ident::new(segment, Span::call_site()))
-                .map(|ident| syn::PathSegment::from(ident))
+                .map(syn::PathSegment::from)
                 .collect::<syn::punctuated::Punctuated<_, syn::Token![::]>>();
 
-            let mut segments = syn::punctuated::Punctuated::<syn::PathSegment, syn::Token![::]>::new();
-            segments.push(syn::PathSegment::from(syn::Ident::new("crate", Span::call_site())));
+            let mut segments =
+                syn::punctuated::Punctuated::<syn::PathSegment, syn::Token![::]>::new();
+            segments.push(syn::PathSegment::from(syn::Ident::new(
+                "crate",
+                Span::call_site(),
+            )));
             module_segments
                 .into_iter()
                 .for_each(|segment| segments.push(segment));
@@ -133,8 +134,10 @@ fn qualify_type_path_for_module(type_path: syn::TypePath, module_path: &[String]
                     segments,
                 },
             }
-        })
-        .unwrap_or(type_path)
+        }
+    } else {
+        type_path
+    }
 }
 
 fn qualify_path_segments_for_module(path: syn::Path, module_path: &[String]) -> syn::Path {
@@ -154,19 +157,21 @@ fn qualify_path_segment_for_module(
     module_path: &[String],
 ) -> syn::PathSegment {
     segment.arguments = match segment.arguments {
-        PathArguments::AngleBracketed(args) => PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
-            args: args
-                .args
-                .into_iter()
-                .map(|arg| match arg {
-                    GenericArgument::Type(inner_ty) => {
-                        GenericArgument::Type(qualify_type_for_module(inner_ty, module_path))
-                    }
-                    other => other,
-                })
-                .collect(),
-            ..args
-        }),
+        PathArguments::AngleBracketed(args) => {
+            PathArguments::AngleBracketed(syn::AngleBracketedGenericArguments {
+                args: args
+                    .args
+                    .into_iter()
+                    .map(|arg| match arg {
+                        GenericArgument::Type(inner_ty) => {
+                            GenericArgument::Type(qualify_type_for_module(inner_ty, module_path))
+                        }
+                        other => other,
+                    })
+                    .collect(),
+                ..args
+            })
+        }
         other => other,
     };
     segment
@@ -177,7 +182,10 @@ fn is_single_segment_path(path: &syn::Path) -> bool {
 }
 
 fn is_std_global_ident(ident: &str) -> bool {
-    matches!(ident, "String" | "Vec" | "Option" | "Result" | "Box" | "Arc" | "Rc" | "Cow")
+    matches!(
+        ident,
+        "String" | "Vec" | "Option" | "Result" | "Box" | "Arc" | "Rc" | "Cow"
+    )
 }
 
 #[derive(Default, Clone)]
@@ -237,7 +245,8 @@ impl CustomTypeRegistry {
         let remote_shape = entry.remote_shape.clone();
 
         self.by_name.insert(name.clone(), entry);
-        self.by_remote_normalized.insert(remote_normalized, name.clone());
+        self.by_remote_normalized
+            .insert(remote_normalized, name.clone());
         self.by_remote_shape.entry(remote_shape).or_insert(name);
         Ok(())
     }
@@ -384,8 +393,12 @@ fn build_registry(manifest_dir: &Path) -> syn::Result<CustomTypeRegistry> {
     let mut registry = CustomTypeRegistry::default();
     files.iter().try_for_each(|file_path| {
         let module_path = module_path_for_rs_file(&src_root, file_path)?;
-        let content = fs::read_to_string(file_path)
-            .map_err(|e| syn::Error::new(Span::call_site(), format!("read {}: {}", file_path.display(), e)))?;
+        let content = fs::read_to_string(file_path).map_err(|e| {
+            syn::Error::new(
+                Span::call_site(),
+                format!("read {}: {}", file_path.display(), e),
+            )
+        })?;
         let syntax = syn::parse_file(&content)?;
 
         let mut collector = CustomTypeCollector {
@@ -393,7 +406,10 @@ fn build_registry(manifest_dir: &Path) -> syn::Result<CustomTypeRegistry> {
             custom_types: &mut registry,
         };
 
-        syntax.items.iter().try_for_each(|item| collector.collect_item(item))
+        syntax
+            .items
+            .iter()
+            .try_for_each(|item| collector.collect_item(item))
     })?;
 
     Ok(registry)
@@ -406,8 +422,12 @@ fn list_rs_files(src_root: &Path) -> syn::Result<Vec<PathBuf>> {
 }
 
 fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> syn::Result<()> {
-    let entries = fs::read_dir(dir)
-        .map_err(|e| syn::Error::new(Span::call_site(), format!("read_dir {}: {}", dir.display(), e)))?;
+    let entries = fs::read_dir(dir).map_err(|e| {
+        syn::Error::new(
+            Span::call_site(),
+            format!("read_dir {}: {}", dir.display(), e),
+        )
+    })?;
 
     entries
         .filter_map(|entry| entry.ok())
@@ -547,7 +567,7 @@ pub fn to_wire_expr_owned(
     value_ident: &syn::Ident,
 ) -> proc_macro2::TokenStream {
     if let Some(entry) = registry.lookup(ty) {
-        let into_fn = entry.into_fn_path();
+        let into_fn = entry.to_fn_path();
         return quote! { #into_fn(&#value_ident) };
     }
 
@@ -694,7 +714,7 @@ fn type_shape_key(ty: &syn::Type) -> String {
             .path
             .segments
             .last()
-            .map(|segment| shape_key_for_segment(segment))
+            .map(shape_key_for_segment)
             .unwrap_or_else(|| normalize_type(ty)),
         _ => normalize_type(ty),
     }
@@ -714,7 +734,9 @@ fn shape_key_for_segment(segment: &syn::PathSegment) -> String {
         _ => Vec::new(),
     };
 
-    args.is_empty()
-        .then_some(ident.clone())
-        .unwrap_or_else(|| format!("{}<{}>", ident, args.join(",")))
+    if args.is_empty() {
+        ident.clone()
+    } else {
+        format!("{}<{}>", ident, args.join(","))
+    }
 }

@@ -22,7 +22,12 @@ impl<'a> SpmPackageGenerator<'a> {
         }
     }
 
-    pub fn new_remote(config: &'a Config, checksum: String, version: String, layout: SpmLayout) -> Self {
+    pub fn new_remote(
+        config: &'a Config,
+        checksum: String,
+        version: String,
+        layout: SpmLayout,
+    ) -> Self {
         Self {
             config,
             xcframework_name: config.xcframework_name(),
@@ -41,11 +46,9 @@ impl<'a> SpmPackageGenerator<'a> {
         };
 
         let spm_output = self.config.apple_spm_output();
-        std::fs::create_dir_all(&spm_output).map_err(|source| {
-            CliError::CreateDirectoryFailed {
-                path: spm_output.clone(),
-                source,
-            }
+        std::fs::create_dir_all(&spm_output).map_err(|source| CliError::CreateDirectoryFailed {
+            path: spm_output.clone(),
+            source,
         })?;
 
         std::fs::write(&output_path, content).map_err(|source| CliError::WriteFailed {
@@ -264,11 +267,11 @@ let package = Package(
     }
 
     fn macos_platforms_fragment(&self) -> String {
-        self.config
-            .apple
-            .include_macos
-            .then(|| "        .macOS(.v13)\n".to_string())
-            .unwrap_or_default()
+        if self.config.apple.include_macos {
+            "        .macOS(.v13)\n".to_string()
+        } else {
+            Default::default()
+        }
     }
 
     fn wrapper_sources_path(&self, layout: SpmLayout) -> String {

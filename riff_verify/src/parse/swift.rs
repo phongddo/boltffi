@@ -98,17 +98,17 @@ impl SwiftExtractor {
                     }
                 }
                 "init_declaration" => {
-                    if let Some(class) = class_name {
-                        if let Some(unit) = self.extract_initializer(child, class) {
-                            units.push(unit);
-                        }
+                    if let Some(class) = class_name
+                        && let Some(unit) = self.extract_initializer(child, class)
+                    {
+                        units.push(unit);
                     }
                 }
                 "deinit_declaration" => {
-                    if let Some(class) = class_name {
-                        if let Some(unit) = self.extract_deinitializer(child, class) {
-                            units.push(unit);
-                        }
+                    if let Some(class) = class_name
+                        && let Some(unit) = self.extract_deinitializer(child, class)
+                    {
+                        units.push(unit);
                     }
                 }
                 "class_declaration" => {
@@ -487,7 +487,7 @@ impl SwiftExtractor {
             .nth(1)
             .and_then(|s| {
                 let trimmed = s.trim();
-                let end = trimmed.find(|c: char| c == ')' || c == ',')?;
+                let end = trimmed.find([')', ','])?;
                 let cap_str = trimmed[..end].trim();
                 cap_str
                     .parse::<i64>()
@@ -633,8 +633,8 @@ impl SwiftExtractor {
             }
             "prefix_expression" => {
                 let text = self.node_text(node);
-                if text.starts_with('&') {
-                    ctx.get_var(text[1..].trim())
+                if let Some(stripped) = text.strip_prefix('&') {
+                    ctx.get_var(stripped.trim())
                         .map(Expression::AddressOf)
                         .unwrap_or(Expression::Other { description: text })
                 } else {

@@ -63,9 +63,11 @@ impl DataEnumTemplate {
                         .fields
                         .iter()
                         .map(|field| {
-                            let swift_name = is_single_tuple
-                                .then(|| "value".to_string())
-                                .unwrap_or_else(|| NamingConvention::param_name(&field.name));
+                            let swift_name = if is_single_tuple {
+                                "value".to_string()
+                            } else {
+                                NamingConvention::param_name(&field.name)
+                            };
                             let c_name = field.name.clone();
                             let wire_decode = Self::enum_field_wire_decode(
                                 &field.field_type,

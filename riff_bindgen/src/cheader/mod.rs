@@ -21,8 +21,8 @@ impl CHeaderGenerator {
         let prefix = naming::ffi_prefix();
         let mut out = String::new();
 
-        out.push_str(&Self::generate_preamble(&prefix));
-        out.push_str(&Self::generate_async_types_if_needed(module, &prefix));
+        out.push_str(&Self::generate_preamble(prefix));
+        out.push_str(&Self::generate_async_types_if_needed(module, prefix));
         out.push_str(&Self::generate_stream_types_if_needed(module));
         out.push_str(&Self::generate_ffi_primitive_types(module));
         out.push_str(&Self::generate_enums(&module.enums));
@@ -30,12 +30,12 @@ impl CHeaderGenerator {
         out.push_str(&Self::generate_ffi_named_option_types(module));
         out.push_str(&Self::generate_traits(
             &module.callback_traits,
-            &prefix,
+            prefix,
             module,
         ));
         out.push_str(&Self::generate_functions(&module.functions, module));
-        out.push_str(&Self::generate_classes(&module.classes, &prefix, module));
-        out.push_str(&Self::generate_free_functions(&prefix));
+        out.push_str(&Self::generate_classes(&module.classes, prefix, module));
+        out.push_str(&Self::generate_free_functions(prefix));
 
         out
     }
@@ -403,7 +403,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
             let callback_return = method
                 .returns
                 .ok_type()
-                .map(|t| Self::trait_callback_return_params(t))
+                .map(Self::trait_callback_return_params)
                 .unwrap_or_default();
             params.push(format!(
                 "void (*callback)(uint64_t{}, FfiStatus)",
@@ -448,7 +448,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 let params_c: Vec<String> = signature
                     .params
                     .iter()
-                    .flat_map(|param_type| Self::closure_param_to_c(param_type))
+                    .flat_map(Self::closure_param_to_c)
                     .collect();
                 let params_str = params_c.join(", ");
                 let ret_c = if signature.returns.is_void() {
@@ -733,10 +733,11 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
     ) -> String {
         let ffi_name = format!("{}_{}", class_prefix, method.name);
 
-        let mut params: Vec<(String, String)> = method
-            .is_static()
-            .then_some(Vec::new())
-            .unwrap_or_else(|| vec![("handle".to_string(), format!("struct {} *", class_name))]);
+        let mut params: Vec<(String, String)> = if method.is_static() {
+            Vec::new()
+        } else {
+            vec![("handle".to_string(), format!("struct {} *", class_name))]
+        };
 
         for p in &method.inputs {
             params.extend(Self::param_to_c(&p.name, &p.param_type, module));
@@ -848,7 +849,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
                 let params_c: Vec<String> = sig
                     .params
                     .iter()
-                    .flat_map(|p| Self::closure_param_to_c(p))
+                    .flat_map(Self::closure_param_to_c)
                     .collect();
                 let params_str = params_c.join(", ");
                 let ret_c = if sig.returns.is_void() {

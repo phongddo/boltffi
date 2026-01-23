@@ -186,7 +186,7 @@ fn is_record_type(type_str: &str) -> bool {
     if type_str.contains('<') || type_str.contains('>') {
         return false;
     }
-    type_str.chars().next().map_or(false, |c| c.is_uppercase())
+    type_str.chars().next().is_some_and(|c| c.is_uppercase())
 }
 
 fn is_primitive_type(s: &str) -> bool {

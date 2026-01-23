@@ -93,7 +93,10 @@ impl ReturnAbi {
         match err_type {
             Type::String => format!("FfiException(-1, {})", err_value),
             Type::Enum(name)
-                if module.enums.iter().any(|enumeration| enumeration.name == *name && enumeration.is_error) =>
+                if module
+                    .enums
+                    .iter()
+                    .any(|enumeration| enumeration.name == *name && enumeration.is_error) =>
             {
                 err_value.to_string()
             }

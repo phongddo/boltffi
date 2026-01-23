@@ -216,17 +216,12 @@ pub enum FfiOutput {
     },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Ownership {
+    #[default]
     Borrowed,
     Owned,
     Returned,
-}
-
-impl Default for Ownership {
-    fn default() -> Self {
-        Self::Borrowed
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
