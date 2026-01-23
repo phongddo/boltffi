@@ -136,7 +136,7 @@ impl FfiPatterns {
             })
             .and_then(|s| {
                 let trimmed = s.trim();
-                let end = trimmed.find(|c: char| c == ')' || c == ',' || c == '}')?;
+                let end = trimmed.find([')', ',', '}'])?;
                 Some(&trimmed[..end])
             })
             .map(|s| s.trim())

@@ -93,7 +93,8 @@ impl CustomTypeView {
         let class_name = NamingConvention::class_name(&custom_type.name);
         let repr_swift_type = TypeMapper::map_type(&custom_type.repr);
 
-        let repr_decode_tuple_expr = wire::decode_type(&custom_type.repr, module).decode_as_tuple("offset");
+        let repr_decode_tuple_expr =
+            wire::decode_type(&custom_type.repr, module).decode_as_tuple("offset");
         let repr_encoder = wire::encode_type(&custom_type.repr, "value", module);
 
         Self {

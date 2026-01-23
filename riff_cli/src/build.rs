@@ -30,7 +30,12 @@ impl<'a> Builder<'a> {
         let android_toolchain = targets
             .iter()
             .any(|target| target.platform() == Platform::Android)
-            .then(|| AndroidToolchain::discover(self.config.android.min_sdk, self.config.android.ndk_version.as_deref()))
+            .then(|| {
+                AndroidToolchain::discover(
+                    self.config.android.min_sdk,
+                    self.config.android.ndk_version.as_deref(),
+                )
+            })
             .transpose()?;
 
         targets

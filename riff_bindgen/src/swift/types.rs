@@ -29,7 +29,7 @@ impl TypeMapper {
                 let params = sig
                     .params
                     .iter()
-                    .map(|p| Self::map_type(p))
+                    .map(Self::map_type)
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret = if sig.returns.is_void() {
@@ -70,7 +70,7 @@ impl TypeMapper {
             Type::Result { ok, .. } => Self::ffi_type(ok),
             Type::Closure(sig) => {
                 let params = std::iter::once("UnsafeMutableRawPointer?".to_string())
-                    .chain(sig.params.iter().map(|p| Self::ffi_type(p)))
+                    .chain(sig.params.iter().map(Self::ffi_type))
                     .collect::<Vec<_>>()
                     .join(", ");
                 let ret = if sig.returns.is_void() {

@@ -136,14 +136,14 @@ impl CallbackInfo {
         let params_swift = sig
             .params
             .iter()
-            .map(|p| TypeMapper::map_type(p))
+            .map(TypeMapper::map_type)
             .collect::<Vec<_>>()
             .join(", ");
 
         let params_ffi = sig
             .params
             .iter()
-            .map(|p| TypeMapper::ffi_type(p))
+            .map(TypeMapper::ffi_type)
             .collect::<Vec<_>>()
             .join(", ");
 
@@ -234,13 +234,12 @@ impl ParamsInfo {
         for (name, ty) in inputs {
             params.push(ParamInfo::from_param(name, ty));
 
-            if matches!(ty, Type::Closure(_)) {
-                if let Some(cb) =
+            if matches!(ty, Type::Closure(_))
+                && let Some(cb) =
                     CallbackInfo::from_param(name, ty, func_name_pascal, callback_index)
-                {
-                    callbacks.push(cb);
-                    callback_index += 1;
-                }
+            {
+                callbacks.push(cb);
+                callback_index += 1;
             }
         }
 

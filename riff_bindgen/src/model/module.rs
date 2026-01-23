@@ -118,7 +118,7 @@ impl Module {
                 self.enums
                     .iter()
                     .find(|e| e.name == name && e.is_data_enum())
-                    .and_then(|e| DataEnumLayout::from_enum(e))
+                    .and_then(DataEnumLayout::from_enum)
                     .map(|l| l.struct_size().as_usize())
             })
             .unwrap_or(0)

@@ -260,7 +260,7 @@ impl ClosureSignature {
         self.returns.is_void()
     }
 
-pub fn signature_id(&self) -> String {
+    pub fn signature_id(&self) -> String {
         let params_id = self
             .params
             .iter()
@@ -320,7 +320,7 @@ impl BuiltinId {
         let trimmed = path.trim();
         BUILTIN_SPECS
             .iter()
-            .find_map(|spec| spec.rust_paths.iter().any(|p| *p == trimmed).then_some(spec.id))
+            .find_map(|spec| spec.rust_paths.contains(&trimmed).then_some(spec.id))
     }
 
     pub fn type_id(self) -> &'static str {
@@ -395,9 +395,10 @@ impl Type {
 
     pub fn named_type(&self) -> Option<&str> {
         match self {
-            Self::Custom { name, .. } | Self::Object(name) | Self::Record(name) | Self::Enum(name) => {
-                Some(name)
-            }
+            Self::Custom { name, .. }
+            | Self::Object(name)
+            | Self::Record(name)
+            | Self::Enum(name) => Some(name),
             _ => None,
         }
     }

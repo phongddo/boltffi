@@ -137,21 +137,21 @@ impl EffectCollector {
                     span.clone(),
                 );
 
-                if function_name.contains("copy_into") {
-                    if let Some(ptr_var) = arg_vars.first() {
-                        let capacity = arg_vars
-                            .get(2)
-                            .map(|v| Capacity::Variable(*v))
-                            .unwrap_or(Capacity::Unknown);
+                if function_name.contains("copy_into")
+                    && let Some(ptr_var) = arg_vars.first()
+                {
+                    let capacity = arg_vars
+                        .get(2)
+                        .map(|v| Capacity::Variable(*v))
+                        .unwrap_or(Capacity::Unknown);
 
-                        self.trace.push(
-                            Effect::BufferWrite {
-                                pointer: *ptr_var,
-                                size: capacity,
-                            },
-                            span.clone(),
-                        );
-                    }
+                    self.trace.push(
+                        Effect::BufferWrite {
+                            pointer: *ptr_var,
+                            size: capacity,
+                        },
+                        span.clone(),
+                    );
                 }
 
                 out_params.iter().for_each(|var| {
@@ -292,17 +292,18 @@ impl EffectCollector {
                     span.clone(),
                 ));
             }
-            Statement::Expression { expression, span } => {
-                if let Expression::FfiCallExpr { function_name, .. } = expression {
-                    effects.push((
-                        Effect::FfiCall {
-                            function_name: function_name.clone(),
-                            arguments: vec![],
-                            out_params: vec![],
-                        },
-                        span.clone(),
-                    ));
-                }
+            Statement::Expression {
+                expression: Expression::FfiCallExpr { function_name, .. },
+                span,
+            } => {
+                effects.push((
+                    Effect::FfiCall {
+                        function_name: function_name.clone(),
+                        arguments: vec![],
+                        out_params: vec![],
+                    },
+                    span.clone(),
+                ));
             }
             _ => {}
         });

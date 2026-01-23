@@ -1,7 +1,10 @@
 use quote::quote;
 use syn::{FnArg, Pat};
 
-use crate::custom_types::{CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, to_wire_expr_owned, wire_type_for};
+use crate::custom_types::{
+    CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, to_wire_expr_owned,
+    wire_type_for,
+};
 use crate::util::{
     ParamTransform, classify_param_transform, is_primitive_vec_inner, len_ident, ptr_ident,
 };

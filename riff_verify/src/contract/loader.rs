@@ -36,31 +36,32 @@ impl ContractLoader {
         contract: &mut FfiContract,
     ) {
         source.lines().for_each(|line| {
-            if patterns.is_class_decl(line) && !patterns.is_bridge_class(line) {
-                if let Some(class_name) = patterns.extract_class_name(line) {
-                    let snake_name = Self::to_snake_case(class_name);
-                    let class = FfiClass::new(class_name)
-                        .with_constructor(format!("{}_{}_new", prefix, snake_name))
-                        .with_destructor(format!("{}_{}_free", prefix, snake_name));
+            if patterns.is_class_decl(line)
+                && !patterns.is_bridge_class(line)
+                && let Some(class_name) = patterns.extract_class_name(line)
+            {
+                let snake_name = Self::to_snake_case(class_name);
+                let class = FfiClass::new(class_name)
+                    .with_constructor(format!("{}_{}_new", prefix, snake_name))
+                    .with_destructor(format!("{}_{}_free", prefix, snake_name));
 
-                    contract.add_class(class);
-                }
+                contract.add_class(class);
             }
         });
     }
 
     fn detect_callback_bridges(source: &str, patterns: &FfiPatterns, contract: &mut FfiContract) {
         source.lines().for_each(|line| {
-            if patterns.is_bridge_class(line) {
-                if let Some(bridge_name) = patterns.extract_class_name(line) {
-                    let trait_name = patterns
-                        .bridge_markers
-                        .iter()
-                        .find_map(|marker| bridge_name.strip_suffix(marker))
-                        .unwrap_or(bridge_name);
+            if patterns.is_bridge_class(line)
+                && let Some(bridge_name) = patterns.extract_class_name(line)
+            {
+                let trait_name = patterns
+                    .bridge_markers
+                    .iter()
+                    .find_map(|marker| bridge_name.strip_suffix(marker))
+                    .unwrap_or(bridge_name);
 
-                    contract.add_callback_bridge(CallbackBridge::new(trait_name, bridge_name));
-                }
+                contract.add_callback_bridge(CallbackBridge::new(trait_name, bridge_name));
             }
         });
     }

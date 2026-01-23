@@ -205,8 +205,6 @@ impl OptionView {
             "jobjectArray"
         } else if self.is_vec_enum() {
             "jintArray"
-        } else if self.is_vec_record() || self.is_vec_data_enum() {
-            "jobject"
         } else {
             "jobject"
         }
@@ -326,7 +324,7 @@ impl ResultView {
                     .unwrap_or(false);
                 if is_data_or_error {
                     let struct_size = enum_def
-                        .and_then(|e| DataEnumLayout::from_enum(e))
+                        .and_then(DataEnumLayout::from_enum)
                         .map(|l| l.struct_size().as_usize())
                         .unwrap_or(4);
                     ResultErrKind::DataEnum {
@@ -375,7 +373,7 @@ impl ResultView {
                         .enums
                         .iter()
                         .find(|e| &e.name == name)
-                        .and_then(|e| DataEnumLayout::from_enum(e))
+                        .and_then(DataEnumLayout::from_enum)
                         .map(|l| l.struct_size().as_usize())
                         .unwrap_or(0);
                     ResultOkKind::DataEnum {
@@ -616,18 +614,19 @@ impl ParamConversion {
             Type::Record(_) => param_name.to_string(),
             Type::Enum(_) => format!("{}.value", param_name),
             Type::Object(_) => format!("{}.handle", param_name),
-            Type::BoxedTrait(name) => module
-                .callback_traits
-                .iter()
-                .any(|t| t.name == *name)
-                .then(|| {
-                    format!(
-                        "{}Bridge.create({})",
-                        NamingConvention::class_name(name),
-                        param_name
-                    )
-                })
-                .unwrap_or_else(|| format!("{}.handle", param_name)),
+            Type::BoxedTrait(name) => {
+                if module.callback_traits.iter().any(|t| t.name == *name) {
+                    {
+                        format!(
+                            "{}Bridge.create({})",
+                            NamingConvention::class_name(name),
+                            param_name
+                        )
+                    }
+                } else {
+                    format!("{}.handle", param_name)
+                }
+            }
             Type::Option(inner)
                 if matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_)) =>
             {
@@ -636,7 +635,10 @@ impl ParamConversion {
                     Type::BoxedTrait(name) => {
                         let class_name = NamingConvention::class_name(name);
                         if module.callback_traits.iter().any(|t| t.name == *name) {
-                            format!("({}?.let {{ {}Bridge.create(it) }} ?: 0L)", param_name, class_name)
+                            format!(
+                                "({}?.let {{ {}Bridge.create(it) }} ?: 0L)",
+                                param_name, class_name
+                            )
                         } else {
                             format!("({}?.handle ?: 0L)", param_name)
                         }
@@ -769,7 +771,7 @@ impl JniReturnKind {
                 .iter()
                 .find(|e| &e.name == enum_name)
                 .filter(|e| e.is_data_enum())
-                .and_then(|e| DataEnumLayout::from_enum(e))
+                .and_then(DataEnumLayout::from_enum)
                 .map(|layout| Self::DataEnum {
                     enum_name: NamingConvention::class_name(enum_name),
                     struct_size: layout.struct_size().as_usize(),
@@ -1085,9 +1087,7 @@ impl JniParamInfo {
             Type::Vec(inner) | Type::Slice(inner) | Type::MutSlice(inner) => {
                 !matches!(inner.as_ref(), Type::Primitive(_))
             }
-            Type::Option(inner) => {
-                !matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_))
-            }
+            Type::Option(inner) => !matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_)),
             _ => false,
         }
     }
@@ -1112,12 +1112,7 @@ impl JniParamInfo {
                 "(const uint8_t*)_{}_c, {} ? strlen(_{}_c) : 0",
                 self.name, self.name, self.name
             )
-        } else if self.data_enum_name.is_some() {
-            format!(
-                "(const uint8_t*)_{}_ptr, (uintptr_t)_{}_len",
-                self.name, self.name
-            )
-        } else if self.record_name.is_some() {
+        } else if self.data_enum_name.is_some() || self.record_name.is_some() {
             format!(
                 "(const uint8_t*)_{}_ptr, (uintptr_t)_{}_len",
                 self.name, self.name

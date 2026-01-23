@@ -122,10 +122,11 @@ impl WireFunctionPlan {
         let err_type = Self::error_type_name(returns, module);
         let is_blittable_return =
             return_abi.is_wire_encoded() && Self::is_blittable_return(returns, module);
-        let decode_expr = return_abi
-            .is_wire_encoded()
-            .then(|| Self::compute_decode_expr(returns, module, is_blittable_return))
-            .unwrap_or_default();
+        let decode_expr = if return_abi.is_wire_encoded() {
+            Self::compute_decode_expr(returns, module, is_blittable_return)
+        } else {
+            Default::default()
+        };
 
         Self {
             func_name: NamingConvention::method_name(function_name),
@@ -161,6 +162,7 @@ impl WireFunctionPlan {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn supports_wire_type(ty: &Type, module: &Module) -> bool {
         match ty {
             Type::Primitive(_) | Type::String | Type::Bytes | Type::Void => true,
@@ -246,7 +248,10 @@ impl WireFunctionPlan {
         match err {
             Type::String => "FfiException(-1, err)".into(),
             Type::Enum(name)
-                if module.enums.iter().any(|enumeration| enumeration.name == *name && enumeration.is_error) =>
+                if module
+                    .enums
+                    .iter()
+                    .any(|enumeration| enumeration.name == *name && enumeration.is_error) =>
             {
                 "err".into()
             }
@@ -380,7 +385,9 @@ impl AsyncCallPlan {
         let inputs_supported = inputs.iter().all(|param| {
             let ty = &param.param_type;
             let is_disallowed = match ty {
-                Type::Closure(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::MutSlice(_) => true,
+                Type::Closure(_) | Type::Object(_) | Type::BoxedTrait(_) | Type::MutSlice(_) => {
+                    true
+                }
                 Type::Option(inner) => {
                     matches!(inner.as_ref(), Type::Object(_) | Type::BoxedTrait(_))
                 }
@@ -407,6 +414,7 @@ impl AsyncCallPlan {
         }
     }
 
+    #[allow(clippy::only_used_in_recursion)]
     fn supports_value_type(ty: &Type, module: &Module) -> bool {
         match ty {
             Type::Void | Type::Primitive(_) | Type::String | Type::Bytes => true,
@@ -435,10 +443,11 @@ impl AsyncCallPlan {
         let return_abi = ReturnAbi::from_return_type(returns, module);
         let is_blittable_return =
             return_abi.is_wire_encoded() && WireFunctionPlan::is_blittable_return(returns, module);
-        let decode_expr = return_abi
-            .is_wire_encoded()
-            .then(|| WireFunctionPlan::compute_decode_expr(returns, module, is_blittable_return))
-            .unwrap_or_default();
+        let decode_expr = if return_abi.is_wire_encoded() {
+            WireFunctionPlan::compute_decode_expr(returns, module, is_blittable_return)
+        } else {
+            Default::default()
+        };
 
         let signature_params = inputs
             .iter()
@@ -518,12 +527,11 @@ impl AsyncCallPlan {
         let return_abi = ReturnAbi::from_return_type(&method.returns, module);
         let is_blittable_return = return_abi.is_wire_encoded()
             && WireFunctionPlan::is_blittable_return(&method.returns, module);
-        let decode_expr = return_abi
-            .is_wire_encoded()
-            .then(|| {
-                WireFunctionPlan::compute_decode_expr(&method.returns, module, is_blittable_return)
-            })
-            .unwrap_or_default();
+        let decode_expr = if return_abi.is_wire_encoded() {
+            WireFunctionPlan::compute_decode_expr(&method.returns, module, is_blittable_return)
+        } else {
+            Default::default()
+        };
 
         let signature_params = method
             .inputs

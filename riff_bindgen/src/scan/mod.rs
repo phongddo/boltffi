@@ -108,10 +108,8 @@ impl AliasResolver {
     fn with_global(mut self, global: &HashMap<String, Vec<String>>) -> Self {
         global
             .iter()
-            .filter_map(|(name, target)| {
-                (!self.type_aliases.contains_key(name))
-                    .then(|| (name.clone(), target.clone()))
-            })
+            .filter(|&(name, _target)| !self.type_aliases.contains_key(name))
+            .map(|(name, target)| (name.clone(), target.clone()))
             .collect::<Vec<_>>()
             .into_iter()
             .for_each(|(name, target)| {
@@ -135,9 +133,11 @@ impl AliasResolver {
             .collect::<Vec<_>>()
             .join("::");
 
-        (resolved_spelling != stripped)
-            .then(|| Cow::Owned(resolved_spelling))
-            .unwrap_or_else(|| Cow::Borrowed(stripped))
+        if resolved_spelling != stripped {
+            Cow::Owned(resolved_spelling)
+        } else {
+            Cow::Borrowed(stripped)
+        }
     }
 
     fn resolve_segments(&self, segments: Vec<String>) -> Vec<String> {
@@ -153,8 +153,7 @@ impl AliasResolver {
         })
         .take(16)
         .last()
-        .unwrap_or_default()
-        ;
+        .unwrap_or_default();
 
         expanded
             .last()
@@ -309,8 +308,12 @@ impl SourceScanner {
         let compiler_targets = Self::collect_compiler_type_targets(&files, &self.global_aliases)?;
         self.compiler_canonical_types =
             compiler_type_resolution::resolve(crate_path, &self.module_name, compiler_targets)?;
-        files.iter().try_for_each(|path| self.collect_type_names(path))?;
-        files.iter().try_for_each(|path| self.collect_custom_types(path))?;
+        files
+            .iter()
+            .try_for_each(|path| self.collect_type_names(path))?;
+        files
+            .iter()
+            .try_for_each(|path| self.collect_custom_types(path))?;
         files.iter().try_for_each(|path| self.scan_file(path))?;
         Ok(())
     }
@@ -329,11 +332,11 @@ impl SourceScanner {
             let syntax = syn::parse_file(&content)
                 .map_err(|e| format!("Failed to parse {}: {}", path.display(), e))?;
 
-            let alias_resolver = AliasResolver::from_items(&syntax.items).with_global(global_aliases);
-            syntax
-                .items
-                .iter()
-                .for_each(|item| Self::collect_item_type_targets(item, &alias_resolver, &mut targets, &mut seen));
+            let alias_resolver =
+                AliasResolver::from_items(&syntax.items).with_global(global_aliases);
+            syntax.items.iter().for_each(|item| {
+                Self::collect_item_type_targets(item, &alias_resolver, &mut targets, &mut seen)
+            });
 
             Ok::<(), String>(())
         })?;
@@ -355,10 +358,9 @@ impl SourceScanner {
                     || (has_attribute(&item_struct.attrs, "derive")
                         && has_ffi_type_derive(&item_struct.attrs));
                 if is_record {
-                    item_struct
-                        .fields
-                        .iter()
-                        .for_each(|field| Self::collect_type_targets(&field.ty, alias_resolver, out, seen));
+                    item_struct.fields.iter().for_each(|field| {
+                        Self::collect_type_targets(&field.ty, alias_resolver, out, seen)
+                    });
                 }
             }
             Item::Enum(item_enum) => {
@@ -371,12 +373,14 @@ impl SourceScanner {
                         .variants
                         .iter()
                         .flat_map(|variant| variant.fields.iter())
-                        .for_each(|field| Self::collect_type_targets(&field.ty, alias_resolver, out, seen));
+                        .for_each(|field| {
+                            Self::collect_type_targets(&field.ty, alias_resolver, out, seen)
+                        });
                 }
             }
             Item::Impl(item_impl) => {
-                let is_exported =
-                    has_attribute(&item_impl.attrs, "ffi_class") || has_attribute(&item_impl.attrs, "export");
+                let is_exported = has_attribute(&item_impl.attrs, "ffi_class")
+                    || has_attribute(&item_impl.attrs, "export");
                 if is_exported {
                     item_impl
                         .items
@@ -396,20 +400,27 @@ impl SourceScanner {
                                     FnArg::Typed(pat_type) => Some(pat_type.ty.as_ref()),
                                     FnArg::Receiver(_) => None,
                                 })
-                                .for_each(|ty| Self::collect_type_targets(ty, alias_resolver, out, seen));
+                                .for_each(|ty| {
+                                    Self::collect_type_targets(ty, alias_resolver, out, seen)
+                                });
 
                             match &method.sig.output {
                                 syn::ReturnType::Default => {}
                                 syn::ReturnType::Type(_, ty) => {
-                                    Self::collect_type_targets(ty.as_ref(), alias_resolver, out, seen);
+                                    Self::collect_type_targets(
+                                        ty.as_ref(),
+                                        alias_resolver,
+                                        out,
+                                        seen,
+                                    );
                                 }
                             }
                         });
                 }
             }
             Item::Trait(item_trait) => {
-                let is_exported =
-                    has_attribute(&item_trait.attrs, "ffi_trait") || has_attribute(&item_trait.attrs, "export");
+                let is_exported = has_attribute(&item_trait.attrs, "ffi_trait")
+                    || has_attribute(&item_trait.attrs, "export");
                 if is_exported {
                     item_trait
                         .items
@@ -427,20 +438,27 @@ impl SourceScanner {
                                     FnArg::Typed(pat_type) => Some(pat_type.ty.as_ref()),
                                     FnArg::Receiver(_) => None,
                                 })
-                                .for_each(|ty| Self::collect_type_targets(ty, alias_resolver, out, seen));
+                                .for_each(|ty| {
+                                    Self::collect_type_targets(ty, alias_resolver, out, seen)
+                                });
 
                             match &method.sig.output {
                                 syn::ReturnType::Default => {}
                                 syn::ReturnType::Type(_, ty) => {
-                                    Self::collect_type_targets(ty.as_ref(), alias_resolver, out, seen);
+                                    Self::collect_type_targets(
+                                        ty.as_ref(),
+                                        alias_resolver,
+                                        out,
+                                        seen,
+                                    );
                                 }
                             }
                         });
                 }
             }
             Item::Fn(item_fn) => {
-                let is_exported =
-                    has_attribute(&item_fn.attrs, "ffi_export") || has_attribute(&item_fn.attrs, "export");
+                let is_exported = has_attribute(&item_fn.attrs, "ffi_export")
+                    || has_attribute(&item_fn.attrs, "export");
                 if is_exported {
                     item_fn
                         .sig
@@ -491,7 +509,9 @@ impl SourceScanner {
                         syn::GenericArgument::Type(inner_ty) => Some(inner_ty),
                         _ => None,
                     })
-                    .for_each(|inner_ty| Self::collect_type_targets(inner_ty, alias_resolver, out, seen));
+                    .for_each(|inner_ty| {
+                        Self::collect_type_targets(inner_ty, alias_resolver, out, seen)
+                    });
 
                 type_path
                     .path
@@ -502,13 +522,18 @@ impl SourceScanner {
                         _ => None,
                     })
                     .for_each(|args| {
-                        args.inputs
-                            .iter()
-                            .for_each(|inner_ty| Self::collect_type_targets(inner_ty, alias_resolver, out, seen));
+                        args.inputs.iter().for_each(|inner_ty| {
+                            Self::collect_type_targets(inner_ty, alias_resolver, out, seen)
+                        });
                         match &args.output {
                             syn::ReturnType::Default => {}
                             syn::ReturnType::Type(_, out_ty) => {
-                                Self::collect_type_targets(out_ty.as_ref(), alias_resolver, out, seen);
+                                Self::collect_type_targets(
+                                    out_ty.as_ref(),
+                                    alias_resolver,
+                                    out,
+                                    seen,
+                                );
                             }
                         }
                     });
@@ -537,10 +562,9 @@ impl SourceScanner {
             Type::Array(array) => {
                 Self::collect_type_targets(array.elem.as_ref(), alias_resolver, out, seen);
             }
-            Type::Tuple(tuple) => tuple
-                .elems
-                .iter()
-                .for_each(|inner_ty| Self::collect_type_targets(inner_ty, alias_resolver, out, seen)),
+            Type::Tuple(tuple) => tuple.elems.iter().for_each(|inner_ty| {
+                Self::collect_type_targets(inner_ty, alias_resolver, out, seen)
+            }),
             Type::Group(group) => {
                 Self::collect_type_targets(group.elem.as_ref(), alias_resolver, out, seen);
             }
@@ -551,7 +575,9 @@ impl SourceScanner {
         }
     }
 
-    fn collect_global_aliases(files: &[std::path::PathBuf]) -> Result<HashMap<String, Vec<String>>, String> {
+    fn collect_global_aliases(
+        files: &[std::path::PathBuf],
+    ) -> Result<HashMap<String, Vec<String>>, String> {
         let mut aliases = HashMap::<String, Vec<String>>::new();
         let mut conflicts = HashSet::<String>::new();
 
@@ -572,10 +598,9 @@ impl SourceScanner {
                 })
                 .filter_map(|item_type| {
                     let target_path = match item_type.ty.as_ref() {
-                        Type::Path(type_path) => Some(
-                            AliasResolver::segments_from_path(type_path)
-                                .join("::"),
-                        ),
+                        Type::Path(type_path) => {
+                            Some(AliasResolver::segments_from_path(type_path).join("::"))
+                        }
                         _ => None,
                     }?;
 
@@ -587,15 +612,13 @@ impl SourceScanner {
                         .collect::<Vec<_>>();
                     Some((item_type.ident.to_string(), segments))
                 })
-                .for_each(|(alias_name, target)| {
-                    match aliases.get(&alias_name) {
-                        None => {
-                            aliases.insert(alias_name, target);
-                        }
-                        Some(existing) if *existing == target => {}
-                        Some(_) => {
-                            conflicts.insert(alias_name);
-                        }
+                .for_each(|(alias_name, target)| match aliases.get(&alias_name) {
+                    None => {
+                        aliases.insert(alias_name, target);
+                    }
+                    Some(existing) if *existing == target => {}
+                    Some(_) => {
+                        conflicts.insert(alias_name);
                     }
                 });
 
@@ -634,7 +657,9 @@ impl SourceScanner {
                 }
                 _ => None,
             })
-            .try_for_each(|item_macro| self.collect_custom_type_macro(item_macro, &alias_resolver))?;
+            .try_for_each(|item_macro| {
+                self.collect_custom_type_macro(item_macro, &alias_resolver)
+            })?;
         syntax
             .items
             .iter()
@@ -674,13 +699,13 @@ impl SourceScanner {
             &self.compiler_canonical_types,
             None,
         )
-            .ok_or_else(|| {
-                format!(
-                    "custom_type!: `{}` has an unsupported repr type: {}",
-                    name,
-                    quote::quote!(#repr_syn_type).to_string()
-                )
-            })?;
+        .ok_or_else(|| {
+            format!(
+                "custom_type!: `{}` has an unsupported repr type: {}",
+                name,
+                quote::quote!(#repr_syn_type)
+            )
+        })?;
 
         self.type_registry
             .register_custom_type(name.clone(), repr.clone());
@@ -724,11 +749,11 @@ impl SourceScanner {
             &self.compiler_canonical_types,
             None,
         )
-            .ok_or_else(|| {
+        .ok_or_else(|| {
             format!(
                 "custom_ffi: `{}` has an unsupported FfiRepr type: {}",
                 name,
-                quote::quote!(#repr_syn_type).to_string()
+                quote::quote!(#repr_syn_type)
             )
         })?;
 
@@ -769,14 +794,12 @@ impl SourceScanner {
                     }
                 }
                 Item::Impl(item_impl) => {
-                    if has_attribute(&item_impl.attrs, "ffi_class")
-                        || has_attribute(&item_impl.attrs, "export")
+                    if (has_attribute(&item_impl.attrs, "ffi_class")
+                        || has_attribute(&item_impl.attrs, "export"))
+                        && let Type::Path(type_path) = item_impl.self_ty.as_ref()
+                        && let Some(seg) = type_path.path.segments.last()
                     {
-                        if let Type::Path(type_path) = item_impl.self_ty.as_ref()
-                            && let Some(seg) = type_path.path.segments.last()
-                        {
-                            self.type_registry.register_class(seg.ident.to_string());
-                        }
+                        self.type_registry.register_class(seg.ident.to_string());
                     }
                 }
                 _ => {}
@@ -977,14 +1000,13 @@ impl SourceScanner {
         let output = match &item_fn.sig.output {
             syn::ReturnType::Default => None,
             syn::ReturnType::Type(_, ty) => {
-                let converted =
-                    rust_type_to_ffi_type(
-                        ty,
-                        &self.type_registry,
-                        &self.alias_resolver,
-                        &self.compiler_canonical_types,
-                        None,
-                    );
+                let converted = rust_type_to_ffi_type(
+                    ty,
+                    &self.type_registry,
+                    &self.alias_resolver,
+                    &self.compiler_canonical_types,
+                    None,
+                );
                 if converted.is_none() {
                     return;
                 }
@@ -1046,15 +1068,13 @@ impl SourceScanner {
 
         let output = match &method.sig.output {
             syn::ReturnType::Default => None,
-            syn::ReturnType::Type(_, ty) => {
-                rust_type_to_ffi_type(
-                    ty,
-                    &self.type_registry,
-                    &self.alias_resolver,
-                    &self.compiler_canonical_types,
-                    None,
-                )
-            }
+            syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(
+                ty,
+                &self.type_registry,
+                &self.alias_resolver,
+                &self.compiler_canonical_types,
+                None,
+            ),
         };
 
         Some(ScannedTraitMethod {
@@ -1109,7 +1129,11 @@ impl SourceScanner {
         self.classes.push(class);
     }
 
-    fn process_method(&self, method: &syn::ImplItemFn, self_type_name: &str) -> Option<ScannedMethod> {
+    fn process_method(
+        &self,
+        method: &syn::ImplItemFn,
+        self_type_name: &str,
+    ) -> Option<ScannedMethod> {
         let name = method.sig.ident.to_string();
         let is_async = method.sig.asyncness.is_some();
 
@@ -1165,15 +1189,13 @@ impl SourceScanner {
 
         let output = match &method.sig.output {
             syn::ReturnType::Default => None,
-            syn::ReturnType::Type(_, ty) => {
-                rust_type_to_ffi_type(
-                    ty,
-                    &self.type_registry,
-                    &self.alias_resolver,
-                    &self.compiler_canonical_types,
-                    Some(self_type_name),
-                )
-            }
+            syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(
+                ty,
+                &self.type_registry,
+                &self.alias_resolver,
+                &self.compiler_canonical_types,
+                Some(self_type_name),
+            ),
         };
 
         Some(ScannedMethod {
@@ -1188,13 +1210,12 @@ impl SourceScanner {
     fn process_stream_method(&self, method: &syn::ImplItemFn) -> Option<ScannedStream> {
         let name = method.sig.ident.to_string();
 
-        let (item_type, mode) =
-            extract_stream_attr(
-                &method.attrs,
-                &self.type_registry,
-                &self.alias_resolver,
-                &self.compiler_canonical_types,
-            )?;
+        let (item_type, mode) = extract_stream_attr(
+            &method.attrs,
+            &self.type_registry,
+            &self.alias_resolver,
+            &self.compiler_canonical_types,
+        )?;
 
         Some(ScannedStream {
             name,
@@ -1222,7 +1243,11 @@ impl SourceScanner {
         }
     }
 
-    fn process_constructor(&self, method: &syn::ImplItemFn, self_type_name: &str) -> Option<ScannedConstructor> {
+    fn process_constructor(
+        &self,
+        method: &syn::ImplItemFn,
+        self_type_name: &str,
+    ) -> Option<ScannedConstructor> {
         let name = method.sig.ident.to_string();
         let is_fallible = match &method.sig.output {
             syn::ReturnType::Default => false,
@@ -1262,7 +1287,9 @@ impl SourceScanner {
     pub fn into_module(self) -> Module {
         let mut module = self.custom_types.into_iter().fold(
             Module::new(&self.module_name),
-            |module, custom_type| module.with_custom_type(CustomType::new(custom_type.name, custom_type.repr)),
+            |module, custom_type| {
+                module.with_custom_type(CustomType::new(custom_type.name, custom_type.repr))
+            },
         );
 
         for record in self.records {
@@ -1460,7 +1487,8 @@ fn return_type_is_result_self(ty: &Type, class_name: &str) -> bool {
     let Some(syn::GenericArgument::Type(Type::Path(ok_ty))) = args.args.first() else {
         return false;
     };
-    ok_ty.path
+    ok_ty
+        .path
         .segments
         .last()
         .is_some_and(|segment| segment.ident == "Self" || segment.ident == class_name)
@@ -1560,7 +1588,8 @@ fn extract_stream_attr(
         };
 
         let tokens = meta.tokens.to_string();
-        let item_type = extract_item_type(&tokens, registry, alias_resolver, compiler_canonical_types)?;
+        let item_type =
+            extract_item_type(&tokens, registry, alias_resolver, compiler_canonical_types)?;
         let mode = extract_stream_mode(&tokens);
 
         return Some((item_type, mode));
@@ -1726,7 +1755,12 @@ fn rust_type_to_ffi_type(
                 .collect::<Vec<_>>()
                 .join("::");
 
-            string_to_ffi_type(&path_str, registry, alias_resolver, compiler_canonical_types)
+            string_to_ffi_type(
+                &path_str,
+                registry,
+                alias_resolver,
+                compiler_canonical_types,
+            )
         }
         Type::Reference(type_ref) => {
             if let Type::Path(inner) = &*type_ref.elem {
@@ -1796,16 +1830,14 @@ fn rust_type_to_ffi_type(
 
                         let returns = match &args.output {
                             syn::ReturnType::Default => MType::Void,
-                            syn::ReturnType::Type(_, ty) => {
-                                rust_type_to_ffi_type(
-                                    ty,
-                                    registry,
-                                    alias_resolver,
-                                    compiler_canonical_types,
-                                    self_type_name,
-                                )
-                                    .unwrap_or(MType::Void)
-                            }
+                            syn::ReturnType::Type(_, ty) => rust_type_to_ffi_type(
+                                ty,
+                                registry,
+                                alias_resolver,
+                                compiler_canonical_types,
+                                self_type_name,
+                            )
+                            .unwrap_or(MType::Void),
                         };
 
                         return Some(MType::Closure(MClosureSignature::new(params, returns)));
@@ -1877,7 +1909,9 @@ fn string_to_ffi_type(
             )?;
             let err = parts
                 .get(1)
-                .and_then(|e| string_to_ffi_type(e, registry, alias_resolver, compiler_canonical_types))
+                .and_then(|e| {
+                    string_to_ffi_type(e, registry, alias_resolver, compiler_canonical_types)
+                })
                 .unwrap_or(MType::String);
             Some(MType::Result {
                 ok: Box::new(ok),

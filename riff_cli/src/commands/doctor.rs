@@ -61,7 +61,10 @@ fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
     }
 
     println!();
-    println!("Android tooling: {}", readiness(check.is_ready_for_android()));
+    println!(
+        "Android tooling: {}",
+        readiness(check.is_ready_for_android())
+    );
     if options.android {
         match &check.tools.android_ndk {
             Some(path) => println!("  ndk: {}", path),
@@ -83,13 +86,22 @@ fn print_config_summary() {
             println!("Config: {}", config_path.display());
             println!("  crate: {}", config.library_name());
             println!("  apple.output: {}", config.apple.output.display());
-            println!("  apple.swift.output: {}", config.apple_swift_output().display());
-            println!("  apple.header.output: {}", config.apple_header_output().display());
+            println!(
+                "  apple.swift.output: {}",
+                config.apple_swift_output().display()
+            );
+            println!(
+                "  apple.header.output: {}",
+                config.apple_header_output().display()
+            );
             println!(
                 "  apple.xcframework.output: {}",
                 config.apple_xcframework_output().display()
             );
-            println!("  apple.spm.output: {}", config.apple_spm_output().display());
+            println!(
+                "  apple.spm.output: {}",
+                config.apple_spm_output().display()
+            );
             println!("  android.output: {}", config.android.output.display());
             println!(
                 "  android.kotlin.output: {}",
@@ -113,4 +125,3 @@ fn print_config_summary() {
 fn readiness(is_ready: bool) -> &'static str {
     if is_ready { "ok" } else { "missing" }
 }
-

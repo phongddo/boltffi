@@ -297,17 +297,17 @@ impl Kotlin {
             .functions
             .iter()
             .filter_map(|func| {
-                if let Some(Type::Vec(inner)) = func.returns.ok_type() {
-                    if let Type::Record(record_name) = inner.as_ref() {
-                        let is_blittable = module
-                            .records
-                            .iter()
-                            .find(|record| record.name == *record_name)
-                            .map(|record| record.is_blittable())
-                            .unwrap_or(false);
-                        if is_blittable {
-                            return Some(record_name.as_str());
-                        }
+                if let Some(Type::Vec(inner)) = func.returns.ok_type()
+                    && let Type::Record(record_name) = inner.as_ref()
+                {
+                    let is_blittable = module
+                        .records
+                        .iter()
+                        .find(|record| record.name == *record_name)
+                        .map(|record| record.is_blittable())
+                        .unwrap_or(false);
+                    if is_blittable {
+                        return Some(record_name.as_str());
                     }
                 }
                 None

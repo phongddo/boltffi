@@ -16,8 +16,9 @@ struct DeferBlock {
     effects: Vec<super::Effect>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum PointerState {
+    #[default]
     Unallocated,
     Allocated {
         capacity: Capacity,
@@ -44,16 +45,13 @@ impl PointerState {
     }
 }
 
-impl Default for PointerState {
-    fn default() -> Self {
-        Self::Unallocated
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum RefCountState {
+    #[default]
     NotRetained,
-    Retained { count: u32 },
+    Retained {
+        count: u32,
+    },
     Released,
 }
 
@@ -71,12 +69,6 @@ impl RefCountState {
             Self::Retained { count } => *count,
             _ => 0,
         }
-    }
-}
-
-impl Default for RefCountState {
-    fn default() -> Self {
-        Self::NotRetained
     }
 }
 

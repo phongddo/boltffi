@@ -234,7 +234,8 @@ impl WireEncode for SystemTime {
             }
             Err(error) => {
                 let duration = error.duration();
-                -((duration.as_secs() as i128) * nanos_per_second + (duration.subsec_nanos() as i128))
+                -((duration.as_secs() as i128) * nanos_per_second
+                    + (duration.subsec_nanos() as i128))
             }
         };
 
@@ -504,7 +505,7 @@ mod tests {
         assert_eq!(written, 4);
         assert_eq!(&buf[..4], &[42, 0, 0, 0]);
 
-        let written = 3.14f64.encode_to(&mut buf);
+        let written = 3.5f64.encode_to(&mut buf);
         assert_eq!(written, 8);
 
         let written = true.encode_to(&mut buf);

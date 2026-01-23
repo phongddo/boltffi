@@ -186,10 +186,10 @@ impl EffectTrace {
 
     pub fn allocation_span(&self, pointer: VarId) -> Option<&SourceSpan> {
         self.entries.iter().find_map(|entry| {
-            if let Effect::Allocate { pointer: p, .. } = &entry.effect {
-                if *p == pointer {
-                    return Some(&entry.span);
-                }
+            if let Effect::Allocate { pointer: p, .. } = &entry.effect
+                && *p == pointer
+            {
+                return Some(&entry.span);
             }
             None
         })

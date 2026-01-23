@@ -120,7 +120,7 @@ fn decode_record(name: &str, module: &Module) -> TypeCodec {
     let is_blittable = module
         .records
         .iter()
-        .find(|r| &r.name == name)
+        .find(|r| r.name == name)
         .map(|r| r.is_blittable())
         .unwrap_or(false);
 
@@ -128,7 +128,7 @@ fn decode_record(name: &str, module: &Module) -> TypeCodec {
         let size = module
             .records
             .iter()
-            .find(|r| &r.name == name)
+            .find(|r| r.name == name)
             .map(|r| r.struct_size().as_usize())
             .unwrap_or(0);
         TypeCodec::fixed(
@@ -156,22 +156,17 @@ fn decode_custom(name: &str) -> TypeCodec {
 
 fn decode_builtin(id: BuiltinId) -> TypeCodec {
     match id {
-        BuiltinId::Duration => TypeCodec::fixed(
-            format!("wire.readDuration(at: {})", OFFSET_PLACEHOLDER),
-            12,
-        ),
+        BuiltinId::Duration => {
+            TypeCodec::fixed(format!("wire.readDuration(at: {})", OFFSET_PLACEHOLDER), 12)
+        }
         BuiltinId::SystemTime => TypeCodec::fixed(
             format!("wire.readTimestamp(at: {})", OFFSET_PLACEHOLDER),
             12,
         ),
-        BuiltinId::Uuid => TypeCodec::fixed(
-            format!("wire.readUuid(at: {})", OFFSET_PLACEHOLDER),
-            16,
-        ),
-        BuiltinId::Url => TypeCodec::variable(format!(
-            "wire.readUrl(at: {})",
-            OFFSET_PLACEHOLDER
-        )),
+        BuiltinId::Uuid => {
+            TypeCodec::fixed(format!("wire.readUuid(at: {})", OFFSET_PLACEHOLDER), 16)
+        }
+        BuiltinId::Url => TypeCodec::variable(format!("wire.readUrl(at: {})", OFFSET_PLACEHOLDER)),
     }
 }
 
@@ -353,7 +348,7 @@ fn encode_record(record_name: &str, field_name: &str, module: &Module) -> TypeEn
     let is_blittable = module
         .records
         .iter()
-        .find(|r| &r.name == record_name)
+        .find(|r| r.name == record_name)
         .map(|r| r.is_blittable())
         .unwrap_or(false);
 
@@ -361,7 +356,7 @@ fn encode_record(record_name: &str, field_name: &str, module: &Module) -> TypeEn
         let size = module
             .records
             .iter()
-            .find(|r| &r.name == record_name)
+            .find(|r| r.name == record_name)
             .map(|r| r.struct_size().as_usize())
             .unwrap_or(0);
         TypeEncoder {

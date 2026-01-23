@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 pub mod build;
 pub mod cheader;
 pub mod kotlin;
@@ -71,7 +73,11 @@ mod tests {
                 Type::Primitive(Primitive::I64),
             ))
             .with_record(event)
-            .with_function(Function::new("echo_instant").with_param(Parameter::new("value", instant.clone())).with_output(instant))
+            .with_function(
+                Function::new("echo_instant")
+                    .with_param(Parameter::new("value", instant.clone()))
+                    .with_output(instant),
+            )
     }
 
     #[test]

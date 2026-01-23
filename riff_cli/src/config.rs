@@ -33,7 +33,7 @@ pub enum FactoryStyle {
     CompanionMethods,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct AppleSwiftConfig {
     pub module_name: Option<String>,
     pub output: Option<PathBuf>,
@@ -43,7 +43,7 @@ pub struct AppleSwiftConfig {
     pub error_style: ErrorStyle,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct AndroidKotlinConfig {
     pub package: Option<String>,
     pub output: Option<PathBuf>,
@@ -98,12 +98,12 @@ pub struct AndroidConfig {
     pub pack: AndroidPackConfig,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct HeaderConfig {
     pub output: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct XcframeworkConfig {
     pub output: Option<PathBuf>,
     pub name: Option<String>,
@@ -129,7 +129,7 @@ pub struct SpmConfig {
     pub wrapper_sources: Option<PathBuf>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Default)]
 pub struct AndroidPackConfig {
     pub output: Option<PathBuf>,
 }
@@ -141,32 +141,6 @@ pub enum SpmLayout {
     Split,
     #[default]
     FfiOnly,
-}
-
-impl Default for AppleSwiftConfig {
-    fn default() -> Self {
-        Self {
-            module_name: None,
-            output: None,
-            ffi_module_name: None,
-            tools_version: None,
-            error_style: ErrorStyle::default(),
-        }
-    }
-}
-
-impl Default for AndroidKotlinConfig {
-    fn default() -> Self {
-        Self {
-            package: None,
-            output: None,
-            module_name: None,
-            library_name: None,
-            api_style: KotlinApiStyle::default(),
-            error_style: ErrorStyle::default(),
-            factory_style: FactoryStyle::default(),
-        }
-    }
 }
 
 impl Default for AppleConfig {
@@ -196,23 +170,6 @@ impl Default for AndroidConfig {
     }
 }
 
-impl Default for HeaderConfig {
-    fn default() -> Self {
-        Self {
-            output: None,
-        }
-    }
-}
-
-impl Default for XcframeworkConfig {
-    fn default() -> Self {
-        Self {
-            output: None,
-            name: None,
-        }
-    }
-}
-
 impl Default for SpmConfig {
     fn default() -> Self {
         Self {
@@ -222,14 +179,6 @@ impl Default for SpmConfig {
             layout: SpmLayout::default(),
             package_name: None,
             wrapper_sources: None,
-        }
-    }
-}
-
-impl Default for AndroidPackConfig {
-    fn default() -> Self {
-        Self {
-            output: None,
         }
     }
 }
@@ -340,14 +289,10 @@ impl Config {
     }
 
     pub fn android_kotlin_package(&self) -> String {
-        self.android
-            .kotlin
-            .package
-            .clone()
-            .unwrap_or_else(|| {
-                let normalized_name = self.package.name.replace('-', "_");
-                format!("com.example.{}", normalized_name)
-            })
+        self.android.kotlin.package.clone().unwrap_or_else(|| {
+            let normalized_name = self.package.name.replace('-', "_");
+            format!("com.example.{}", normalized_name)
+        })
     }
 
     pub fn android_kotlin_module_name(&self) -> String {

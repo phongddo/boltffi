@@ -1,5 +1,5 @@
-use quote::quote;
 use proc_macro2::Span;
+use quote::quote;
 use syn::{ReturnType, Type};
 
 use crate::custom_types;
@@ -10,6 +10,7 @@ pub enum OptionReturnAbi {
     Vec { inner: syn::Type },
 }
 
+#[allow(clippy::large_enum_variant)]
 pub enum ReturnKind {
     Unit,
     Primitive,
@@ -214,7 +215,8 @@ pub fn get_async_complete_conversion(abi: &AsyncReturnAbi) -> proc_macro2::Token
                 let wire_ty = custom_types::wire_type_for(&rust_type, &registry);
                 let result_ident = syn::Ident::new("result", Span::call_site());
                 let wire_value_ident = syn::Ident::new("__riff_wire_value", Span::call_site());
-                let to_wire = custom_types::to_wire_expr_owned(&rust_type, &registry, &result_ident);
+                let to_wire =
+                    custom_types::to_wire_expr_owned(&rust_type, &registry, &result_ident);
                 quote! {
                     if !out_status.is_null() { *out_status = ::riff::__private::FfiStatus::OK; }
                     let #wire_value_ident: #wire_ty = { #to_wire };

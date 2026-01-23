@@ -6,9 +6,12 @@ pub fn custom_ffi_impl(item: TokenStream) -> TokenStream {
     let item_impl = parse_macro_input!(item as ItemImpl);
 
     if !item_impl.generics.params.is_empty() {
-        return syn::Error::new_spanned(&item_impl.generics, "custom_ffi does not support generics")
-            .to_compile_error()
-            .into();
+        return syn::Error::new_spanned(
+            &item_impl.generics,
+            "custom_ffi does not support generics",
+        )
+        .to_compile_error()
+        .into();
     }
 
     let trait_ident_ok = item_impl

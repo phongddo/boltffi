@@ -106,7 +106,8 @@ impl WireDecode for Duration {
     #[inline]
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let (seconds, seconds_used) = u64::decode_from(buf)?;
-        let (nanos, nanos_used) = u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
+        let (nanos, nanos_used) =
+            u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
         if nanos >= 1_000_000_000 {
             return Err(DecodeError::InvalidValue);
         }
@@ -118,7 +119,8 @@ impl WireDecode for SystemTime {
     #[inline]
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let (seconds, seconds_used) = i64::decode_from(buf)?;
-        let (nanos, nanos_used) = u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
+        let (nanos, nanos_used) =
+            u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
         if nanos >= 1_000_000_000 {
             return Err(DecodeError::InvalidValue);
         }
@@ -127,7 +129,10 @@ impl WireDecode for SystemTime {
         let total_nanos = (seconds as i128) * nanos_per_second + (nanos as i128);
 
         let system_time = if total_nanos >= 0 {
-            let duration = Duration::new((total_nanos / nanos_per_second) as u64, (total_nanos % nanos_per_second) as u32);
+            let duration = Duration::new(
+                (total_nanos / nanos_per_second) as u64,
+                (total_nanos % nanos_per_second) as u32,
+            );
             UNIX_EPOCH + duration
         } else {
             let abs_total_nanos = (-total_nanos) as u128;
@@ -145,7 +150,8 @@ impl WireDecode for Uuid {
     #[inline]
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let (hi, hi_used) = u64::decode_from(buf)?;
-        let (lo, lo_used) = u64::decode_from(buf.get(hi_used..).ok_or(DecodeError::BufferTooSmall)?)?;
+        let (lo, lo_used) =
+            u64::decode_from(buf.get(hi_used..).ok_or(DecodeError::BufferTooSmall)?)?;
         let mut bytes = [0u8; 16];
         bytes[..8].copy_from_slice(&hi.to_be_bytes());
         bytes[8..].copy_from_slice(&lo.to_be_bytes());
@@ -168,8 +174,10 @@ impl WireDecode for DateTime<Utc> {
     #[inline]
     fn decode_from(buf: &[u8]) -> DecodeResult<Self> {
         let (seconds, seconds_used) = i64::decode_from(buf)?;
-        let (nanos, nanos_used) = u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
-        let date_time = DateTime::from_timestamp(seconds, nanos).ok_or(DecodeError::InvalidValue)?;
+        let (nanos, nanos_used) =
+            u32::decode_from(buf.get(seconds_used..).ok_or(DecodeError::BufferTooSmall)?)?;
+        let date_time =
+            DateTime::from_timestamp(seconds, nanos).ok_or(DecodeError::InvalidValue)?;
         Ok((date_time, seconds_used + nanos_used))
     }
 }
@@ -339,9 +347,9 @@ mod tests {
         assert_eq!(value, 42);
         assert_eq!(size, 4);
 
-        3.14f64.encode_to(&mut buf);
+        3.5f64.encode_to(&mut buf);
         let (value, size) = f64::decode_from(&buf).unwrap();
-        assert!((value - 3.14).abs() < f64::EPSILON);
+        assert!((value - 3.5).abs() < f64::EPSILON);
         assert_eq!(size, 8);
 
         true.encode_to(&mut buf);

@@ -33,7 +33,11 @@ impl AndroidToolchain {
         })
     }
 
-    pub fn configure_cargo_for_target(&self, cargo: &mut Command, target: &RustTarget) -> Result<()> {
+    pub fn configure_cargo_for_target(
+        &self,
+        cargo: &mut Command,
+        target: &RustTarget,
+    ) -> Result<()> {
         let abi = AndroidAbi::from_architecture(target.architecture()).ok_or_else(|| {
             CliError::CommandFailed {
                 command: format!("unsupported android target {}", target.triple()),
@@ -64,6 +68,7 @@ impl AndroidToolchain {
         Ok(self.ndk.clang_for_abi(abi, self.min_sdk))
     }
 
+    #[allow(dead_code)]
     pub fn llvm_ar(&self) -> PathBuf {
         self.ndk.llvm_ar()
     }
@@ -92,6 +97,7 @@ impl AndroidNdk {
 }
 
 impl AndroidAbi {
+    #[allow(dead_code)]
     pub fn directory_name(&self) -> &'static str {
         match self {
             AndroidAbi::Arm64V8a => "arm64-v8a",
@@ -151,7 +157,10 @@ fn resolve_ndk_root_from_android_home(ndk_version_hint: Option<&str>) -> Option<
     })
 }
 
-fn resolve_ndk_root_from_candidate(candidate: &Path, ndk_version_hint: Option<&str>) -> Option<PathBuf> {
+fn resolve_ndk_root_from_candidate(
+    candidate: &Path,
+    ndk_version_hint: Option<&str>,
+) -> Option<PathBuf> {
     is_ndk_root(candidate)
         .then(|| candidate.to_path_buf())
         .or_else(|| select_ndk_version_dir(candidate, ndk_version_hint))
@@ -181,7 +190,9 @@ fn select_ndk_version_dir(parent: &Path, ndk_version_hint: Option<&str>) -> Opti
         .collect();
 
     ndk_version_hint
-        .and_then(|hint| NdkVersion::parse(hint).map(|hint_version| (hint_version, hint.to_string())))
+        .and_then(|hint| {
+            NdkVersion::parse(hint).map(|hint_version| (hint_version, hint.to_string()))
+        })
         .and_then(|(hint_version, hint_string)| {
             versioned_dirs
                 .iter()
@@ -234,7 +245,9 @@ fn resolve_prebuilt_bin_dir(ndk_root: &Path) -> Result<PathBuf> {
             std::fs::read_dir(&prebuilt_dir)
                 .ok()
                 .into_iter()
-                .flat_map(|entries| entries.filter_map(|entry| entry.ok().map(|entry| entry.path())))
+                .flat_map(|entries| {
+                    entries.filter_map(|entry| entry.ok().map(|entry| entry.path()))
+                })
                 .find(|path| path.join("bin").exists())
         })
         .ok_or_else(|| CliError::AndroidToolchainNotFound {

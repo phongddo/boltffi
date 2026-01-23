@@ -36,8 +36,10 @@ impl<'a> AndroidPackager<'a> {
         }
 
         let jnilibs_path = self.config.android_pack_output();
-        let android_toolchain =
-            AndroidToolchain::discover(self.config.android.min_sdk, self.config.android.ndk_version.as_deref())?;
+        let android_toolchain = AndroidToolchain::discover(
+            self.config.android.min_sdk,
+            self.config.android.ndk_version.as_deref(),
+        )?;
 
         std::fs::create_dir_all(&jnilibs_path).map_err(|source| {
             CliError::CreateDirectoryFailed {
@@ -80,10 +82,15 @@ impl<'a> AndroidPackager<'a> {
     }
 
     fn android_jni_glue_path(&self) -> Result<PathBuf> {
-        let jni_glue_path = self.config.android_kotlin_output().join("jni").join("jni_glue.c");
-        jni_glue_path.exists().then_some(jni_glue_path.clone()).ok_or_else(|| {
-            CliError::FileNotFound(jni_glue_path)
-        })
+        let jni_glue_path = self
+            .config
+            .android_kotlin_output()
+            .join("jni")
+            .join("jni_glue.c");
+        jni_glue_path
+            .exists()
+            .then_some(jni_glue_path.clone())
+            .ok_or(CliError::FileNotFound(jni_glue_path))
     }
 
     fn link_shared_library(
