@@ -1,11 +1,17 @@
 use crate::ir::codec::CodecPlan;
-use crate::ir::ids::{CallbackId, ClassId, ParamName};
+use crate::ir::ids::{CallbackId, ClassId, MethodId, ParamName};
 
 #[derive(Debug, Clone)]
 pub struct CallPlan {
-    pub ffi_symbol: String,
+    pub target: CallTarget,
     pub params: Vec<ParamPlan>,
     pub kind: CallPlanKind,
+}
+
+#[derive(Debug, Clone)]
+pub enum CallTarget {
+    GlobalSymbol(String),
+    VtableField(MethodId),
 }
 
 #[derive(Debug, Clone)]
@@ -23,11 +29,9 @@ pub struct AsyncPlan {
 #[derive(Debug, Clone)]
 pub enum AsyncResult {
     Void,
-    Value {
-        codec: CodecPlan,
-    },
+    Value(ReturnValuePlan),
     Fallible {
-        ok_codec: CodecPlan,
+        ok: ReturnValuePlan,
         err_codec: CodecPlan,
     },
 }
@@ -61,6 +65,7 @@ pub enum ParamStrategy {
     Callback {
         callback_id: CallbackId,
         style: CallbackStyle,
+        nullable: bool,
     },
 }
 
@@ -99,9 +104,27 @@ pub enum CallbackStyle {
 }
 
 #[derive(Debug, Clone)]
-pub enum ReturnPlan {
+pub enum ReturnValuePlan {
     Void,
     Direct(DirectPlan),
-    Encoded { codec: CodecPlan },
-    Handle { class_id: ClassId },
+    Encoded {
+        codec: CodecPlan,
+    },
+    Handle {
+        class_id: ClassId,
+        nullable: bool,
+    },
+    Callback {
+        callback_id: CallbackId,
+        nullable: bool,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub enum ReturnPlan {
+    Value(ReturnValuePlan),
+    Fallible {
+        ok: ReturnValuePlan,
+        err_codec: CodecPlan,
+    },
 }
