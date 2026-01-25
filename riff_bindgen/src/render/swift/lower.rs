@@ -1,6 +1,9 @@
-use riff_ffi_rules::naming::{self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case};
+use riff_ffi_rules::naming::{
+    self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
+};
 
 use crate::ir::LoweredContract;
+use crate::ir::callback_plan::{CallbackParamPlan, CallbackParamStrategy, CallbackReturnPlan};
 use crate::ir::codec::{CodecPlan, EnumLayout, RecordLayout, VariantPayloadLayout};
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{EnumRepr, Receiver};
@@ -9,7 +12,6 @@ use crate::ir::plan::{
     AbiType, AsyncResult, CallPlanKind, CallTarget, ParamPlan, ParamStrategy, ReturnPlan,
     ReturnValuePlan,
 };
-use crate::ir::types::TypeExpr;
 
 use super::codec;
 use super::plan::{
@@ -21,29 +23,11 @@ use super::plan::{
 pub struct SwiftLowerer<'a> {
     contract: &'a FfiContract,
     lowered: &'a LoweredContract,
-    prefix: String,
 }
 
 impl<'a> SwiftLowerer<'a> {
     pub fn new(contract: &'a FfiContract, lowered: &'a LoweredContract) -> Self {
-        let prefix = contract.package.name.replace('-', "_");
-        Self {
-            contract,
-            lowered,
-            prefix,
-        }
-    }
-
-    pub fn with_prefix(
-        contract: &'a FfiContract,
-        lowered: &'a LoweredContract,
-        prefix: impl Into<String>,
-    ) -> Self {
-        Self {
-            contract,
-            lowered,
-            prefix: prefix.into(),
-        }
+        Self { contract, lowered }
     }
 
     pub fn lower(self) -> SwiftModule {
@@ -189,11 +173,7 @@ impl<'a> SwiftLowerer<'a> {
             .all_classes()
             .map(|def| {
                 let class_name = self.swift_name_for_class(&def.id);
-
-                let ffi_free = format!(
-                    "{}_free",
-                    def.id.as_str().to_lowercase().replace("::", "_")
-                );
+                let ffi_free = naming::class_ffi_free(def.id.as_str()).to_string();
 
                 let constructors = def
                     .constructors
@@ -206,16 +186,9 @@ impl<'a> SwiftLowerer<'a> {
                             .get(&(def.id.clone(), idx))
                             .expect("constructor plan should exist");
 
-                        let ffi_symbol = match &plan.target {
-                            CallTarget::GlobalSymbol(s) => s.clone().into_string(),
-                            CallTarget::VtableField(_) => {
-                                panic!("constructor should have global symbol")
-                            }
-                        };
-
                         SwiftConstructor {
                             name: ctor.name.as_ref().map(|n| camel_case(n.as_str())),
-                            ffi_symbol,
+                            ffi_symbol: extract_global_symbol(&plan.target),
                             params: plan
                                 .params
                                 .iter()
@@ -237,13 +210,6 @@ impl<'a> SwiftLowerer<'a> {
                             .get(&(def.id.clone(), method.id.clone()))
                             .expect("method plan should exist");
 
-                        let ffi_symbol = match &plan.target {
-                            CallTarget::GlobalSymbol(s) => s.clone().into_string(),
-                            CallTarget::VtableField(_) => {
-                                panic!("method should have global symbol")
-                            }
-                        };
-
                         let (is_async, returns) = match &plan.kind {
                             CallPlanKind::Sync { returns } => {
                                 (false, self.lower_return_plan(returns))
@@ -255,7 +221,7 @@ impl<'a> SwiftLowerer<'a> {
 
                         SwiftMethod {
                             name: camel_case(method.id.as_str()),
-                            ffi_symbol,
+                            ffi_symbol: extract_global_symbol(&plan.target),
                             params: plan
                                 .params
                                 .iter()
@@ -292,48 +258,30 @@ impl<'a> SwiftLowerer<'a> {
             .map(|def| {
                 let protocol_name = pascal_case(def.id.as_str());
                 let vtable_var = format!("{}VTableInstance", lower_first_char(&protocol_name));
-                let methods = def
+                let plan = self
+                    .lowered
+                    .callback_invocations
+                    .get(&def.id)
+                    .expect("callback invocation plan should exist");
+
+                let methods = plan
                     .methods
                     .iter()
                     .map(|method| {
-                        let plans = self
-                            .lowered
-                            .callbacks
-                            .get(&def.id)
-                            .expect("callback plans should exist");
-                        let expected_field = naming::vtable_field_name(method.id.as_str());
-                        let plan = plans
-                            .iter()
-                            .find(|p| {
-                                matches!(&p.target, CallTarget::VtableField(id) if id.as_str() == expected_field.as_str())
-                            })
-                            .expect("callback method plan should exist");
-
-                        let (is_async, returns) = match &plan.kind {
-                            CallPlanKind::Sync { returns } => {
-                                (false, self.lower_return_plan(returns))
-                            }
-                            CallPlanKind::Async { async_plan } => {
-                                (true, self.lower_async_result(&async_plan.result))
-                            }
-                        };
-
-                        let has_out_param = !is_async && !returns.is_void();
-                        let wire_encoded_return = returns.is_wire_encoded();
+                        let returns = self.lower_callback_return_plan(&method.returns);
+                        let has_out_param = !method.is_async && !returns.is_void();
 
                         SwiftCallbackMethod {
-                            name: camel_case(method.id.as_str()),
-                            ffi_name: naming::vtable_field_name(method.id.as_str()).into_string(),
-                            params: plan
+                            swift_name: camel_case(method.id.as_str()),
+                            ffi_name: method.vtable_field.to_string(),
+                            params: method
                                 .params
                                 .iter()
-                                .skip(1)
                                 .map(|p| self.lower_callback_param_plan(p))
                                 .collect(),
                             returns,
-                            is_async,
+                            is_async: method.is_async,
                             has_out_param,
-                            wire_encoded_return,
                         }
                     })
                     .collect();
@@ -342,10 +290,10 @@ impl<'a> SwiftLowerer<'a> {
                     protocol_name: protocol_name.clone(),
                     wrapper_class: format!("{}Wrapper", protocol_name),
                     vtable_var,
-                    vtable_type: naming::callback_vtable_name(def.id.as_str()).into_string(),
+                    vtable_type: plan.vtable_type.to_string(),
                     bridge_name: format!("{}Bridge", protocol_name),
-                    register_fn: naming::callback_register_fn(def.id.as_str()).into_string(),
-                    create_fn: naming::callback_create_fn(def.id.as_str()).into_string(),
+                    register_fn: plan.register_fn.to_string(),
+                    create_fn: plan.create_fn.to_string(),
                     methods,
                     doc: def.doc.clone(),
                 }
@@ -364,11 +312,6 @@ impl<'a> SwiftLowerer<'a> {
                     .get(&def.id)
                     .expect("function plan should exist");
 
-                let ffi_symbol = match &plan.target {
-                    CallTarget::GlobalSymbol(s) => s.clone().into_string(),
-                    CallTarget::VtableField(_) => panic!("function should have global symbol"),
-                };
-
                 let (is_async, returns) = match &plan.kind {
                     CallPlanKind::Sync { returns } => (false, self.lower_return_plan(returns)),
                     CallPlanKind::Async { async_plan } => {
@@ -378,7 +321,7 @@ impl<'a> SwiftLowerer<'a> {
 
                 SwiftFunction {
                     name: camel_case(def.id.as_str()),
-                    ffi_symbol,
+                    ffi_symbol: extract_global_symbol(&plan.target),
                     params: plan
                         .params
                         .iter()
@@ -461,39 +404,15 @@ impl<'a> SwiftLowerer<'a> {
         }
     }
 
-    fn lower_callback_param_plan(&self, param: &ParamPlan) -> SwiftCallbackParam {
+    fn lower_callback_param_plan(&self, param: &CallbackParamPlan) -> SwiftCallbackParam {
         let label = camel_case(param.name.as_str());
         let (swift_type, ffi_args, decode_prelude) = match &param.strategy {
-            ParamStrategy::Direct(d) => (
+            CallbackParamStrategy::Direct(d) => (
                 self.abi_to_swift(d.abi_type),
                 vec![label.clone()],
                 None,
             ),
-            ParamStrategy::Buffer { element_abi, .. } => {
-                let ptr_name = format!("{}Ptr", label);
-                let len_name = format!("{}Len", label);
-                if *element_abi == AbiType::U8 {
-                    (
-                        "Data".to_string(),
-                        vec![ptr_name.clone(), len_name.clone()],
-                        Some(format!(
-                            "let {} = Data(bytes: {}!, count: Int({}))",
-                            label, ptr_name, len_name
-                        )),
-                    )
-                } else {
-                    let element_type = self.abi_to_swift(*element_abi);
-                    (
-                        format!("[{}]", element_type),
-                        vec![ptr_name.clone(), len_name.clone()],
-                        Some(format!(
-                            "let {} = Array(UnsafeBufferPointer(start: {}!.assumingMemoryBound(to: {}.self), count: Int({})))",
-                            label, ptr_name, element_type, len_name
-                        )),
-                    )
-                }
-            }
-            ParamStrategy::Encoded { codec } => {
+            CallbackParamStrategy::Encoded { codec } => {
                 let ptr_name = format!("{}Ptr", label);
                 let len_name = format!("{}Len", label);
                 (
@@ -508,22 +427,6 @@ impl<'a> SwiftLowerer<'a> {
                     )),
                 )
             }
-            ParamStrategy::Handle { nullable, .. } => {
-                let swift_type = if *nullable {
-                    "OpaquePointer?".to_string()
-                } else {
-                    "OpaquePointer".to_string()
-                };
-                (swift_type, vec![label.clone()], None)
-            }
-            ParamStrategy::Callback { nullable, .. } => {
-                let swift_type = if *nullable {
-                    "RiffCallbackHandle?".to_string()
-                } else {
-                    "RiffCallbackHandle".to_string()
-                };
-                (swift_type, vec![label.clone()], None)
-            }
         };
 
         SwiftCallbackParam {
@@ -532,6 +435,37 @@ impl<'a> SwiftLowerer<'a> {
             call_arg: label,
             ffi_args,
             decode_prelude,
+        }
+    }
+
+    fn lower_callback_return_plan(&self, returns: &CallbackReturnPlan) -> SwiftReturn {
+        match returns {
+            CallbackReturnPlan::Void => SwiftReturn::Void,
+            CallbackReturnPlan::Direct(d) => SwiftReturn::Direct {
+                swift_type: self.abi_to_swift(d.abi_type),
+            },
+            CallbackReturnPlan::Encoded { codec } => self.swift_return_from_codec(codec),
+            CallbackReturnPlan::Async { completion_codec } => completion_codec
+                .as_ref()
+                .map(|codec| self.swift_return_from_codec(codec))
+                .unwrap_or(SwiftReturn::Void),
+        }
+    }
+
+    fn swift_return_from_codec(&self, codec: &CodecPlan) -> SwiftReturn {
+        match codec {
+            CodecPlan::Void => SwiftReturn::Void,
+            CodecPlan::Primitive(_) => SwiftReturn::Direct {
+                swift_type: codec::swift_type(codec),
+            },
+            CodecPlan::Result { ok, err } => SwiftReturn::Throws {
+                ok: Box::new(self.swift_return_from_codec(ok)),
+                err_type: codec::swift_type(err),
+            },
+            _ => SwiftReturn::FromWireBuffer {
+                swift_type: codec::swift_type(codec),
+                codec: codec.clone(),
+            },
         }
     }
 
@@ -592,26 +526,6 @@ impl<'a> SwiftLowerer<'a> {
         }
     }
 
-    fn swift_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Void => "Void".to_string(),
-            TypeExpr::Primitive(p) => codec::swift_primitive(*p),
-            TypeExpr::String => "String".to_string(),
-            TypeExpr::Bytes => "Data".to_string(),
-            TypeExpr::Builtin(id) => codec::swift_builtin(id.as_str()),
-            TypeExpr::Vec(inner) => format!("[{}]", self.swift_type(inner)),
-            TypeExpr::Option(inner) => format!("{}?", self.swift_type(inner)),
-            TypeExpr::Result { ok, err } => {
-                format!("Result<{}, {}>", self.swift_type(ok), self.swift_type(err))
-            }
-            TypeExpr::Record(id) => self.swift_name_for_record(id),
-            TypeExpr::Enum(id) => self.swift_name_for_enum(id),
-            TypeExpr::Handle(id) => self.swift_name_for_class(id),
-            TypeExpr::Callback(id) => format!("any {}", pascal_case(id.as_str())),
-            TypeExpr::Custom(id) => pascal_case(id.as_str()),
-        }
-    }
-
     fn abi_to_swift(&self, abi: AbiType) -> String {
         match abi {
             AbiType::Void => "Void",
@@ -641,6 +555,13 @@ impl<'a> SwiftLowerer<'a> {
 
     fn swift_name_for_class(&self, id: &ClassId) -> String {
         pascal_case(id.as_str())
+    }
+}
+
+fn extract_global_symbol(target: &CallTarget) -> String {
+    match target {
+        CallTarget::GlobalSymbol(s) => s.to_string(),
+        CallTarget::VtableField(_) => panic!("expected global symbol, got vtable field"),
     }
 }
 

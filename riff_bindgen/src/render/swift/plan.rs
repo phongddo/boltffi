@@ -238,13 +238,12 @@ pub struct SwiftCallback {
 
 #[derive(Debug, Clone)]
 pub struct SwiftCallbackMethod {
-    pub name: String,
+    pub swift_name: String,
     pub ffi_name: String,
     pub params: Vec<SwiftCallbackParam>,
     pub returns: SwiftReturn,
     pub is_async: bool,
     pub has_out_param: bool,
-    pub wire_encoded_return: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -257,35 +256,42 @@ pub struct SwiftCallbackParam {
 }
 
 impl SwiftCallbackMethod {
-    pub fn signature(&self) -> String {
-        let params_str: String = self
-            .params
-            .iter()
-            .map(|p| format!("{}: {}", p.label, p.swift_type))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let mut sig = format!("func {}({})", self.name, params_str);
-
-        if self.is_async {
-            sig.push_str(" async");
-        }
-        if self.returns.is_throws() {
-            sig.push_str(" throws");
-        }
-        if let Some(ret_type) = self.returns.swift_type() {
-            sig.push_str(&format!(" -> {}", ret_type));
-        }
-
-        sig
-    }
-
     pub fn has_return(&self) -> bool {
         !self.returns.is_void()
     }
 
     pub fn throws(&self) -> bool {
         self.returns.is_throws()
+    }
+
+    pub fn return_type(&self) -> Option<String> {
+        self.returns.swift_type()
+    }
+
+    pub fn wire_encoded_return(&self) -> bool {
+        self.returns.is_wire_encoded()
+    }
+
+    pub fn wire_return_encode(&self) -> Option<String> {
+        self.encoded_return_codec().map(|codec| {
+            let size_expr = codec::size_expr(codec, "result");
+            let encode_expr = codec::encode_data(codec, "result");
+            format!(
+                "let encoded = ({{ var data = Data(capacity: {}); {}; return data }})()",
+                size_expr, encode_expr
+            )
+        })
+    }
+
+    fn encoded_return_codec(&self) -> Option<&CodecPlan> {
+        match &self.returns {
+            SwiftReturn::FromWireBuffer { codec, .. } => Some(codec),
+            SwiftReturn::Throws { ok, .. } => match ok.as_ref() {
+                SwiftReturn::FromWireBuffer { codec, .. } => Some(codec),
+                _ => None,
+            },
+            _ => None,
+        }
     }
 }
 
@@ -343,7 +349,9 @@ pub struct SwiftParam {
 impl SwiftParam {
     pub fn signature(&self) -> String {
         match &self.label {
-            Some(label) if label != &self.name => format!("{} {}: {}", label, self.name, self.swift_type),
+            Some(label) if label != &self.name => {
+                format!("{} {}: {}", label, self.name, self.swift_type)
+            }
             _ => format!("{}: {}", self.name, self.swift_type),
         }
     }
@@ -352,8 +360,13 @@ impl SwiftParam {
         match &self.conversion {
             SwiftConversion::Direct => self.name.clone(),
             SwiftConversion::ToString => format!("{}.cString", self.name),
-            SwiftConversion::ToData => format!("{}.withUnsafeBytes {{ $0.baseAddress }}, UInt32({}.count)", self.name, self.name),
-            SwiftConversion::ToWireBuffer { .. } => format!("{}_buf.ptr, UInt32({}_buf.len)", self.name, self.name),
+            SwiftConversion::ToData => format!(
+                "{}.withUnsafeBytes {{ $0.baseAddress }}, UInt32({}.count)",
+                self.name, self.name
+            ),
+            SwiftConversion::ToWireBuffer { .. } => {
+                format!("{}_buf.ptr, UInt32({}_buf.len)", self.name, self.name)
+            }
             SwiftConversion::WrapCallback { .. } => format!("{}_ptr, {}_fn", self.name, self.name),
             SwiftConversion::PassHandle { nullable, .. } => {
                 if *nullable {
@@ -416,7 +429,10 @@ impl SwiftReturn {
             SwiftReturn::Void => None,
             SwiftReturn::Direct { swift_type } => Some(swift_type.clone()),
             SwiftReturn::FromWireBuffer { swift_type, .. } => Some(swift_type.clone()),
-            SwiftReturn::Handle { class_name, nullable } => {
+            SwiftReturn::Handle {
+                class_name,
+                nullable,
+            } => {
                 if *nullable {
                     Some(format!("{}?", class_name))
                 } else {
@@ -457,5 +473,3 @@ impl SwiftReturn {
         }
     }
 }
-
-

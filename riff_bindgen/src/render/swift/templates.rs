@@ -1,6 +1,8 @@
 use askama::Template;
 
-use super::plan::{SwiftClass, SwiftEnum, SwiftField, SwiftFunction, SwiftRecord, SwiftVariant};
+use super::plan::{
+    SwiftCallback, SwiftClass, SwiftEnum, SwiftField, SwiftFunction, SwiftRecord, SwiftVariant,
+};
 
 #[derive(Template)]
 #[template(path = "record.txt", escape = "none")]
@@ -69,6 +71,22 @@ pub fn render_enum(e: &SwiftEnum) -> String {
 }
 
 #[derive(Template)]
+#[template(path = "callback_trait.txt", escape = "none")]
+pub struct CallbackTemplate<'a> {
+    pub callback: &'a SwiftCallback,
+}
+
+impl<'a> CallbackTemplate<'a> {
+    pub fn new(callback: &'a SwiftCallback) -> Self {
+        Self { callback }
+    }
+}
+
+pub fn render_callback(callback: &SwiftCallback) -> String {
+    CallbackTemplate::new(callback).render().unwrap()
+}
+
+#[derive(Template)]
 #[template(path = "function.txt", escape = "none")]
 pub struct FunctionTemplate<'a> {
     pub func: &'a SwiftFunction,
@@ -131,6 +149,11 @@ impl SwiftEmitter {
 
         for e in &module.enums {
             output.push_str(&render_enum(e));
+            output.push_str("\n\n");
+        }
+
+        for callback in &module.callbacks {
+            output.push_str(&render_callback(callback));
             output.push_str("\n\n");
         }
 
