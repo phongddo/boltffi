@@ -150,32 +150,41 @@ impl<'a> SwiftLowerer<'a> {
                     _ => panic!("expected CodecPlan::Record"),
                 };
 
-                let fields = match layout {
-                    RecordLayout::Encoded { fields } => fields
-                        .iter()
-                        .map(|f| SwiftField {
-                            swift_name: camel_case(f.name.as_str()),
-                            swift_type: codec::swift_type(&f.codec),
-                            default_expr: None,
-                            codec: f.codec.clone(),
-                        })
-                        .collect(),
-                    RecordLayout::Blittable { fields, .. } => fields
-                        .iter()
-                        .map(|f| SwiftField {
-                            swift_name: camel_case(f.name.as_str()),
-                            swift_type: codec::swift_primitive(f.primitive),
-                            default_expr: None,
-                            codec: CodecPlan::Primitive(f.primitive),
-                        })
-                        .collect(),
-                    RecordLayout::Recursive => vec![],
+                let (fields, blittable_size) = match layout {
+                    RecordLayout::Encoded { fields } => (
+                        fields
+                            .iter()
+                            .map(|f| SwiftField {
+                                swift_name: camel_case(f.name.as_str()),
+                                swift_type: codec::swift_type(&f.codec),
+                                default_expr: None,
+                                codec: f.codec.clone(),
+                                c_offset: None,
+                            })
+                            .collect(),
+                        None,
+                    ),
+                    RecordLayout::Blittable { fields, size } => (
+                        fields
+                            .iter()
+                            .map(|f| SwiftField {
+                                swift_name: camel_case(f.name.as_str()),
+                                swift_type: codec::swift_primitive(f.primitive),
+                                default_expr: None,
+                                codec: CodecPlan::Primitive(f.primitive),
+                                c_offset: Some(f.offset),
+                            })
+                            .collect(),
+                        Some(*size),
+                    ),
+                    RecordLayout::Recursive => (vec![], None),
                 };
 
                 SwiftRecord {
                     class_name: self.swift_name_for_record(&def.id),
                     fields,
                     is_blittable: layout.is_blittable(),
+                    blittable_size,
                 }
             })
             .collect()
@@ -250,6 +259,7 @@ impl<'a> SwiftLowerer<'a> {
                         swift_type: codec::swift_type(&f.codec),
                         default_expr: None,
                         codec: f.codec.clone(),
+                        c_offset: None,
                     })
                     .collect(),
             ),

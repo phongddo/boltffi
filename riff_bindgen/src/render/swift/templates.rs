@@ -47,6 +47,7 @@ pub struct RecordTemplate<'a> {
     pub class_name: &'a str,
     pub fields: &'a [SwiftField],
     pub is_blittable: bool,
+    pub blittable_size: Option<usize>,
 }
 
 impl<'a> RecordTemplate<'a> {
@@ -55,6 +56,7 @@ impl<'a> RecordTemplate<'a> {
             class_name: &record.class_name,
             fields: &record.fields,
             is_blittable: record.is_blittable,
+            blittable_size: record.blittable_size,
         }
     }
 }

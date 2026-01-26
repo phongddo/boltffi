@@ -143,6 +143,7 @@ pub struct SwiftRecord {
     pub class_name: String,
     pub fields: Vec<SwiftField>,
     pub is_blittable: bool,
+    pub blittable_size: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -151,6 +152,7 @@ pub struct SwiftField {
     pub swift_type: String,
     pub default_expr: Option<String>,
     pub codec: CodecPlan,
+    pub c_offset: Option<usize>,
 }
 
 impl SwiftField {
@@ -173,6 +175,18 @@ impl SwiftField {
 
     pub fn wire_encode_bytes(&self) -> String {
         codec::encode_bytes(&self.codec, &self.swift_name)
+    }
+
+    pub fn decode_at_offset(&self, base: &str) -> String {
+        if let Some(offset) = self.c_offset {
+            codec::decode_at_offset(&self.codec, base, offset)
+        } else {
+            self.wire_decode_inline()
+        }
+    }
+
+    pub fn encode_at_offset(&self) -> String {
+        codec::encode_primitive_value(&self.codec, &self.swift_name)
     }
 }
 

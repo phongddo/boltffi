@@ -60,36 +60,36 @@ pub fn swift_builtin(id: &str) -> String {
 }
 
 pub fn decode_inline(codec: &CodecPlan) -> String {
-    let (reader, size_kind) = decode_expr(codec);
-    match size_kind {
-        SizeKind::Fixed(size) => {
+    let (reader, decode_return) = decode_expr(codec);
+    match decode_return {
+        DecodeReturn::BareValue(size) => {
             format!("{{ let v = {}; {} += {}; return v }}()", reader, OFFSET_VAR, size)
         }
-        SizeKind::Variable => {
+        DecodeReturn::WithSize => {
             format!("{{ let (v, s) = {}; {} += s; return v }}()", reader, OFFSET_VAR)
         }
     }
 }
 
 pub fn decode_stream_item(codec: &CodecPlan) -> String {
-    let (reader, size_kind) = decode_expr(codec);
+    let (reader, decode_return) = decode_expr(codec);
     let reader = reader.replace(OFFSET_VAR, "offset");
-    match size_kind {
-        SizeKind::Fixed(size) => {
+    match decode_return {
+        DecodeReturn::BareValue(size) => {
             format!("{{ let v = {}; offset += {}; return v }}()", reader, size)
         }
-        SizeKind::Variable => {
+        DecodeReturn::WithSize => {
             format!("{{ let (v, s) = {}; offset += s; return v }}()", reader)
         }
     }
 }
 
 pub fn decode_value_at(codec: &CodecPlan, offset_expr: &str) -> String {
-    let (reader, size_kind) = decode_expr(codec);
+    let (reader, decode_return) = decode_expr(codec);
     let expr = reader.replace(OFFSET_VAR, offset_expr);
-    match size_kind {
-        SizeKind::Fixed(_) => expr,
-        SizeKind::Variable => format!("{}.value", expr),
+    match decode_return {
+        DecodeReturn::BareValue(_) => expr,
+        DecodeReturn::WithSize => format!("{}.value", expr),
     }
 }
 
@@ -106,13 +106,20 @@ pub fn decode_result_ok_throw(ok_codec: &CodecPlan, err_codec: &CodecPlan) -> St
 }
 
 pub fn decode_with_wire_buffer(codec: &CodecPlan, wire_buffer_expr: &str) -> String {
-    let (reader, size_kind) = decode_expr(codec);
-    let expr = reader
-        .replace("wire", &format!("{{ let wire = {}; return wire }}()", wire_buffer_expr))
-        .replace(OFFSET_VAR, "0");
-    match size_kind {
-        SizeKind::Fixed(_) => expr,
-        SizeKind::Variable => format!("{}.value", expr),
+    let (reader, decode_return) = decode_expr(codec);
+    let wire_let = format!("{{ let wire = {}; return wire }}()", wire_buffer_expr);
+    let expr = if reader.contains("wireBuffer: wire") {
+        reader
+            .replace("wireBuffer: wire", &format!("wireBuffer: {}", wire_let))
+            .replace(OFFSET_VAR, "0")
+    } else {
+        reader
+            .replace("wire", &wire_let)
+            .replace(OFFSET_VAR, "0")
+    };
+    match decode_return {
+        DecodeReturn::BareValue(_) => expr,
+        DecodeReturn::WithSize => format!("{}.value", expr),
     }
 }
 
@@ -128,22 +135,77 @@ pub fn encode_bytes(codec: &CodecPlan, name: &str) -> String {
     encode_info(codec, name).2
 }
 
-enum SizeKind {
-    Fixed(usize),
-    Variable,
+pub fn decode_at_offset(codec: &CodecPlan, base: &str, offset: usize) -> String {
+    match codec {
+        CodecPlan::Primitive(p) => decode_primitive_at_offset(*p, base, offset),
+        _ => panic!("decode_at_offset only supports primitives"),
+    }
 }
 
-fn decode_expr(codec: &CodecPlan) -> (String, SizeKind) {
+fn decode_primitive_at_offset(p: PrimitiveType, base: &str, offset: usize) -> String {
+    let offset_expr = if offset == 0 {
+        base.to_string()
+    } else {
+        format!("{} + {}", base, offset)
+    };
+    match p {
+        PrimitiveType::Bool => format!("wire.readBool(at: {})", offset_expr),
+        PrimitiveType::I8 => format!("wire.readI8(at: {})", offset_expr),
+        PrimitiveType::U8 => format!("wire.readU8(at: {})", offset_expr),
+        PrimitiveType::I16 => format!("wire.readI16(at: {})", offset_expr),
+        PrimitiveType::U16 => format!("wire.readU16(at: {})", offset_expr),
+        PrimitiveType::I32 => format!("wire.readI32(at: {})", offset_expr),
+        PrimitiveType::U32 => format!("wire.readU32(at: {})", offset_expr),
+        PrimitiveType::I64 => format!("wire.readI64(at: {})", offset_expr),
+        PrimitiveType::U64 => format!("wire.readU64(at: {})", offset_expr),
+        PrimitiveType::ISize => format!("Int(wire.readI64(at: {}))", offset_expr),
+        PrimitiveType::USize => format!("UInt(wire.readU64(at: {}))", offset_expr),
+        PrimitiveType::F32 => format!("wire.readF32(at: {})", offset_expr),
+        PrimitiveType::F64 => format!("wire.readF64(at: {})", offset_expr),
+    }
+}
+
+pub fn encode_primitive_value(codec: &CodecPlan, name: &str) -> String {
     match codec {
-        CodecPlan::Void => ("()".to_string(), SizeKind::Fixed(0)),
+        CodecPlan::Primitive(p) => encode_primitive_append(*p, name),
+        _ => panic!("encode_primitive_value only supports primitives"),
+    }
+}
+
+fn encode_primitive_append(p: PrimitiveType, name: &str) -> String {
+    match p {
+        PrimitiveType::Bool => format!("data.appendBool({})", name),
+        PrimitiveType::I8 => format!("data.appendI8({})", name),
+        PrimitiveType::U8 => format!("data.appendU8({})", name),
+        PrimitiveType::I16 => format!("data.appendI16({})", name),
+        PrimitiveType::U16 => format!("data.appendU16({})", name),
+        PrimitiveType::I32 => format!("data.appendI32({})", name),
+        PrimitiveType::U32 => format!("data.appendU32({})", name),
+        PrimitiveType::I64 => format!("data.appendI64({})", name),
+        PrimitiveType::U64 => format!("data.appendU64({})", name),
+        PrimitiveType::ISize => format!("data.appendI64(Int64({}))", name),
+        PrimitiveType::USize => format!("data.appendU64(UInt64({}))", name),
+        PrimitiveType::F32 => format!("data.appendF32({})", name),
+        PrimitiveType::F64 => format!("data.appendF64({})", name),
+    }
+}
+
+enum DecodeReturn {
+    BareValue(usize),
+    WithSize,
+}
+
+fn decode_expr(codec: &CodecPlan) -> (String, DecodeReturn) {
+    match codec {
+        CodecPlan::Void => ("()".to_string(), DecodeReturn::BareValue(0)),
         CodecPlan::Primitive(p) => decode_primitive(*p),
         CodecPlan::String => (
             format!("wire.readString(at: {})", OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
         CodecPlan::Bytes => (
             format!("wire.readBytesWithSize(at: {})", OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
         CodecPlan::Builtin(id) => decode_builtin(id.as_str()),
         CodecPlan::Option(inner) => decode_option(inner),
@@ -155,82 +217,78 @@ fn decode_expr(codec: &CodecPlan) -> (String, SizeKind) {
     }
 }
 
-fn decode_primitive(p: PrimitiveType) -> (String, SizeKind) {
+fn decode_primitive(p: PrimitiveType) -> (String, DecodeReturn) {
     match p {
-        PrimitiveType::Bool => (format!("wire.readBool(at: {})", OFFSET_VAR), SizeKind::Fixed(1)),
-        PrimitiveType::I8 => (format!("wire.readI8(at: {})", OFFSET_VAR), SizeKind::Fixed(1)),
-        PrimitiveType::U8 => (format!("wire.readU8(at: {})", OFFSET_VAR), SizeKind::Fixed(1)),
-        PrimitiveType::I16 => (format!("wire.readI16(at: {})", OFFSET_VAR), SizeKind::Fixed(2)),
-        PrimitiveType::U16 => (format!("wire.readU16(at: {})", OFFSET_VAR), SizeKind::Fixed(2)),
-        PrimitiveType::I32 => (format!("wire.readI32(at: {})", OFFSET_VAR), SizeKind::Fixed(4)),
-        PrimitiveType::U32 => (format!("wire.readU32(at: {})", OFFSET_VAR), SizeKind::Fixed(4)),
-        PrimitiveType::I64 => (format!("wire.readI64(at: {})", OFFSET_VAR), SizeKind::Fixed(8)),
-        PrimitiveType::U64 => (format!("wire.readU64(at: {})", OFFSET_VAR), SizeKind::Fixed(8)),
-        PrimitiveType::ISize => (format!("Int(wire.readI64(at: {}))", OFFSET_VAR), SizeKind::Fixed(8)),
-        PrimitiveType::USize => (format!("UInt(wire.readU64(at: {}))", OFFSET_VAR), SizeKind::Fixed(8)),
-        PrimitiveType::F32 => (format!("wire.readF32(at: {})", OFFSET_VAR), SizeKind::Fixed(4)),
-        PrimitiveType::F64 => (format!("wire.readF64(at: {})", OFFSET_VAR), SizeKind::Fixed(8)),
+        PrimitiveType::Bool => (format!("wire.readBool(at: {})", OFFSET_VAR), DecodeReturn::BareValue(1)),
+        PrimitiveType::I8 => (format!("wire.readI8(at: {})", OFFSET_VAR), DecodeReturn::BareValue(1)),
+        PrimitiveType::U8 => (format!("wire.readU8(at: {})", OFFSET_VAR), DecodeReturn::BareValue(1)),
+        PrimitiveType::I16 => (format!("wire.readI16(at: {})", OFFSET_VAR), DecodeReturn::BareValue(2)),
+        PrimitiveType::U16 => (format!("wire.readU16(at: {})", OFFSET_VAR), DecodeReturn::BareValue(2)),
+        PrimitiveType::I32 => (format!("wire.readI32(at: {})", OFFSET_VAR), DecodeReturn::BareValue(4)),
+        PrimitiveType::U32 => (format!("wire.readU32(at: {})", OFFSET_VAR), DecodeReturn::BareValue(4)),
+        PrimitiveType::I64 => (format!("wire.readI64(at: {})", OFFSET_VAR), DecodeReturn::BareValue(8)),
+        PrimitiveType::U64 => (format!("wire.readU64(at: {})", OFFSET_VAR), DecodeReturn::BareValue(8)),
+        PrimitiveType::ISize => (format!("Int(wire.readI64(at: {}))", OFFSET_VAR), DecodeReturn::BareValue(8)),
+        PrimitiveType::USize => (format!("UInt(wire.readU64(at: {}))", OFFSET_VAR), DecodeReturn::BareValue(8)),
+        PrimitiveType::F32 => (format!("wire.readF32(at: {})", OFFSET_VAR), DecodeReturn::BareValue(4)),
+        PrimitiveType::F64 => (format!("wire.readF64(at: {})", OFFSET_VAR), DecodeReturn::BareValue(8)),
     }
 }
 
-fn decode_builtin(id: &str) -> (String, SizeKind) {
+fn decode_builtin(id: &str) -> (String, DecodeReturn) {
     match id {
         "Duration" => (
             format!("wire.readDuration(at: {})", OFFSET_VAR),
-            SizeKind::Fixed(12),
+            DecodeReturn::BareValue(12),
         ),
         "SystemTime" => (
             format!("wire.readTimestamp(at: {})", OFFSET_VAR),
-            SizeKind::Fixed(12),
+            DecodeReturn::BareValue(12),
         ),
         "Uuid" => (
             format!("wire.readUuid(at: {})", OFFSET_VAR),
-            SizeKind::Fixed(16),
+            DecodeReturn::BareValue(16),
         ),
         "Url" => (
             format!("wire.readUrl(at: {})", OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
         _ => (
             format!("wire.read{}(at: {})", pascal_case(id), OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
     }
 }
 
-fn decode_record(name: &str, layout: &RecordLayout) -> (String, SizeKind) {
+fn decode_record(name: &str, layout: &RecordLayout) -> (String, DecodeReturn) {
     let class_name = pascal_case(name);
     match layout {
-        RecordLayout::Blittable { size, .. } => (
-            format!("wire.readBlittable(at: {}, as: {}.self)", OFFSET_VAR, class_name),
-            SizeKind::Fixed(*size),
-        ),
-        RecordLayout::Encoded { .. } | RecordLayout::Recursive => (
+        RecordLayout::Blittable { .. } | RecordLayout::Encoded { .. } | RecordLayout::Recursive => (
             format!("{}.decode(wireBuffer: wire, at: {})", class_name, OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
     }
 }
 
-fn decode_enum(name: &str, layout: &EnumLayout) -> (String, SizeKind) {
+fn decode_enum(name: &str, layout: &EnumLayout) -> (String, DecodeReturn) {
     let class_name = pascal_case(name);
     match layout {
         EnumLayout::CStyle { .. } => (
             format!("{}(fromC: wire.readI32(at: {}))", class_name, OFFSET_VAR),
-            SizeKind::Fixed(4),
+            DecodeReturn::BareValue(4),
         ),
         EnumLayout::Data { .. } | EnumLayout::Recursive => (
             format!("{}.decode(wireBuffer: wire, at: {})", class_name, OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         ),
     }
 }
 
-fn decode_vec(element: &CodecPlan, layout: &VecLayout) -> (String, SizeKind) {
+fn decode_vec(element: &CodecPlan, layout: &VecLayout) -> (String, DecodeReturn) {
     if matches!(element, CodecPlan::Primitive(PrimitiveType::U8)) {
         return (
             format!("wire.readBytesWithSize(at: {})", OFFSET_VAR),
-            SizeKind::Variable,
+            DecodeReturn::WithSize,
         );
     }
 
@@ -239,51 +297,64 @@ fn decode_vec(element: &CodecPlan, layout: &VecLayout) -> (String, SizeKind) {
             let element_type = swift_type(element);
             (
                 format!("wire.readBlittableArrayWithSize(at: {}, as: {}.self)", OFFSET_VAR, element_type),
-                SizeKind::Variable,
+                DecodeReturn::WithSize,
             )
         }
         VecLayout::Encoded => {
-            let (inner_reader, inner_size) = decode_expr(element);
-            let tuple_reader = match inner_size {
-                SizeKind::Fixed(size) => format!("({}, {})", inner_reader.replace(OFFSET_VAR, "$0"), size),
-                SizeKind::Variable => inner_reader.replace(OFFSET_VAR, "$0"),
+            let (inner_reader, inner_return) = decode_expr(element);
+            let inner_replaced = inner_reader.replace(OFFSET_VAR, "$0");
+            let tuple_reader = match inner_return {
+                DecodeReturn::BareValue(size) => {
+                    format!("({}, {})", inner_replaced, size)
+                }
+                DecodeReturn::WithSize => inner_replaced,
             };
             (
                 format!("wire.readArray(at: {}, reader: {{ {} }})", OFFSET_VAR, tuple_reader),
-                SizeKind::Variable,
+                DecodeReturn::WithSize,
             )
         }
     }
 }
 
-fn decode_option(inner: &CodecPlan) -> (String, SizeKind) {
-    let (inner_reader, inner_size) = decode_expr(inner);
-    let tuple_reader = match inner_size {
-        SizeKind::Fixed(size) => format!("({}, {})", inner_reader.replace(OFFSET_VAR, "$0"), size),
-        SizeKind::Variable => inner_reader.replace(OFFSET_VAR, "$0"),
+fn decode_option(inner: &CodecPlan) -> (String, DecodeReturn) {
+    let (inner_reader, inner_return) = decode_expr(inner);
+    let inner_replaced = inner_reader.replace(OFFSET_VAR, "$0");
+    let tuple_reader = match inner_return {
+        DecodeReturn::BareValue(size) => {
+            format!("({}, {})", inner_replaced, size)
+        }
+        DecodeReturn::WithSize => inner_replaced,
     };
     (
         format!("wire.readOptional(at: {}, reader: {{ {} }})", OFFSET_VAR, tuple_reader),
-        SizeKind::Variable,
+        DecodeReturn::WithSize,
     )
 }
 
-fn decode_result(ok: &CodecPlan, err: &CodecPlan) -> (String, SizeKind) {
-    let (ok_reader, ok_size) = decode_expr(ok);
-    let (err_reader, err_size) = decode_expr(err);
+fn decode_result(ok: &CodecPlan, err: &CodecPlan) -> (String, DecodeReturn) {
+    let (ok_reader, ok_return) = decode_expr(ok);
+    let (err_reader, err_return) = decode_expr(err);
     
-    let ok_tuple = match ok_size {
-        SizeKind::Fixed(size) => format!("({}, {})", ok_reader.replace(OFFSET_VAR, "$0"), size),
-        SizeKind::Variable => ok_reader.replace(OFFSET_VAR, "$0"),
+    let ok_replaced = ok_reader.replace(OFFSET_VAR, "$0");
+    let ok_tuple = match ok_return {
+        DecodeReturn::BareValue(size) => {
+            format!("({}, {})", ok_replaced, size)
+        }
+        DecodeReturn::WithSize => ok_replaced,
     };
-    let err_tuple = match err_size {
-        SizeKind::Fixed(size) => format!("({}, {})", err_reader.replace(OFFSET_VAR, "$0"), size),
-        SizeKind::Variable => err_reader.replace(OFFSET_VAR, "$0"),
+    
+    let err_replaced = err_reader.replace(OFFSET_VAR, "$0");
+    let err_tuple = match err_return {
+        DecodeReturn::BareValue(size) => {
+            format!("({}, {})", err_replaced, size)
+        }
+        DecodeReturn::WithSize => err_replaced,
     };
     
     (
         format!("wire.readResult(at: {}, okReader: {{ {} }}, errReader: {{ {} }})", OFFSET_VAR, ok_tuple, err_tuple),
-        SizeKind::Variable,
+        DecodeReturn::WithSize,
     )
 }
 
@@ -363,8 +434,8 @@ fn encode_record(layout: &RecordLayout, name: &str) -> (String, String, String) 
     match layout {
         RecordLayout::Blittable { size, .. } => (
             size.to_string(),
-            format!("withUnsafeBytes(of: {}) {{ data.append(contentsOf: $0) }}", name),
-            format!("withUnsafeBytes(of: {}) {{ bytes.append(contentsOf: $0) }}", name),
+            format!("{}.wireEncodeTo(&data)", name),
+            format!("{}.wireEncodeToBytes(&bytes)", name),
         ),
         RecordLayout::Encoded { .. } | RecordLayout::Recursive => (
             format!("{}.wireEncodedSize()", name),

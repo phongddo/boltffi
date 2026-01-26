@@ -11,7 +11,9 @@ public struct {{ class_name }}: Hashable, Equatable, Sendable {
 
     @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: {{ class_name }}, size: Int) {
 {%- if is_blittable %}
-        return (wire.readBlittable(at: offset, as: {{ class_name }}.self), MemoryLayout<{{ class_name }}>.stride)
+{%- if let Some(size) = blittable_size %}
+        return ({{ class_name }}({% for field in fields %}{{ field.swift_name }}: {{ field.decode_at_offset("offset") }}{% if !loop.last %}, {% endif %}{% endfor %}), {{ size }})
+{%- endif %}
 {%- else %}
         var pos = offset
 {%- for field in fields %}
@@ -24,14 +26,20 @@ public struct {{ class_name }}: Hashable, Equatable, Sendable {
 
 extension {{ class_name }}: WireEncodable {
 {%- if is_blittable %}
+{%- if let Some(size) = blittable_size %}
     @usableFromInline static var isBlittable: Bool { true }
-    @inlinable func wireEncodedSize() -> Int { MemoryLayout<Self>.stride }
+    @inlinable func wireEncodedSize() -> Int { {{ size }} }
     @inlinable func wireEncodeTo(_ data: inout Data) {
-        withUnsafeBytes(of: self) { data.append(contentsOf: $0) }
+{%- for field in fields %}
+        {{ field.encode_at_offset() }}
+{%- endfor %}
     }
     @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
-        withUnsafeBytes(of: self) { bytes.append(contentsOf: $0) }
+{%- for field in fields %}
+        {{ field.wire_encode_bytes() }}
+{%- endfor %}
     }
+{%- endif %}
 {%- else %}
     @usableFromInline static var isBlittable: Bool { false }
     @inlinable func wireEncodedSize() -> Int {
