@@ -24,7 +24,8 @@ use crate::ir::definitions::{
 };
 use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
 use crate::ir::ops::{
-    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, WireShape, WriteOp, WriteSeq,
+    FieldReadOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    remap_root_in_seq,
 };
 use crate::ir::plan::AbiType;
 use crate::ir::plan::{CallbackStyle, Mutability};
@@ -160,15 +161,13 @@ impl<'a> SwiftLowerer<'a> {
                                         shape: WireShape::Value,
                                     }
                                 });
-                            let old_base = format!("self.{}", field.name.as_str());
-                            let encode = encode_fields
-                                .get(&field.name)
-                                .cloned()
-                                .map(|seq| self.rebase_write_seq(&seq, &old_base, &swift_name))
-                                .unwrap_or_else(|| WriteSeq {
-                                    size: SizeExpr::Fixed(0),
-                                    ops: vec![],
-                                    shape: WireShape::Value,
+                            let encode =
+                                encode_fields.get(&field.name).cloned().unwrap_or_else(|| {
+                                    WriteSeq {
+                                        size: SizeExpr::Fixed(0),
+                                        ops: vec![],
+                                        shape: WireShape::Value,
+                                    }
                                 });
                             let c_offset = if abi_record.is_blittable {
                                 decode_fields
@@ -244,11 +243,8 @@ impl<'a> SwiftLowerer<'a> {
                     .iter()
                     .map(|field| {
                         let lowered = self.lower_enum_field(field);
-                        let encode = self.rebase_write_seq(
-                            &lowered.encode,
-                            lowered.swift_name.as_str(),
-                            "value",
-                        );
+                        let encode =
+                            remap_root_in_seq(&lowered.encode, ValueExpr::Var("value".into()));
                         SwiftField { encode, ..lowered }
                     })
                     .collect(),
@@ -259,11 +255,8 @@ impl<'a> SwiftLowerer<'a> {
                     .map(|field| {
                         let lowered = self.lower_enum_field(field);
                         if lowered.swift_name.chars().all(|c| c.is_ascii_digit()) {
-                            let encode = self.rebase_write_seq(
-                                &lowered.encode,
-                                lowered.swift_name.as_str(),
-                                "value",
-                            );
+                            let encode =
+                                remap_root_in_seq(&lowered.encode, ValueExpr::Var("value".into()));
                             SwiftField { encode, ..lowered }
                         } else {
                             lowered
@@ -276,7 +269,7 @@ impl<'a> SwiftLowerer<'a> {
 
     fn lower_enum_field(&self, field: &AbiEnumField) -> SwiftField {
         let swift_name = camel_case(field.name.as_str());
-        let encode = self.rebase_write_seq(&field.encode, field.name.as_str(), &swift_name);
+        let encode = field.encode.clone();
         SwiftField {
             swift_name,
             swift_type: emit::swift_type(&field.type_expr),
@@ -639,7 +632,7 @@ impl<'a> SwiftLowerer<'a> {
             ParamRole::InEncoded { encode_ops, .. } => (
                 emit::swift_type(&param.type_expr),
                 SwiftConversion::ToWireBuffer {
-                    encode: self.rebase_write_seq(encode_ops, param.name.as_str(), &swift_name),
+                    encode: encode_ops.clone(),
                 },
             ),
             ParamRole::InHandle { class_id, nullable } => {
@@ -881,130 +874,6 @@ impl<'a> SwiftLowerer<'a> {
         })
     }
 
-    fn rebase_write_seq(&self, seq: &WriteSeq, old_base: &str, new_base: &str) -> WriteSeq {
-        WriteSeq {
-            size: self.rebase_size_expr(&seq.size, old_base, new_base),
-            ops: seq
-                .ops
-                .iter()
-                .map(|op| self.rebase_write_op(op, old_base, new_base))
-                .collect(),
-            shape: seq.shape,
-        }
-    }
-
-    fn rebase_size_expr(&self, size: &SizeExpr, old_base: &str, new_base: &str) -> SizeExpr {
-        match size {
-            SizeExpr::Fixed(value) => SizeExpr::Fixed(*value),
-            SizeExpr::Runtime => SizeExpr::Runtime,
-            SizeExpr::StringLen(value) => {
-                SizeExpr::StringLen(self.rebase_value(value, old_base, new_base))
-            }
-            SizeExpr::BytesLen(value) => {
-                SizeExpr::BytesLen(self.rebase_value(value, old_base, new_base))
-            }
-            SizeExpr::ValueSize(value) => {
-                SizeExpr::ValueSize(self.rebase_value(value, old_base, new_base))
-            }
-            SizeExpr::WireSize { value } => SizeExpr::WireSize {
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            SizeExpr::BuiltinSize { id, value } => SizeExpr::BuiltinSize {
-                id: id.clone(),
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            SizeExpr::Sum(parts) => SizeExpr::Sum(
-                parts
-                    .iter()
-                    .map(|part| self.rebase_size_expr(part, old_base, new_base))
-                    .collect(),
-            ),
-            SizeExpr::OptionSize { value, inner } => SizeExpr::OptionSize {
-                value: self.rebase_value(value, old_base, new_base),
-                inner: Box::new(self.rebase_size_expr(inner, old_base, new_base)),
-            },
-            SizeExpr::VecSize {
-                value,
-                inner,
-                layout,
-            } => SizeExpr::VecSize {
-                value: self.rebase_value(value, old_base, new_base),
-                inner: Box::new(self.rebase_size_expr(inner, old_base, new_base)),
-                layout: layout.clone(),
-            },
-            SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
-                value: self.rebase_value(value, old_base, new_base),
-                ok: Box::new(self.rebase_size_expr(ok, old_base, new_base)),
-                err: Box::new(self.rebase_size_expr(err, old_base, new_base)),
-            },
-        }
-    }
-
-    fn rebase_write_op(&self, op: &WriteOp, old_base: &str, new_base: &str) -> WriteOp {
-        match op {
-            WriteOp::Primitive { primitive, value } => WriteOp::Primitive {
-                primitive: *primitive,
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            WriteOp::String { value } => WriteOp::String {
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            WriteOp::Bytes { value } => WriteOp::Bytes {
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            WriteOp::Option { value, some } => WriteOp::Option {
-                value: self.rebase_value(value, old_base, new_base),
-                some: Box::new(self.rebase_write_seq(some, old_base, new_base)),
-            },
-            WriteOp::Vec {
-                value,
-                element_type,
-                element,
-                layout,
-            } => WriteOp::Vec {
-                value: self.rebase_value(value, old_base, new_base),
-                element_type: element_type.clone(),
-                element: Box::new(self.rebase_write_seq(element, old_base, new_base)),
-                layout: layout.clone(),
-            },
-            WriteOp::Record { id, value, fields } => WriteOp::Record {
-                id: id.clone(),
-                value: self.rebase_value(value, old_base, new_base),
-                fields: fields
-                    .iter()
-                    .map(|field| FieldWriteOp {
-                        name: field.name.clone(),
-                        accessor: self.rebase_value(&field.accessor, old_base, new_base),
-                        seq: self.rebase_write_seq(&field.seq, old_base, new_base),
-                    })
-                    .collect(),
-            },
-            WriteOp::Enum { id, value, layout } => WriteOp::Enum {
-                id: id.clone(),
-                value: self.rebase_value(value, old_base, new_base),
-                layout: layout.clone(),
-            },
-            WriteOp::Result { value, ok, err } => WriteOp::Result {
-                value: self.rebase_value(value, old_base, new_base),
-                ok: Box::new(self.rebase_write_seq(ok, old_base, new_base)),
-                err: Box::new(self.rebase_write_seq(err, old_base, new_base)),
-            },
-            WriteOp::Builtin { id, value } => WriteOp::Builtin {
-                id: id.clone(),
-                value: self.rebase_value(value, old_base, new_base),
-            },
-            WriteOp::Custom {
-                id,
-                value,
-                underlying,
-            } => WriteOp::Custom {
-                id: id.clone(),
-                value: self.rebase_value(value, old_base, new_base),
-                underlying: Box::new(self.rebase_write_seq(underlying, old_base, new_base)),
-            },
-        }
-    }
-
     fn rebase_read_seq(&self, seq: &ReadSeq, old_base: &str, new_base: &str) -> ReadSeq {
         ReadSeq {
             size: seq.size.clone(),
@@ -1110,16 +979,6 @@ impl<'a> SwiftLowerer<'a> {
         }
     }
 
-    fn rebase_value(&self, value: &str, old_base: &str, new_base: &str) -> String {
-        if value == old_base {
-            new_base.to_string()
-        } else if let Some(suffix) = value.strip_prefix(old_base) {
-            format!("{}{}", new_base, suffix)
-        } else {
-            value.to_string()
-        }
-    }
-
     fn rebase_return_encode(&self, returns: SwiftReturn, new_base: &str) -> SwiftReturn {
         match returns {
             SwiftReturn::FromWireBuffer {
@@ -1129,7 +988,7 @@ impl<'a> SwiftLowerer<'a> {
             } => SwiftReturn::FromWireBuffer {
                 swift_type,
                 decode,
-                encode: self.rebase_write_seq(&encode, "value", new_base),
+                encode: remap_root_in_seq(&encode, ValueExpr::Var(new_base.to_string())),
             },
             SwiftReturn::Throws {
                 ok,

@@ -937,7 +937,7 @@ impl SourceScanner {
                                 &self.compiler_canonical_types,
                                 None,
                             )?;
-                            Some((format!("_{}", i), field_type))
+                            Some((format!("value_{}", i), field_type))
                         })
                         .collect(),
                     Fields::Unit => Vec::new(),

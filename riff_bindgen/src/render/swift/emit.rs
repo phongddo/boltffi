@@ -2,8 +2,20 @@ use riff_ffi_rules::naming::to_upper_camel_case as pascal_case;
 
 use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::BuiltinId;
-use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, WriteOp, WriteSeq};
+use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};
+use riff_ffi_rules::naming::snake_to_camel as camel_case;
+
+pub fn render_value(expr: &ValueExpr) -> String {
+    match expr {
+        ValueExpr::Instance => "self".to_string(),
+        ValueExpr::Var(name) => name.clone(),
+        ValueExpr::Named(name) => camel_case(name),
+        ValueExpr::Field(parent, field) => {
+            format!("{}.{}", render_value(parent), camel_case(field.as_str()))
+        }
+    }
+}
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum ReadReturn {
@@ -120,11 +132,11 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
     match size {
         SizeExpr::Fixed(value) => value.to_string(),
         SizeExpr::Runtime => "0".to_string(),
-        SizeExpr::StringLen(value) => format!("{}.utf8.count", value),
-        SizeExpr::BytesLen(value) => format!("{}.count", value),
-        SizeExpr::ValueSize(expr) => expr.to_string(),
-        SizeExpr::WireSize { value } => format!("{}.wireEncodedSize()", value),
-        SizeExpr::BuiltinSize { id, value } => swift_builtin_size_expr(id, value),
+        SizeExpr::StringLen(value) => format!("{}.utf8.count", render_value(value)),
+        SizeExpr::BytesLen(value) => format!("{}.count", render_value(value)),
+        SizeExpr::ValueSize(expr) => render_value(expr),
+        SizeExpr::WireSize { value } => format!("{}.wireEncodedSize()", render_value(value)),
+        SizeExpr::BuiltinSize { id, value } => swift_builtin_size_expr(id, &render_value(value)),
         SizeExpr::Sum(parts) => {
             let rendered = parts
                 .iter()
@@ -135,25 +147,31 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
         }
         SizeExpr::OptionSize { value, inner } => {
             let inner_size = emit_size_expr(inner);
-            format!("({}.map {{ v in 1 + {} }} ?? 1)", value, inner_size)
+            format!(
+                "({}.map {{ v in 1 + {} }} ?? 1)",
+                render_value(value),
+                inner_size
+            )
         }
         SizeExpr::VecSize {
             value,
             inner,
             layout,
         } => {
+            let v = render_value(value);
             let inner_size = emit_size_expr(inner);
             match layout {
                 VecLayout::Blittable { element_size } => {
-                    format!("(4 + {}.count * {})", value, element_size)
+                    format!("(4 + {}.count * {})", v, element_size)
                 }
                 VecLayout::Encoded => {
                     let reduced = inner_size.replace("item", "$1");
-                    format!("(4 + {}.reduce(0) {{ $0 + {} }})", value, reduced)
+                    format!("(4 + {}.reduce(0) {{ $0 + {} }})", v, reduced)
                 }
             }
         }
         SizeExpr::ResultSize { value, ok, err } => {
+            let v = render_value(value);
             let ok_size = emit_size_expr(ok);
             let err_size = emit_size_expr(err);
             let ok_fixed = ok_size.chars().all(|c| c.is_ascii_digit());
@@ -162,7 +180,7 @@ pub fn emit_size_expr(size: &SizeExpr) -> String {
             let err_binding = if err_fixed { "_" } else { "let errVal" };
             format!(
                 "({{ switch {} {{ case .success({}): return 1 + {}; case .failure({}): return 1 + {} }} }}())",
-                value, ok_binding, ok_size, err_binding, err_size
+                v, ok_binding, ok_size, err_binding, err_size
             )
         }
     }
@@ -366,35 +384,28 @@ fn emit_read_op(op: &ReadOp, base_name: &str, base_expr: &str) -> (String, ReadR
 
 fn emit_write_data_op(op: &WriteOp) -> String {
     match op {
-        WriteOp::Primitive { primitive, value } => match primitive {
-            PrimitiveType::Bool => format!("data.appendBool({})", value),
-            PrimitiveType::I8 => format!("data.appendI8({})", value),
-            PrimitiveType::U8 => format!("data.appendU8({})", value),
-            PrimitiveType::I16 => format!("data.appendI16({})", value),
-            PrimitiveType::U16 => format!("data.appendU16({})", value),
-            PrimitiveType::I32 => format!("data.appendI32({})", value),
-            PrimitiveType::U32 => format!("data.appendU32({})", value),
-            PrimitiveType::I64 => format!("data.appendI64({})", value),
-            PrimitiveType::U64 => format!("data.appendU64({})", value),
-            PrimitiveType::ISize => format!("data.appendI64(Int64({}))", value),
-            PrimitiveType::USize => format!("data.appendU64(UInt64({}))", value),
-            PrimitiveType::F32 => format!("data.appendF32({})", value),
-            PrimitiveType::F64 => format!("data.appendF64({})", value),
-        },
-        WriteOp::String { value } => format!("data.appendString({})", value),
-        WriteOp::Bytes { value } => format!("data.appendBytes({})", value),
-        WriteOp::Builtin { id, value } => match id.as_str() {
-            "Duration" => format!("data.appendDuration({})", value),
-            "SystemTime" => format!("data.appendTimestamp({})", value),
-            "Uuid" => format!("data.appendUuid({})", value),
-            "Url" => format!("data.appendString({}.absoluteString)", value),
-            _ => format!("{}.wireEncodeTo(&data)", value),
-        },
+        WriteOp::Primitive { primitive, value } => {
+            let v = render_value(value);
+            emit_write_data_primitive(*primitive, &v)
+        }
+        WriteOp::String { value } => format!("data.appendString({})", render_value(value)),
+        WriteOp::Bytes { value } => format!("data.appendBytes({})", render_value(value)),
+        WriteOp::Builtin { id, value } => {
+            let v = render_value(value);
+            match id.as_str() {
+                "Duration" => format!("data.appendDuration({})", v),
+                "SystemTime" => format!("data.appendTimestamp({})", v),
+                "Uuid" => format!("data.appendUuid({})", v),
+                "Url" => format!("data.appendString({}.absoluteString)", v),
+                _ => format!("{}.wireEncodeTo(&data)", v),
+            }
+        }
         WriteOp::Option { value, some } => {
             let inner = emit_write_data(some);
             format!(
                 "if let v = {} {{ data.appendU8(1); {} }} else {{ data.appendU8(0) }}",
-                value, inner
+                render_value(value),
+                inner
             )
         }
         WriteOp::Vec {
@@ -403,70 +414,86 @@ fn emit_write_data_op(op: &WriteOp) -> String {
             element,
             layout,
         } => {
+            let v = render_value(value);
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-                return format!("data.appendBytes({})", value);
+                return format!("data.appendBytes({})", v);
             }
             match layout {
-                VecLayout::Blittable { .. } => format!("data.appendBlittableArray({})", value),
+                VecLayout::Blittable { .. } => format!("data.appendBlittableArray({})", v),
                 VecLayout::Encoded => {
                     let inner = emit_write_data(element);
                     format!(
                         "data.appendU32(UInt32({}.count)); for item in {} {{ {} }}",
-                        value, value, inner
+                        v, v, inner
                     )
                 }
             }
         }
-        WriteOp::Record { value, .. } => format!("{}.wireEncodeTo(&data)", value),
-        WriteOp::Enum { value, layout, .. } => match layout {
-            EnumLayout::CStyle { .. } => format!("data.appendI32({}.rawValue)", value),
-            EnumLayout::Data { .. } | EnumLayout::Recursive => {
-                format!("{}.wireEncodeTo(&data)", value)
+        WriteOp::Record { value, .. } => format!("{}.wireEncodeTo(&data)", render_value(value)),
+        WriteOp::Enum { value, layout, .. } => {
+            let v = render_value(value);
+            match layout {
+                EnumLayout::CStyle { .. } => format!("data.appendI32({}.rawValue)", v),
+                EnumLayout::Data { .. } | EnumLayout::Recursive => {
+                    format!("{}.wireEncodeTo(&data)", v)
+                }
             }
-        },
+        }
         WriteOp::Result { value, ok, err } => {
+            let v = render_value(value);
             let ok_data = emit_write_data(ok);
             let err_data = emit_write_data(err);
             format!(
                 "switch {} {{ case .success(let okVal): data.appendU8(0); {}; case .failure(let errVal): data.appendU8(1); {} }}",
-                value, ok_data, err_data
+                v, ok_data, err_data
             )
         }
         WriteOp::Custom { underlying, .. } => emit_write_data(underlying),
     }
 }
 
+fn emit_write_data_primitive(primitive: PrimitiveType, v: &str) -> String {
+    match primitive {
+        PrimitiveType::Bool => format!("data.appendBool({})", v),
+        PrimitiveType::I8 => format!("data.appendI8({})", v),
+        PrimitiveType::U8 => format!("data.appendU8({})", v),
+        PrimitiveType::I16 => format!("data.appendI16({})", v),
+        PrimitiveType::U16 => format!("data.appendU16({})", v),
+        PrimitiveType::I32 => format!("data.appendI32({})", v),
+        PrimitiveType::U32 => format!("data.appendU32({})", v),
+        PrimitiveType::I64 => format!("data.appendI64({})", v),
+        PrimitiveType::U64 => format!("data.appendU64({})", v),
+        PrimitiveType::ISize => format!("data.appendI64(Int64({}))", v),
+        PrimitiveType::USize => format!("data.appendU64(UInt64({}))", v),
+        PrimitiveType::F32 => format!("data.appendF32({})", v),
+        PrimitiveType::F64 => format!("data.appendF64({})", v),
+    }
+}
+
 fn emit_write_bytes_op(op: &WriteOp) -> String {
     match op {
-        WriteOp::Primitive { primitive, value } => match primitive {
-            PrimitiveType::Bool => format!("bytes.appendBool({})", value),
-            PrimitiveType::I8 => format!("bytes.appendI8({})", value),
-            PrimitiveType::U8 => format!("bytes.appendU8({})", value),
-            PrimitiveType::I16 => format!("bytes.appendI16({})", value),
-            PrimitiveType::U16 => format!("bytes.appendU16({})", value),
-            PrimitiveType::I32 => format!("bytes.appendI32({})", value),
-            PrimitiveType::U32 => format!("bytes.appendU32({})", value),
-            PrimitiveType::I64 => format!("bytes.appendI64({})", value),
-            PrimitiveType::U64 => format!("bytes.appendU64({})", value),
-            PrimitiveType::ISize => format!("bytes.appendI64(Int64({}))", value),
-            PrimitiveType::USize => format!("bytes.appendU64(UInt64({}))", value),
-            PrimitiveType::F32 => format!("bytes.appendF32({})", value),
-            PrimitiveType::F64 => format!("bytes.appendF64({})", value),
-        },
-        WriteOp::String { value } => format!("bytes.appendString({})", value),
-        WriteOp::Bytes { value } => format!("bytes.appendBytes({})", value),
-        WriteOp::Builtin { id, value } => match id.as_str() {
-            "Duration" => format!("bytes.appendDuration({})", value),
-            "SystemTime" => format!("bytes.appendTimestamp({})", value),
-            "Uuid" => format!("bytes.appendUuid({})", value),
-            "Url" => format!("bytes.appendString({}.absoluteString)", value),
-            _ => format!("{}.wireEncodeToBytes(&bytes)", value),
-        },
+        WriteOp::Primitive { primitive, value } => {
+            let v = render_value(value);
+            emit_write_bytes_primitive(*primitive, &v)
+        }
+        WriteOp::String { value } => format!("bytes.appendString({})", render_value(value)),
+        WriteOp::Bytes { value } => format!("bytes.appendBytes({})", render_value(value)),
+        WriteOp::Builtin { id, value } => {
+            let v = render_value(value);
+            match id.as_str() {
+                "Duration" => format!("bytes.appendDuration({})", v),
+                "SystemTime" => format!("bytes.appendTimestamp({})", v),
+                "Uuid" => format!("bytes.appendUuid({})", v),
+                "Url" => format!("bytes.appendString({}.absoluteString)", v),
+                _ => format!("{}.wireEncodeToBytes(&bytes)", v),
+            }
+        }
         WriteOp::Option { value, some } => {
             let inner = emit_write_bytes(some);
             format!(
                 "if let v = {} {{ bytes.appendU8(1); {} }} else {{ bytes.appendU8(0) }}",
-                value, inner
+                render_value(value),
+                inner
             )
         }
         WriteOp::Vec {
@@ -475,36 +502,61 @@ fn emit_write_bytes_op(op: &WriteOp) -> String {
             element,
             layout,
         } => {
+            let v = render_value(value);
             if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-                return format!("bytes.appendBytes({})", value);
+                return format!("bytes.appendBytes({})", v);
             }
             match layout {
-                VecLayout::Blittable { .. } => format!("bytes.appendBlittableArray({})", value),
+                VecLayout::Blittable { .. } => format!("bytes.appendBlittableArray({})", v),
                 VecLayout::Encoded => {
                     let inner = emit_write_bytes(element);
                     format!(
                         "bytes.appendU32(UInt32({}.count)); for item in {} {{ {} }}",
-                        value, value, inner
+                        v, v, inner
                     )
                 }
             }
         }
-        WriteOp::Record { value, .. } => format!("{}.wireEncodeToBytes(&bytes)", value),
-        WriteOp::Enum { value, layout, .. } => match layout {
-            EnumLayout::CStyle { .. } => format!("bytes.appendI32({}.rawValue)", value),
-            EnumLayout::Data { .. } | EnumLayout::Recursive => {
-                format!("{}.wireEncodeToBytes(&bytes)", value)
+        WriteOp::Record { value, .. } => {
+            format!("{}.wireEncodeToBytes(&bytes)", render_value(value))
+        }
+        WriteOp::Enum { value, layout, .. } => {
+            let v = render_value(value);
+            match layout {
+                EnumLayout::CStyle { .. } => format!("bytes.appendI32({}.rawValue)", v),
+                EnumLayout::Data { .. } | EnumLayout::Recursive => {
+                    format!("{}.wireEncodeToBytes(&bytes)", v)
+                }
             }
-        },
+        }
         WriteOp::Result { value, ok, err } => {
+            let v = render_value(value);
             let ok_bytes = emit_write_bytes(ok);
             let err_bytes = emit_write_bytes(err);
             format!(
                 "switch {} {{ case .success(let okVal): bytes.appendU8(0); {}; case .failure(let errVal): bytes.appendU8(1); {} }}",
-                value, ok_bytes, err_bytes
+                v, ok_bytes, err_bytes
             )
         }
         WriteOp::Custom { underlying, .. } => emit_write_bytes(underlying),
+    }
+}
+
+fn emit_write_bytes_primitive(primitive: PrimitiveType, v: &str) -> String {
+    match primitive {
+        PrimitiveType::Bool => format!("bytes.appendBool({})", v),
+        PrimitiveType::I8 => format!("bytes.appendI8({})", v),
+        PrimitiveType::U8 => format!("bytes.appendU8({})", v),
+        PrimitiveType::I16 => format!("bytes.appendI16({})", v),
+        PrimitiveType::U16 => format!("bytes.appendU16({})", v),
+        PrimitiveType::I32 => format!("bytes.appendI32({})", v),
+        PrimitiveType::U32 => format!("bytes.appendU32({})", v),
+        PrimitiveType::I64 => format!("bytes.appendI64({})", v),
+        PrimitiveType::U64 => format!("bytes.appendU64({})", v),
+        PrimitiveType::ISize => format!("bytes.appendI64(Int64({}))", v),
+        PrimitiveType::USize => format!("bytes.appendU64(UInt64({}))", v),
+        PrimitiveType::F32 => format!("bytes.appendF32({})", v),
+        PrimitiveType::F64 => format!("bytes.appendF64({})", v),
     }
 }
 

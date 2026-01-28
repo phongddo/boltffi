@@ -17,7 +17,7 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{PackAndroidOptions, PackAppleOptions, PackCommand};
 use commands::verify::VerifyOptions;
-use commands::{run_build, run_check, run_doctor, run_generate, run_init, run_pack, run_verify};
+use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
 use config::Config;
 use error::{CliError, Result};
 
@@ -70,7 +70,7 @@ enum Commands {
 
     #[command(
         about = "Generate bindings (Swift/Kotlin/header)",
-        long_about = "Generate bindings.\n\nExamples:\n  riff generate\n  riff generate swift\n  riff generate kotlin\n  riff generate header\n  riff generate swift --use-ir\n"
+        long_about = "Generate bindings.\n\nExamples:\n  riff generate\n  riff generate swift\n  riff generate kotlin\n  riff generate header\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -82,9 +82,6 @@ enum Commands {
             help = "Override output directory (default comes from riff.toml)"
         )]
         output: Option<PathBuf>,
-
-        #[arg(long, help = "Use IR-based backend (experimental)")]
-        use_ir: bool,
     },
 
     #[command(
@@ -174,9 +171,6 @@ enum PackTargetArg {
 
         #[arg(long, value_enum)]
         layout: Option<PackLayoutArg>,
-
-        #[arg(long, help = "Use IR-based backend for code generation")]
-        use_ir: bool,
     },
 
     #[command(
@@ -247,11 +241,7 @@ fn execute_command(command: Commands) -> Result<()> {
             run_doctor(options)
         }
 
-        Commands::Generate {
-            target,
-            output,
-            use_ir,
-        } => {
+        Commands::Generate { target, output } => {
             let config = load_config()?;
             let options = GenerateOptions {
                 target: target
@@ -263,7 +253,6 @@ fn execute_command(command: Commands) -> Result<()> {
                     })
                     .unwrap_or(GenerateTarget::All),
                 output,
-                use_ir,
             };
             run_generate_with_output(&config, options)
         }
@@ -295,7 +284,6 @@ fn execute_command(command: Commands) -> Result<()> {
                     spm_only,
                     xcframework_only,
                     layout,
-                    use_ir,
                 } => PackCommand::Apple(PackAppleOptions {
                     release,
                     version,
@@ -308,7 +296,6 @@ fn execute_command(command: Commands) -> Result<()> {
                         PackLayoutArg::Split => crate::config::SpmLayout::Split,
                         PackLayoutArg::FfiOnly => crate::config::SpmLayout::FfiOnly,
                     }),
-                    use_ir,
                 }),
                 PackTargetArg::Android {
                     release,
@@ -384,7 +371,13 @@ fn run_release(config: &Config, platform: Option<BuildPlatformArg>) -> Result<()
     println!();
 
     println!("[3/4] Generating bindings...");
-    run_generate(config, GenerateTarget::All)?;
+    run_generate_with_output(
+        config,
+        GenerateOptions {
+            target: GenerateTarget::All,
+            output: None,
+        },
+    )?;
     println!();
 
     println!("[4/4] Packaging...");
@@ -401,7 +394,6 @@ fn run_release(config: &Config, platform: Option<BuildPlatformArg>) -> Result<()
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    use_ir: false,
                 }),
             )?;
         }

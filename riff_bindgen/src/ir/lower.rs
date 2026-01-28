@@ -26,7 +26,8 @@ use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId,
 };
 use crate::ir::ops::{
-    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, WireShape, WriteOp, WriteSeq,
+    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape,
+    WriteOp, WriteSeq,
 };
 use crate::ir::plan::{
     AbiType, AsyncPlan, AsyncResult, CallPlan, CallPlanKind, CallTarget, CallbackStyle,
@@ -241,7 +242,7 @@ impl<'c> Lowerer<'c> {
     fn abi_record(&self, record: &RecordDef) -> AbiRecord {
         let codec = self.build_codec(&TypeExpr::Record(record.id.clone()));
         let decode_ops = self.expand_decode(&codec);
-        let encode_ops = self.expand_encode(&codec, "self");
+        let encode_ops = self.expand_encode(&codec, ValueExpr::Instance);
         let (is_blittable, size) = match codec {
             CodecPlan::Record {
                 layout: RecordLayout::Blittable { size, .. },
@@ -262,7 +263,7 @@ impl<'c> Lowerer<'c> {
     fn abi_enum(&self, enumeration: &EnumDef) -> AbiEnum {
         let codec = self.build_codec(&TypeExpr::Enum(enumeration.id.clone()));
         let decode_ops = self.expand_decode(&codec);
-        let encode_ops = self.expand_encode(&codec, "self");
+        let encode_ops = self.expand_encode(&codec, ValueExpr::Instance);
         let (is_c_style, variants) = match codec {
             CodecPlan::Enum {
                 layout: EnumLayout::CStyle { .. },
@@ -342,7 +343,10 @@ impl<'c> Lowerer<'c> {
 
     fn abi_enum_field(&self, field: &EncodedField) -> AbiEnumField {
         let decode = self.expand_decode(&field.codec);
-        let encode = self.expand_encode(&field.codec, field.name.as_str());
+        let encode = self.expand_encode(
+            &field.codec,
+            ValueExpr::Named(field.name.as_str().to_string()),
+        );
         AbiEnumField {
             name: field.name.clone(),
             type_expr: TypeExpr::from(&field.codec),
@@ -459,7 +463,7 @@ impl<'c> Lowerer<'c> {
                     err: Box::new(err_codec.clone()),
                 };
                 let decode_ops = self.expand_decode(&result_codec);
-                let encode_ops = self.expand_encode(&result_codec, "value");
+                let encode_ops = self.expand_encode(&result_codec, ValueExpr::Var("value".into()));
                 AsyncResultTransport::Encoded {
                     decode_ops,
                     encode_ops,
@@ -478,7 +482,7 @@ impl<'c> Lowerer<'c> {
                     err: Box::new(err_codec.clone()),
                 };
                 let decode_ops = self.expand_decode(&result_codec);
-                let encode_ops = self.expand_encode(&result_codec, "value");
+                let encode_ops = self.expand_encode(&result_codec, ValueExpr::Var("value".into()));
                 (
                     ReturnTransport::Encoded {
                         decode_ops,
@@ -498,7 +502,7 @@ impl<'c> Lowerer<'c> {
             ReturnValuePlan::Direct(d) => ReturnTransport::Direct(d.abi_type),
             ReturnValuePlan::Encoded { codec } => ReturnTransport::Encoded {
                 decode_ops: self.expand_decode(codec),
-                encode_ops: self.expand_encode(codec, "value"),
+                encode_ops: self.expand_encode(codec, ValueExpr::Var("value".into())),
             },
             ReturnValuePlan::Handle { class_id, nullable } => ReturnTransport::Handle {
                 class_id: class_id.clone(),
@@ -692,7 +696,7 @@ impl<'c> Lowerer<'c> {
         }
     }
 
-    fn expand_encode(&self, codec: &CodecPlan, value: &str) -> WriteSeq {
+    fn expand_encode(&self, codec: &CodecPlan, value: ValueExpr) -> WriteSeq {
         match codec {
             CodecPlan::Void => WriteSeq {
                 size: SizeExpr::Fixed(0),
@@ -703,27 +707,21 @@ impl<'c> Lowerer<'c> {
                 size: SizeExpr::Fixed(primitive.wire_size_bytes()),
                 ops: vec![WriteOp::Primitive {
                     primitive: *primitive,
-                    value: value.to_string(),
+                    value: value.clone(),
                 }],
                 shape: WireShape::Value,
             },
             CodecPlan::String => WriteSeq {
-                size: SizeExpr::Sum(vec![
-                    SizeExpr::Fixed(4),
-                    SizeExpr::StringLen(value.to_string()),
-                ]),
+                size: SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::StringLen(value.clone())]),
                 ops: vec![WriteOp::String {
-                    value: value.to_string(),
+                    value: value.clone(),
                 }],
                 shape: WireShape::Value,
             },
             CodecPlan::Bytes => WriteSeq {
-                size: SizeExpr::Sum(vec![
-                    SizeExpr::Fixed(4),
-                    SizeExpr::BytesLen(value.to_string()),
-                ]),
+                size: SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::BytesLen(value.clone())]),
                 ops: vec![WriteOp::Bytes {
-                    value: value.to_string(),
+                    value: value.clone(),
                 }],
                 shape: WireShape::Value,
             },
@@ -737,46 +735,43 @@ impl<'c> Lowerer<'c> {
                                 SizeExpr::Fixed(4),
                                 SizeExpr::BuiltinSize {
                                     id: id.clone(),
-                                    value: value.to_string(),
+                                    value: value.clone(),
                                 },
                             ])
                         } else {
                             SizeExpr::WireSize {
-                                value: value.to_string(),
+                                value: value.clone(),
                             }
                         }
                     }),
                 ops: vec![WriteOp::Builtin {
                     id: id.clone(),
-                    value: value.to_string(),
+                    value: value.clone(),
                 }],
                 shape: WireShape::Value,
             },
             CodecPlan::Option(inner) => {
-                let inner_seq = self.expand_encode(inner, "v");
+                let inner_seq = self.expand_encode(inner, ValueExpr::Var("v".into()));
                 WriteSeq {
                     size: SizeExpr::OptionSize {
-                        value: value.to_string(),
+                        value: value.clone(),
                         inner: Box::new(inner_seq.size.clone()),
                     },
                     ops: vec![WriteOp::Option {
-                        value: value.to_string(),
+                        value: value.clone(),
                         some: Box::new(inner_seq),
                     }],
                     shape: WireShape::Optional,
                 }
             }
             CodecPlan::Vec { element, layout } => {
-                let element_seq = self.expand_encode(element, "item");
+                let element_seq = self.expand_encode(element, ValueExpr::Var("item".into()));
                 let size_expr =
                     if matches!(element.as_ref(), CodecPlan::Primitive(PrimitiveType::U8)) {
-                        SizeExpr::Sum(vec![
-                            SizeExpr::Fixed(4),
-                            SizeExpr::BytesLen(value.to_string()),
-                        ])
+                        SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::BytesLen(value.clone())])
                     } else {
                         SizeExpr::VecSize {
-                            value: value.to_string(),
+                            value: value.clone(),
                             inner: Box::new(element_seq.size.clone()),
                             layout: layout.clone(),
                         }
@@ -784,7 +779,7 @@ impl<'c> Lowerer<'c> {
                 WriteSeq {
                     size: size_expr,
                     ops: vec![WriteOp::Vec {
-                        value: value.to_string(),
+                        value: value.clone(),
                         element_type: TypeExpr::from(element.as_ref()),
                         element: Box::new(element_seq),
                         layout: layout.clone(),
@@ -793,16 +788,16 @@ impl<'c> Lowerer<'c> {
                 }
             }
             CodecPlan::Result { ok, err } => {
-                let ok_seq = self.expand_encode(ok, "okVal");
-                let err_seq = self.expand_encode(err, "errVal");
+                let ok_seq = self.expand_encode(ok, ValueExpr::Var("okVal".into()));
+                let err_seq = self.expand_encode(err, ValueExpr::Var("errVal".into()));
                 WriteSeq {
                     size: SizeExpr::ResultSize {
-                        value: value.to_string(),
+                        value: value.clone(),
                         ok: Box::new(ok_seq.size.clone()),
                         err: Box::new(err_seq.size.clone()),
                     },
                     ops: vec![WriteOp::Result {
-                        value: value.to_string(),
+                        value: value.clone(),
                         ok: Box::new(ok_seq),
                         err: Box::new(err_seq),
                     }],
@@ -813,24 +808,27 @@ impl<'c> Lowerer<'c> {
                 let fields = match layout {
                     RecordLayout::Blittable { fields, .. } => fields
                         .iter()
-                        .map(|field| FieldWriteOp {
-                            name: field.name.clone(),
-                            accessor: field.name.as_str().to_string(),
-                            seq: self.expand_encode(
-                                &CodecPlan::Primitive(field.primitive),
-                                &format!("{}.{}", value, field.name.as_str()),
-                            ),
+                        .map(|field| {
+                            let field_value = value.field(field.name.clone());
+                            FieldWriteOp {
+                                name: field.name.clone(),
+                                accessor: field_value.clone(),
+                                seq: self.expand_encode(
+                                    &CodecPlan::Primitive(field.primitive),
+                                    field_value,
+                                ),
+                            }
                         })
                         .collect(),
                     RecordLayout::Encoded { fields } => fields
                         .iter()
-                        .map(|field| FieldWriteOp {
-                            name: field.name.clone(),
-                            accessor: field.name.as_str().to_string(),
-                            seq: self.expand_encode(
-                                &field.codec,
-                                &format!("{}.{}", value, field.name.as_str()),
-                            ),
+                        .map(|field| {
+                            let field_value = value.field(field.name.clone());
+                            FieldWriteOp {
+                                name: field.name.clone(),
+                                accessor: field_value.clone(),
+                                seq: self.expand_encode(&field.codec, field_value),
+                            }
                         })
                         .collect(),
                     RecordLayout::Recursive => vec![],
@@ -838,14 +836,14 @@ impl<'c> Lowerer<'c> {
                 let size = match layout {
                     RecordLayout::Blittable { size, .. } => SizeExpr::Fixed(*size),
                     _ => SizeExpr::WireSize {
-                        value: value.to_string(),
+                        value: value.clone(),
                     },
                 };
                 WriteSeq {
                     size,
                     ops: vec![WriteOp::Record {
                         id: id.clone(),
-                        value: value.to_string(),
+                        value: value.clone(),
                         fields,
                     }],
                     shape: WireShape::Value,
@@ -855,26 +853,26 @@ impl<'c> Lowerer<'c> {
                 let size = match layout {
                     EnumLayout::CStyle { .. } => SizeExpr::Fixed(4),
                     _ => SizeExpr::WireSize {
-                        value: value.to_string(),
+                        value: value.clone(),
                     },
                 };
                 WriteSeq {
                     size,
                     ops: vec![WriteOp::Enum {
                         id: id.clone(),
-                        value: value.to_string(),
+                        value: value.clone(),
                         layout: layout.clone(),
                     }],
                     shape: WireShape::Value,
                 }
             }
             CodecPlan::Custom { id, underlying } => {
-                let underlying_seq = self.expand_encode(underlying, value);
+                let underlying_seq = self.expand_encode(underlying, value.clone());
                 WriteSeq {
                     size: underlying_seq.size.clone(),
                     ops: vec![WriteOp::Custom {
                         id: id.clone(),
-                        value: value.to_string(),
+                        value: value.clone(),
                         underlying: Box::new(underlying_seq),
                     }],
                     shape: WireShape::Value,
@@ -950,7 +948,10 @@ impl<'c> Lowerer<'c> {
                     Mutability::Shared => ParamRole::InEncoded {
                         len_param: len_name.clone(),
                         decode_ops: self.expand_decode(codec),
-                        encode_ops: self.expand_encode(codec, param.name.as_str()),
+                        encode_ops: self.expand_encode(
+                            codec,
+                            ValueExpr::Named(param.name.as_str().to_string()),
+                        ),
                     },
                 };
                 vec![
@@ -1010,7 +1011,8 @@ impl<'c> Lowerer<'c> {
                 (
                     ReturnTransport::Encoded {
                         decode_ops: self.expand_decode(&result_codec),
-                        encode_ops: self.expand_encode(&result_codec, "value"),
+                        encode_ops: self
+                            .expand_encode(&result_codec, ValueExpr::Var("value".into())),
                     },
                     ErrorTransport::Encoded {
                         decode_ops: self.expand_decode(&err_codec),
@@ -1065,7 +1067,10 @@ impl<'c> Lowerer<'c> {
                     role: ParamRole::InEncoded {
                         len_param: len_name.clone(),
                         decode_ops: self.expand_decode(&codec),
-                        encode_ops: self.expand_encode(&codec, param.name.as_str()),
+                        encode_ops: self.expand_encode(
+                            &codec,
+                            ValueExpr::Named(param.name.as_str().to_string()),
+                        ),
                     },
                 },
                 AbiParam {
@@ -1766,7 +1771,7 @@ impl<'c> Lowerer<'c> {
                     .iter()
                     .enumerate()
                     .map(|(idx, ty)| EncodedField {
-                        name: FieldName::new(format!("_{}", idx)),
+                        name: FieldName::new(format!("value_{}", idx)),
                         codec: self.build_codec(ty),
                     })
                     .collect(),

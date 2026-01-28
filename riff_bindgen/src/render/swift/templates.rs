@@ -237,13 +237,19 @@ mod tests {
     use super::*;
     use crate::ir::codec::VecLayout;
     use crate::ir::ids::RecordId;
-    use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, WireShape, WriteOp, WriteSeq};
+    use crate::ir::ops::{
+        OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WireShape, WriteOp, WriteSeq,
+    };
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::render::swift::plan::{
         SwiftAsyncResult, SwiftCallback, SwiftCallbackMethod, SwiftCallbackParam, SwiftClass,
         SwiftConstructor, SwiftConversion, SwiftEnumStyle, SwiftFunction, SwiftMethod, SwiftParam,
         SwiftReturn, SwiftStream, SwiftStreamMode, SwiftVariantPayload,
     };
+
+    fn val(name: &str) -> ValueExpr {
+        ValueExpr::Var(name.to_string())
+    }
 
     fn offset(base: &str) -> OffsetExpr {
         OffsetExpr::Var(base.to_string())
@@ -281,7 +287,7 @@ mod tests {
             size: SizeExpr::Fixed(primitive.wire_size_bytes()),
             ops: vec![WriteOp::Primitive {
                 primitive,
-                value: value.to_string(),
+                value: val(value),
             }],
             shape: WireShape::Value,
         }
@@ -299,13 +305,8 @@ mod tests {
 
     fn write_string(value: &str) -> WriteSeq {
         WriteSeq {
-            size: SizeExpr::Sum(vec![
-                SizeExpr::Fixed(4),
-                SizeExpr::StringLen(value.to_string()),
-            ]),
-            ops: vec![WriteOp::String {
-                value: value.to_string(),
-            }],
+            size: SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::StringLen(val(value))]),
+            ops: vec![WriteOp::String { value: val(value) }],
             shape: WireShape::Value,
         }
     }
@@ -322,13 +323,8 @@ mod tests {
 
     fn write_bytes(value: &str) -> WriteSeq {
         WriteSeq {
-            size: SizeExpr::Sum(vec![
-                SizeExpr::Fixed(4),
-                SizeExpr::BytesLen(value.to_string()),
-            ]),
-            ops: vec![WriteOp::Bytes {
-                value: value.to_string(),
-            }],
+            size: SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::BytesLen(val(value))]),
+            ops: vec![WriteOp::Bytes { value: val(value) }],
             shape: WireShape::Value,
         }
     }
@@ -347,11 +343,11 @@ mod tests {
     fn write_option(value: &str, inner: WriteSeq) -> WriteSeq {
         WriteSeq {
             size: SizeExpr::OptionSize {
-                value: value.to_string(),
+                value: val(value),
                 inner: Box::new(inner.size.clone()),
             },
             ops: vec![WriteOp::Option {
-                value: value.to_string(),
+                value: val(value),
                 some: Box::new(inner),
             }],
             shape: WireShape::Optional,
@@ -383,13 +379,10 @@ mod tests {
         layout: VecLayout,
     ) -> WriteSeq {
         let size = if matches!(element_type, TypeExpr::Primitive(PrimitiveType::U8)) {
-            SizeExpr::Sum(vec![
-                SizeExpr::Fixed(4),
-                SizeExpr::BytesLen(value.to_string()),
-            ])
+            SizeExpr::Sum(vec![SizeExpr::Fixed(4), SizeExpr::BytesLen(val(value))])
         } else {
             SizeExpr::VecSize {
-                value: value.to_string(),
+                value: val(value),
                 inner: Box::new(element.size.clone()),
                 layout: layout.clone(),
             }
@@ -397,7 +390,7 @@ mod tests {
         WriteSeq {
             size,
             ops: vec![WriteOp::Vec {
-                value: value.to_string(),
+                value: val(value),
                 element: Box::new(element),
                 element_type: element_type.clone(),
                 layout,
@@ -423,7 +416,7 @@ mod tests {
             size: SizeExpr::Fixed(size),
             ops: vec![WriteOp::Record {
                 id: RecordId::new(id),
-                value: value.to_string(),
+                value: val(value),
                 fields: vec![],
             }],
             shape: WireShape::Value,
