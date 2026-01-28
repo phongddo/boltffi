@@ -1,4 +1,5 @@
 pub mod jni;
+pub mod kotlin;
 pub mod swift;
 
 use crate::ir::{AbiContract, FfiContract};
