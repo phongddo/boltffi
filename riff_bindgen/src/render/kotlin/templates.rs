@@ -1,7 +1,7 @@
 use askama::Template;
 
-use super::plan::KotlinModule;
 use super::plan::KotlinMethodImpl::{AsyncMethod, SyncMethod};
+use super::plan::KotlinModule;
 
 #[derive(Template)]
 #[template(path = "render_kotlin/preamble.txt", escape = "none")]

@@ -48,14 +48,8 @@ pub fn emit_read_pair(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String
             let size = emit_size_expr(&seq.size);
             format!("{} to {}", value_expr, size)
         }
-        ReadOp::String { offset } => {
-            let expr = emit_read_string(offset, base_name, base_expr);
-            expr
-        }
-        ReadOp::Bytes { offset } => {
-            let expr = emit_read_bytes(offset, base_name, base_expr);
-            expr
-        }
+        ReadOp::String { offset } => emit_read_string(offset, base_name, base_expr),
+        ReadOp::Bytes { offset } => emit_read_bytes(offset, base_name, base_expr),
         ReadOp::Option { tag_offset, some } => {
             let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
             let inner = emit_read_pair(some, "it", "it");
@@ -66,7 +60,14 @@ pub fn emit_read_pair(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String
             element_type,
             element,
             layout,
-        } => emit_read_vec_pair(len_offset, element_type, element, layout, base_name, base_expr),
+        } => emit_read_vec_pair(
+            len_offset,
+            element_type,
+            element,
+            layout,
+            base_name,
+            base_expr,
+        ),
         ReadOp::Record { id, offset, .. } => {
             let offset_expr = emit_offset_expr(offset, base_name, base_expr);
             format!("{}.decode(wire, {})", id.as_str(), offset_expr)
@@ -88,7 +89,11 @@ pub fn emit_read_pair(seq: &ReadSeq, base_name: &str, base_expr: &str) -> String
                 }
             }
         }
-        ReadOp::Result { tag_offset, ok, err } => {
+        ReadOp::Result {
+            tag_offset,
+            ok,
+            err,
+        } => {
             let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
             let ok_expr = emit_read_pair(ok, "it", "it");
             let err_expr = emit_read_pair(err, "it", "it");
@@ -135,7 +140,14 @@ pub fn emit_read_value(seq: &ReadSeq, base_name: &str, base_expr: &str) -> Strin
             element,
             layout,
         } => {
-            let pair = emit_read_vec_pair(len_offset, element_type, element, layout, base_name, base_expr);
+            let pair = emit_read_vec_pair(
+                len_offset,
+                element_type,
+                element,
+                layout,
+                base_name,
+                base_expr,
+            );
             format!("{}.first", pair)
         }
         ReadOp::Record { id, offset, .. } => {
@@ -153,7 +165,11 @@ pub fn emit_read_value(seq: &ReadSeq, base_name: &str, base_expr: &str) -> Strin
                 }
             }
         }
-        ReadOp::Result { tag_offset, ok, err } => {
+        ReadOp::Result {
+            tag_offset,
+            ok,
+            err,
+        } => {
             let offset_expr = emit_offset_expr(tag_offset, base_name, base_expr);
             let ok_expr = emit_read_pair(ok, "it", "it");
             let err_expr = emit_read_pair(err, "it", "it");
@@ -221,10 +237,7 @@ pub fn emit_inline_decode(seq: &ReadSeq, _local_name: &str, pos_var: &str) -> St
         }
         _ => {
             let pair_expr = emit_read_pair(seq, pos_var, pos_var);
-            format!(
-                "run {{ val (v, s) = {}; {} += s; v }}",
-                pair_expr, pos_var
-            )
+            format!("run {{ val (v, s) = {}; {} += s; v }}", pair_expr, pos_var)
         }
     }
 }
@@ -351,12 +364,17 @@ fn emit_read_vec_pair(
                 PrimitiveType::I16 | PrimitiveType::U16 => {
                     format!("wire.readShortArray({})", offset_expr)
                 }
-                PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::ISize | PrimitiveType::USize => {
+                PrimitiveType::I64
+                | PrimitiveType::U64
+                | PrimitiveType::ISize
+                | PrimitiveType::USize => {
                     format!("wire.readLongArray({})", offset_expr)
                 }
                 PrimitiveType::F32 => format!("wire.readFloatArray({})", offset_expr),
                 PrimitiveType::F64 => format!("wire.readDoubleArray({})", offset_expr),
-                PrimitiveType::U8 | PrimitiveType::I8 => format!("wire.readByteArray({})", offset_expr),
+                PrimitiveType::U8 | PrimitiveType::I8 => {
+                    format!("wire.readByteArray({})", offset_expr)
+                }
                 PrimitiveType::Bool => format!("wire.readBooleanArray({})", offset_expr),
             },
             _ => {
