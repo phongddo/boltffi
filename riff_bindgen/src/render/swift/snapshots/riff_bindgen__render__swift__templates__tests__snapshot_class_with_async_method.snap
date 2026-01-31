@@ -16,65 +16,16 @@ public final class HttpClient {
     public func fetch(url: String) async throws -> Data {
         let futureHandle = url.withCString { urlPtr in riff_http_client_fetch_start(handle, UnsafeRawPointer(urlPtr).assumingMemoryBound(to: UInt8.self), UInt(url.utf8.count)) }
 
-        typealias FutureContext = FfiFutureState<Data>
-        let state = FutureContext(handle: futureHandle)
-
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                guard state.installContinuation(continuation) else {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-
-                func poll(ctx: FutureContext) {
-                    guard ctx.canPoll() else { return }
-                    riff_http_client_fetch_poll(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-                        let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
-                        if pollResult == 0 {
-                            let decision = ctx.decideFinish()
-                            if case .alreadyFinished = decision { return }
-                            var status = FfiStatus()
-                            let buf = riff_http_client_fetch_complete(ctx.handle, &status)
-                            riff_http_client_fetch_free(ctx.handle)
-                            switch decision {
-                            case .finishWithContinuation(let continuation):
-                                if status.code != 0 {
-                                    riff_free_buf_u8(buf)
-                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
-                                } else {
-                                    let value = riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readBytes() }
-                                    riff_free_buf_u8(buf)
-                                    continuation.resume(returning: value)
-                                }
-                            case .finishWithoutContinuation:
-                                riff_free_buf_u8(buf)
-                            case .alreadyFinished:
-                                break
-                            }
-                        } else {
-                            guard ctx.canPoll() else { return }
-                            Task { [ctx] in
-                                await Task.yield()
-                                poll(ctx: ctx)
-                            }
-                        }
-                    }
-                }
-                poll(ctx: state)
-            }
-        } onCancel: {
-            let decision = state.decideFinish()
-            switch decision {
-            case .alreadyFinished:
-                break
-            case .finishWithoutContinuation:
-                riff_http_client_fetch_cancel(state.handle)
-                riff_http_client_fetch_free(state.handle)
-            case .finishWithContinuation(let continuation):
-                riff_http_client_fetch_cancel(state.handle)
-                riff_http_client_fetch_free(state.handle)
-                continuation.resume(throwing: CancellationError())
-            }
+        return try await riffAsyncCall(
+            futureHandle: futureHandle,
+            pollFn: riff_http_client_fetch_poll,
+            completeFn: riff_http_client_fetch_complete,
+            cancelFn: riff_http_client_fetch_cancel,
+            freeFn: riff_http_client_fetch_free
+        ) { buf, status in
+            guard status.code == 0 else { riff_free_buf_u8(buf); throw FfiError(message: "ffi call failed") }
+            defer { riff_free_buf_u8(buf) }
+            return riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readBytes() }
         }
     }
 

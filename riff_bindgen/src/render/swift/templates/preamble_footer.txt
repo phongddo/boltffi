@@ -302,6 +302,108 @@ final class FfiFutureState<T>: @unchecked Sendable {
     body(&writer)
     return writer.finalize()
 }
+{%- if has_async %}
+
+private final class RiffAsyncPollDriver: @unchecked Sendable {
+    let futureHandle: RustFutureHandle?
+    let pollFn: (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void
+    let onReady: () -> Void
+    let canContinuePolling: () -> Bool
+
+    init(
+        futureHandle: RustFutureHandle?,
+        pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+        onReady: @escaping () -> Void,
+        canContinuePolling: @escaping () -> Bool
+    ) {
+        self.futureHandle = futureHandle; self.pollFn = pollFn
+        self.onReady = onReady; self.canContinuePolling = canContinuePolling
+    }
+
+    func startPoll() { poll() }
+
+    private func poll() {
+        pollFn(futureHandle, UInt64(UInt(bitPattern: Unmanaged.passRetained(self).toOpaque())), riffAsyncPollCallback)
+    }
+
+    fileprivate func handlePollResult(_ pollResult: Int8) {
+        if pollResult == 0 {
+            onReady()
+        } else {
+            guard canContinuePolling() else { return }
+            Task { [self] in
+                await Task.yield()
+                poll()
+            }
+        }
+    }
+}
+
+private let riffAsyncPollCallback: @convention(c) (UInt64, Int8) -> Void = { callbackData, pollResult in
+    Unmanaged<RiffAsyncPollDriver>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue().handlePollResult(pollResult)
+}
+
+func riffAsyncCall<T>(
+    futureHandle: RustFutureHandle?,
+    pollFn: @escaping (RustFutureHandle?, UInt64, (@convention(c) (UInt64, Int8) -> Void)?) -> Void,
+    completeFn: @escaping (RustFutureHandle?, UnsafeMutablePointer<FfiStatus>?) -> FfiBuf_u8,
+    cancelFn: @escaping (RustFutureHandle?) -> Void,
+    freeFn: @escaping (RustFutureHandle?) -> Void,
+    transform: @escaping (FfiBuf_u8, FfiStatus) throws -> T
+) async throws -> T {
+    typealias Ctx = FfiFutureState<T>
+    let state = Ctx(handle: futureHandle)
+
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            guard state.installContinuation(continuation) else {
+                continuation.resume(throwing: CancellationError())
+                return
+            }
+
+            let driver = RiffAsyncPollDriver(
+                futureHandle: futureHandle,
+                pollFn: pollFn,
+                onReady: {
+                    let decision = state.decideFinish()
+                    if case .alreadyFinished = decision { return }
+                    var status = FfiStatus()
+                    let buf = completeFn(futureHandle, &status)
+                    freeFn(futureHandle)
+                    switch decision {
+                    case .finishWithContinuation(let continuation):
+                        do {
+                            let value = try transform(buf, status)
+                            continuation.resume(returning: value)
+                        } catch {
+                            continuation.resume(throwing: error)
+                        }
+                    case .finishWithoutContinuation:
+                        {{ prefix }}_free_buf_u8(buf)
+                    case .alreadyFinished:
+                        break
+                    }
+                },
+                canContinuePolling: { state.canPoll() }
+            )
+            driver.startPoll()
+        }
+    } onCancel: {
+        let decision = state.decideFinish()
+        switch decision {
+        case .alreadyFinished:
+            break
+        case .finishWithoutContinuation:
+            cancelFn(state.handle)
+            freeFn(state.handle)
+        case .finishWithContinuation(let continuation):
+            cancelFn(state.handle)
+            freeFn(state.handle)
+            continuation.resume(throwing: CancellationError())
+        }
+    }
+}
+{%- endif %}
 {%- if has_streams %}
 
 private enum StreamPollResult: Int8 {

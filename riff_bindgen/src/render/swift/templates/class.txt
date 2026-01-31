@@ -69,104 +69,28 @@
 {%- endfor %}
         let futureHandle = {% for w in method.closure_wrappers() %}{{ w }} {% endfor %}{{ method.start_call_expr() }}{% for _ in method.closure_wrappers() %} }{% endfor %}
 
-        typealias FutureContext = FfiFutureState<{{ result.future_type() }}>
-        let state = FutureContext(handle: futureHandle)
-
-        return try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                guard state.installContinuation(continuation) else {
-                    continuation.resume(throwing: CancellationError())
-                    return
-                }
-
-                func poll(ctx: FutureContext) {
-                    guard ctx.canPoll() else { return }
-                    {{ poll }}(ctx.handle, UInt64(UInt(bitPattern: Unmanaged.passRetained(ctx).toOpaque()))) { callbackData, pollResult in
-                        let ctx = Unmanaged<FutureContext>.fromOpaque(UnsafeRawPointer(bitPattern: UInt(callbackData))!).takeRetainedValue()
-                        if pollResult == 0 {
-                            let decision = ctx.decideFinish()
-                            if case .alreadyFinished = decision { return }
-                            var status = FfiStatus()
+        return try await riffAsyncCall(
+            futureHandle: futureHandle,
+            pollFn: {{ poll }},
+            completeFn: {{ complete }},
+            cancelFn: {{ cancel }},
+            freeFn: {{ free }}
+        ) { buf, status in
 {%- if result.is_unit() %}
-                            _ = {{ complete }}(ctx.handle, &status)
-                            {{ free }}(ctx.handle)
-                            switch decision {
-                            case .finishWithContinuation(let continuation):
-                                if status.code != 0 {
-                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
-                                } else {
-                                    continuation.resume(returning: ())
-                                }
-                            case .finishWithoutContinuation, .alreadyFinished:
-                                break
-                            }
+            guard status.code == 0 else { throw FfiError(message: "ffi call failed") }
 {%- elif result.is_direct() %}
-                            let result = {{ complete }}(ctx.handle, &status)
-                            {{ free }}(ctx.handle)
-                            switch decision {
-                            case .finishWithContinuation(let continuation):
-                                if status.code != 0 {
-                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
-                                } else {
-                                    continuation.resume(returning: result)
-                                }
-                            case .finishWithoutContinuation, .alreadyFinished:
-                                break
-                            }
+            guard status.code == 0 else { throw FfiError(message: "ffi call failed") }
+            return buf
 {%- elif result.is_wire_encoded() %}
-                            let buf = {{ complete }}(ctx.handle, &status)
-                            {{ free }}(ctx.handle)
-                            switch decision {
-                            case .finishWithContinuation(let continuation):
-                                if status.code != 0 {
-                                    {{ prefix }}_free_buf_u8(buf)
-                                    continuation.resume(throwing: FfiError(message: "ffi call failed"))
-                                } else {
+            guard status.code == 0 else { {{ prefix }}_free_buf_u8(buf); throw FfiError(message: "ffi call failed") }
 {%- if result.throws() %}
-                                    do {
-                                        let value = try riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
-                                        {{ prefix }}_free_buf_u8(buf)
-                                        continuation.resume(returning: value)
-                                    } catch {
-                                        {{ prefix }}_free_buf_u8(buf)
-                                        continuation.resume(throwing: error)
-                                    }
+            defer { {{ prefix }}_free_buf_u8(buf) }
+            return try riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
 {%- else %}
-                                    let value = riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
-                                    {{ prefix }}_free_buf_u8(buf)
-                                    continuation.resume(returning: value)
+            defer { {{ prefix }}_free_buf_u8(buf) }
+            return riffDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in {{ result.reader_decode_expr().unwrap() }} }
 {%- endif %}
-                                }
-                            case .finishWithoutContinuation:
-                                {{ prefix }}_free_buf_u8(buf)
-                            case .alreadyFinished:
-                                break
-                            }
 {%- endif %}
-                        } else {
-                            guard ctx.canPoll() else { return }
-                            Task { [ctx] in
-                                await Task.yield()
-                                poll(ctx: ctx)
-                            }
-                        }
-                    }
-                }
-                poll(ctx: state)
-            }
-        } onCancel: {
-            let decision = state.decideFinish()
-            switch decision {
-            case .alreadyFinished:
-                break
-            case .finishWithoutContinuation:
-                {{ cancel }}(state.handle)
-                {{ free }}(state.handle)
-            case .finishWithContinuation(let continuation):
-                {{ cancel }}(state.handle)
-                {{ free }}(state.handle)
-                continuation.resume(throwing: CancellationError())
-            }
         }
 {%- when SwiftCallMode::Sync { symbol } %}
 {%- for param in method.params %}
