@@ -796,7 +796,7 @@ impl SwiftParam {
                 self.name, self.name
             ),
             SwiftConversion::ToData => format!(
-                "{}.withUnsafeBytes {{ $0.baseAddress }}, UInt({}.count)",
+                "{}Ptr.baseAddress, UInt({}Ptr.count)",
                 self.name, self.name
             ),
             SwiftConversion::ToWireBuffer { encode } => match encode.shape {
@@ -858,7 +858,7 @@ impl SwiftParam {
 
     pub fn needs_closure_wrap(&self) -> bool {
         match &self.conversion {
-            SwiftConversion::ToString => true,
+            SwiftConversion::ToString | SwiftConversion::ToData => true,
             SwiftConversion::ToWireBuffer { encode } => encode.shape != WireShape::Value,
             SwiftConversion::PrimitiveBuffer { .. } | SwiftConversion::MutableBuffer { .. } => true,
             _ => false,
@@ -869,6 +869,9 @@ impl SwiftParam {
         match &self.conversion {
             SwiftConversion::ToString => {
                 Some(format!("{}.withCString {{ {}Ptr in", self.name, self.name))
+            }
+            SwiftConversion::ToData => {
+                Some(format!("{}.withUnsafeBytes {{ {}Ptr in", self.name, self.name))
             }
             SwiftConversion::ToWireBuffer { encode } => match encode.shape {
                 WireShape::Sequence => Some(format!(
@@ -895,7 +898,7 @@ impl SwiftParam {
 
     pub fn closure_wrap_close(&self) -> Option<&'static str> {
         match &self.conversion {
-            SwiftConversion::ToString => Some("}"),
+            SwiftConversion::ToString | SwiftConversion::ToData => Some("}"),
             SwiftConversion::ToWireBuffer { encode } if encode.shape != WireShape::Value => {
                 Some("}")
             }
