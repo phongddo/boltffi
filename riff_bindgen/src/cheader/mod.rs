@@ -400,8 +400,7 @@ static inline uint64_t {prefix}_atomic_u64_load(uint64_t* slot) {{
         }
 
         if method.is_async {
-            let callback_return =
-                Self::trait_callback_return_params(&method.returns);
+            let callback_return = Self::trait_callback_return_params(&method.returns);
             params.push(format!(
                 "void (*callback)(uint64_t{}, FfiStatus)",
                 callback_return

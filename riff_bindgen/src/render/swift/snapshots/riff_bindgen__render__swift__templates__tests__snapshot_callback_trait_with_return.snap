@@ -11,6 +11,7 @@ private class ValidatorWrapper {
     init(_ impl_: Validator) { self.impl_ = impl_ }
 }
 
+
 private var validatorVtable: ValidatorVtable = {
     ValidatorVtable(
         free: { handle in

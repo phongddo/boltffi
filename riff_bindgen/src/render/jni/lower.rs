@@ -995,8 +995,6 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
-
-
     fn primitive_return_cast(&self, primitive: PrimitiveType) -> String {
         match primitive {
             PrimitiveType::Bool => "(jboolean)".to_string(),
@@ -2002,20 +2000,24 @@ mod tests {
     use crate::ir::types::PrimitiveType;
 
     fn test_lowerer() -> JniLowerer<'static> {
-        static CONTRACT: std::sync::LazyLock<FfiContract> = std::sync::LazyLock::new(|| {
-            FfiContract {
+        static CONTRACT: std::sync::LazyLock<FfiContract> =
+            std::sync::LazyLock::new(|| FfiContract {
                 package: PackageInfo {
                     name: "test".to_string(),
                     version: None,
                 },
                 catalog: TypeCatalog::default(),
                 functions: vec![],
-            }
-        });
+            });
         static ABI: std::sync::LazyLock<AbiContract> =
             std::sync::LazyLock::new(|| crate::ir::Lowerer::new(&CONTRACT).to_abi_contract());
 
-        JniLowerer::new(&CONTRACT, &ABI, "com.test".to_string(), "Native".to_string())
+        JniLowerer::new(
+            &CONTRACT,
+            &ABI,
+            "com.test".to_string(),
+            "Native".to_string(),
+        )
     }
 
     #[test]

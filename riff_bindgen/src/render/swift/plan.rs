@@ -234,6 +234,7 @@ impl SwiftVariant {
 
     pub fn is_single_tuple(&self) -> bool {
         match &self.payload {
+            SwiftVariantPayload::Tuple(fields) => fields.len() == 1,
             SwiftVariantPayload::Struct(fields) => {
                 fields.len() == 1 && fields[0].swift_name.chars().all(|c| c.is_ascii_digit())
             }
@@ -249,13 +250,16 @@ impl SwiftVariant {
     }
 
     fn single_tuple_field(&self) -> Option<&SwiftField> {
-        if let SwiftVariantPayload::Struct(fields) = &self.payload
-            && fields.len() == 1
-            && fields[0].swift_name.chars().all(|c| c.is_ascii_digit())
-        {
-            return Some(&fields[0]);
+        match &self.payload {
+            SwiftVariantPayload::Tuple(fields) if fields.len() == 1 => Some(&fields[0]),
+            SwiftVariantPayload::Struct(fields)
+                if fields.len() == 1
+                    && fields[0].swift_name.chars().all(|c| c.is_ascii_digit()) =>
+            {
+                Some(&fields[0])
+            }
+            _ => None,
         }
-        None
     }
 
     pub fn tuple_value_decode(&self) -> String {
@@ -626,18 +630,28 @@ impl SwiftCallbackMethod {
         self.returns.is_wire_encoded()
     }
 
+    pub fn async_callback_c_type(&self) -> String {
+        if self.wire_encoded_return() {
+            "(@convention(c) (UInt64, UnsafePointer<UInt8>?, UInt, FfiStatus) -> Void)?".to_string()
+        } else if let Some(ret) = self.return_type() {
+            format!("(@convention(c) (UInt64, {}, FfiStatus) -> Void)?", ret)
+        } else {
+            "(@convention(c) (UInt64, FfiStatus) -> Void)?".to_string()
+        }
+    }
+
     pub fn wire_return_encode(&self) -> Option<String> {
         self.encoded_return_encode().map(|encode| {
             let size_expr = emit::emit_size_expr(&encode.size);
             let encode_expr = emit::emit_write_data(encode);
-            let (capacity_prefix, discriminant) = if self.throws() {
-                ("1 + ", "data.appendU8(0); ")
+            let (capacity_expr, discriminant) = if self.throws() {
+                (add_one_to_capacity(&size_expr), "data.appendU8(0); ")
             } else {
-                ("", "")
+                (size_expr, "")
             };
             format!(
-                "let encoded = ({{ var data = Data(capacity: {}{}); {}{}; return data }})()",
-                capacity_prefix, size_expr, discriminant, encode_expr
+                "let encoded = ({{ var data = Data(capacity: {}); {}{}; return data }})()",
+                capacity_expr, discriminant, encode_expr
             )
         })
     }
@@ -651,12 +665,16 @@ impl SwiftCallbackMethod {
 
     pub fn wire_err_encode(&self) -> Option<String> {
         match &self.returns {
-            SwiftReturn::Throws { err_encode: Some(encode), .. } => {
+            SwiftReturn::Throws {
+                err_encode: Some(encode),
+                ..
+            } => {
                 let size_expr = emit::emit_size_expr(&encode.size);
                 let encode_expr = emit::emit_write_data(encode);
+                let capacity = add_one_to_capacity(&size_expr);
                 Some(format!(
-                    "let encoded = ({{ var data = Data(capacity: 1 + {}); data.appendU8(1); {}; return data }})()",
-                    size_expr, encode_expr
+                    "let encoded = ({{ var data = Data(capacity: {}); data.appendU8(1); {}; return data }})()",
+                    capacity, encode_expr
                 ))
             }
             _ => None,
@@ -799,19 +817,15 @@ impl SwiftParam {
                 "UnsafeRawPointer({}Ptr).assumingMemoryBound(to: UInt8.self), UInt({}.utf8.count)",
                 self.name, self.name
             ),
-            SwiftConversion::ToData => format!(
-                "{}Ptr.baseAddress, UInt({}Ptr.count)",
-                self.name, self.name
-            ),
+            SwiftConversion::ToData => {
+                format!("{}Ptr.baseAddress, UInt({}Ptr.count)", self.name, self.name)
+            }
             SwiftConversion::ToWireBuffer { encode } => match encode.shape {
                 WireShape::Optional => format!(
                     "{}Ptr?.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt({}Ptr?.count ?? 0)",
                     self.name, self.name
                 ),
-                WireShape::Value => format!(
-                    "{}Bytes, UInt({}Bytes.count)",
-                    self.name, self.name
-                ),
+                WireShape::Value => format!("{}Bytes, UInt({}Bytes.count)", self.name, self.name),
                 WireShape::Sequence => format!(
                     "{}Ptr.baseAddress?.assumingMemoryBound(to: UInt8.self), UInt({}Ptr.count)",
                     self.name, self.name
@@ -825,7 +839,10 @@ impl SwiftParam {
             }
             SwiftConversion::WrapCallback { protocol, nullable } => {
                 if *nullable {
-                    format!("{}.map {{ {}Bridge.create($0) }} ?? RiffCallbackHandle(handle: 0, vtable: nil)", self.name, protocol)
+                    format!(
+                        "{}.map {{ {}Bridge.create($0) }} ?? RiffCallbackHandle(handle: 0, vtable: nil)",
+                        self.name, protocol
+                    )
                 } else {
                     format!("{}Bridge.create({})", protocol, self.name)
                 }
@@ -874,9 +891,10 @@ impl SwiftParam {
             SwiftConversion::ToString => {
                 Some(format!("{}.withCString {{ {}Ptr in", self.name, self.name))
             }
-            SwiftConversion::ToData => {
-                Some(format!("{}.withUnsafeBytes {{ {}Ptr in", self.name, self.name))
-            }
+            SwiftConversion::ToData => Some(format!(
+                "{}.withUnsafeBytes {{ {}Ptr in",
+                self.name, self.name
+            )),
             SwiftConversion::ToWireBuffer { encode } => match encode.shape {
                 WireShape::Sequence => Some(format!(
                     "withWireEncodedArray({}) {{ {}Ptr in",
@@ -1088,4 +1106,11 @@ impl SwiftReturn {
             _ => None,
         }
     }
+}
+
+fn add_one_to_capacity(size_expr: &str) -> String {
+    size_expr
+        .parse::<usize>()
+        .map(|n| (n + 1).to_string())
+        .unwrap_or_else(|_| format!("1 + {}", size_expr))
 }

@@ -146,6 +146,13 @@ impl<'m> ContractBuilder<'m> {
     fn convert_variant_payload(&self, fields: &[model::RecordField]) -> VariantPayload {
         if fields.is_empty() {
             VariantPayload::Unit
+        } else if fields.iter().enumerate().all(|(i, f)| f.name == format!("value_{i}")) {
+            VariantPayload::Tuple(
+                fields
+                    .iter()
+                    .map(|f| self.convert_type(&f.field_type))
+                    .collect(),
+            )
         } else {
             VariantPayload::Struct(
                 fields
@@ -619,6 +626,100 @@ mod tests {
             _ => panic!("expected struct payload"),
         }
         assert_eq!(variants[1].doc.as_deref(), Some("Something went wrong."));
+    }
+
+    #[test]
+    fn tuple_variant_fields_produce_tuple_payload() {
+        let mut module = empty_module();
+        module.enums.push(
+            Enumeration::new("LocationBias")
+                .with_variant(
+                    Variant::new("Left")
+                        .with_field(RecordField::new("value_0", Type::Primitive(Primitive::F64))),
+                )
+                .with_variant(
+                    Variant::new("Right")
+                        .with_field(RecordField::new("value_0", Type::Primitive(Primitive::F64))),
+                ),
+        );
+
+        let def = builder(&module).convert_enum(&module.enums[0]);
+
+        let variants = match &def.repr {
+            EnumRepr::Data { variants, .. } => variants,
+            _ => panic!("expected data enum"),
+        };
+        assert_eq!(variants.len(), 2);
+        match &variants[0].payload {
+            VariantPayload::Tuple(types) => {
+                assert_eq!(types.len(), 1);
+                assert!(matches!(types[0], TypeExpr::Primitive(PrimitiveType::F64)));
+            }
+            other => panic!("expected tuple payload, got {:?}", other),
+        }
+        match &variants[1].payload {
+            VariantPayload::Tuple(types) => {
+                assert_eq!(types.len(), 1);
+                assert!(matches!(types[0], TypeExpr::Primitive(PrimitiveType::F64)));
+            }
+            other => panic!("expected tuple payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn multi_field_tuple_variant_produces_tuple_payload() {
+        let mut module = empty_module();
+        module.enums.push(
+            Enumeration::new("Value")
+                .with_variant(
+                    Variant::new("Pair")
+                        .with_field(RecordField::new("value_0", Type::Primitive(Primitive::I32)))
+                        .with_field(RecordField::new("value_1", Type::String)),
+                ),
+        );
+
+        let def = builder(&module).convert_enum(&module.enums[0]);
+
+        let variants = match &def.repr {
+            EnumRepr::Data { variants, .. } => variants,
+            _ => panic!("expected data enum"),
+        };
+        match &variants[0].payload {
+            VariantPayload::Tuple(types) => {
+                assert_eq!(types.len(), 2);
+                assert!(matches!(types[0], TypeExpr::Primitive(PrimitiveType::I32)));
+                assert!(matches!(types[1], TypeExpr::String));
+            }
+            other => panic!("expected tuple payload, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn named_fields_produce_struct_payload() {
+        let mut module = empty_module();
+        module.enums.push(
+            Enumeration::new("Event")
+                .with_variant(
+                    Variant::new("Click")
+                        .with_field(RecordField::new("x", Type::Primitive(Primitive::I32)))
+                        .with_field(RecordField::new("y", Type::Primitive(Primitive::I32))),
+                ),
+        );
+
+        let def = builder(&module).convert_enum(&module.enums[0]);
+
+        let variants = match &def.repr {
+            EnumRepr::Data { variants, .. } => variants,
+            _ => panic!("expected data enum"),
+        };
+        match &variants[0].payload {
+            VariantPayload::Struct(fields) => {
+                assert_eq!(fields.len(), 2);
+                assert_eq!(fields[0].name.as_str(), "x");
+                assert_eq!(fields[1].name.as_str(), "y");
+            }
+            other => panic!("expected struct payload, got {:?}", other),
+        }
     }
 
     #[test]

@@ -240,7 +240,9 @@ impl<'a> SwiftLowerer<'a> {
                     .iter()
                     .enumerate()
                     .map(|(i, variant)| SwiftVariant {
-                        swift_name: emit::escape_swift_keyword(&variant.name.as_str().to_lower_camel_case()),
+                        swift_name: emit::escape_swift_keyword(
+                            &variant.name.as_str().to_lower_camel_case(),
+                        ),
                         discriminant: variant.discriminant,
                         payload: self.lower_variant_payload(variant),
                         doc: variant_docs.get(i).cloned().flatten(),
@@ -608,7 +610,10 @@ impl<'a> SwiftLowerer<'a> {
             | ParamRole::OutDirect
             | ParamRole::OutLen { .. }
             | ParamRole::StatusOut => {
-                panic!("unsupported ABI param role for Swift callback: {:?}", param.role)
+                panic!(
+                    "unsupported ABI param role for Swift callback: {:?}",
+                    param.role
+                )
             }
         };
 
@@ -727,7 +732,13 @@ impl<'a> SwiftLowerer<'a> {
                     } else {
                         format!("any {}", protocol)
                     };
-                    (swift_type, SwiftConversion::WrapCallback { protocol, nullable: *nullable })
+                    (
+                        swift_type,
+                        SwiftConversion::WrapCallback {
+                            protocol,
+                            nullable: *nullable,
+                        },
+                    )
                 }
                 CallbackStyle::ImplTrait => {
                     let closure_plan = self.build_closure_trampoline(callback_id, &swift_name);
@@ -833,7 +844,10 @@ impl<'a> SwiftLowerer<'a> {
 
         match error {
             ErrorTransport::None => base,
-            ErrorTransport::Encoded { decode_ops, encode_ops } => SwiftReturn::Throws {
+            ErrorTransport::Encoded {
+                decode_ops,
+                encode_ops,
+            } => SwiftReturn::Throws {
                 ok: Box::new(base),
                 err_type: self.swift_error_type(returns),
                 err_decode: decode_ops.clone(),
@@ -1075,7 +1089,8 @@ impl<'a> SwiftLowerer<'a> {
                 err_type,
                 err_decode,
                 err_is_string,
-                err_encode: err_encode.map(|seq| remap_root_in_seq(&seq, ValueExpr::Var("error".to_string()))),
+                err_encode: err_encode
+                    .map(|seq| remap_root_in_seq(&seq, ValueExpr::Var("error".to_string()))),
             },
             other => other,
         }
@@ -1356,7 +1371,10 @@ impl<'a> SwiftLowerer<'a> {
                 err_is_string: false,
                 err_encode: None,
             },
-            ErrorTransport::Encoded { decode_ops, encode_ops } => SwiftReturn::Throws {
+            ErrorTransport::Encoded {
+                decode_ops,
+                encode_ops,
+            } => SwiftReturn::Throws {
                 ok: Box::new(SwiftReturn::Void),
                 err_type: self.swift_error_type(returns),
                 err_decode: decode_ops.clone(),

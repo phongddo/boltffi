@@ -4,8 +4,8 @@ expression: render_enum(&e)
 ---
 public enum Message: Hashable, Equatable, Sendable {
     case empty
-    case text(value: String)
-    case number(value: Int64)
+    case text(String)
+    case number(Int64)
 
     @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: Message, size: Int) {
         let tag = wire.readI32(at: offset)
@@ -14,11 +14,11 @@ public enum Message: Hashable, Equatable, Sendable {
         case 0:
             return (.empty, pos - offset)
         case 1:
-            let value = { let (v, s) = wire.readString(at: pos); pos += s; return v }()
-            return (.text(value: value), pos - offset)
+            let v = { let (v, s) = wire.readString(at: pos); pos += s; return v }()
+            return (.text(v), pos - offset)
         case 2:
-            let value = { let v = wire.readI64(at: pos); pos += 8; return v }()
-            return (.number(value: value), pos - offset)
+            let v = { let v = wire.readI64(at: pos); pos += 8; return v }()
+            return (.number(v), pos - offset)
         default:
             fatalError("Invalid Message tag: \(tag)")
         }

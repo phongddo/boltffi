@@ -17,8 +17,8 @@ use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, FieldName, MethodId, ParamName, RecordId,
 };
 use crate::ir::ops::{
-    remap_root_in_seq, FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr,
-    WriteOp, WriteSeq,
+    FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq,
+    remap_root_in_seq,
 };
 use crate::ir::plan::AbiType;
 use crate::ir::types::{PrimitiveType, TypeExpr};
@@ -370,7 +370,9 @@ impl<'a> KotlinLowerer<'a> {
             SizeExpr::StringLen(value) => {
                 SizeExpr::StringLen(self.strip_field_access_in_value(value))
             }
-            SizeExpr::BytesLen(value) => SizeExpr::BytesLen(self.strip_field_access_in_value(value)),
+            SizeExpr::BytesLen(value) => {
+                SizeExpr::BytesLen(self.strip_field_access_in_value(value))
+            }
             SizeExpr::ValueSize(value) => {
                 SizeExpr::ValueSize(self.strip_field_access_in_value(value))
             }
@@ -559,8 +561,7 @@ impl<'a> KotlinLowerer<'a> {
         let wire_decode_inline =
             self.qualify_decode_expr(wire_decode_inline, decode_name.as_deref());
         let wire_advance_expr = emit::emit_advance_read(&field.decode);
-        let wire_advance_expr =
-            self.qualify_decode_expr(wire_advance_expr, decode_name.as_deref());
+        let wire_advance_expr = self.qualify_decode_expr(wire_advance_expr, decode_name.as_deref());
         KotlinEnumField {
             name: NamingConvention::property_name(field.name.as_str()),
             kotlin_type,
@@ -1402,23 +1403,21 @@ impl<'a> KotlinLowerer<'a> {
             .iter()
             .map(|func| self.lower_native_function(func))
             .collect::<Vec<_>>();
-        let class_symbols = self
-            .contract
-            .catalog
-            .all_classes()
-            .flat_map(|class| {
-                let ctor_symbols = class
-                    .constructors
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| self.abi_call_for_constructor(class, index).symbol.clone());
-                let method_symbols = class
-                    .methods
-                    .iter()
-                    .map(|method| self.abi_call_for_method(class, method).symbol.clone());
-                ctor_symbols.chain(method_symbols)
-            })
-            .collect::<HashSet<_>>();
+        let class_symbols =
+            self.contract
+                .catalog
+                .all_classes()
+                .flat_map(|class| {
+                    let ctor_symbols = class.constructors.iter().enumerate().map(|(index, _)| {
+                        self.abi_call_for_constructor(class, index).symbol.clone()
+                    });
+                    let method_symbols = class
+                        .methods
+                        .iter()
+                        .map(|method| self.abi_call_for_method(class, method).symbol.clone());
+                    ctor_symbols.chain(method_symbols)
+                })
+                .collect::<HashSet<_>>();
         let declared_symbols = functions
             .iter()
             .map(|f| f.ffi_name.as_str())
@@ -1777,10 +1776,7 @@ impl<'a> KotlinLowerer<'a> {
         let Some(qualified) = qualified else {
             return expr;
         };
-        let unqualified = qualified
-            .rsplit('.')
-            .next()
-            .unwrap_or(qualified);
+        let unqualified = qualified.rsplit('.').next().unwrap_or(qualified);
         let prefix = format!("{}.", unqualified);
         expr.strip_prefix(&prefix)
             .map(|suffix| format!("{}.{}", qualified, suffix))

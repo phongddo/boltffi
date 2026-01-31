@@ -11,6 +11,7 @@ private class DataHandlerWrapper {
     init(_ impl_: DataHandler) { self.impl_ = impl_ }
 }
 
+
 private var dataHandlerVtable: DataHandlerVtable = {
     DataHandlerVtable(
         free: { handle in

@@ -1047,15 +1047,13 @@ impl<'c> Lowerer<'c> {
                 (
                     ReturnTransport::Encoded {
                         decode_ops: self.expand_decode(&result_codec),
-                        encode_ops: self
-                            .expand_encode(&ok_codec, ValueExpr::Var("result".into())),
+                        encode_ops: self.expand_encode(&ok_codec, ValueExpr::Var("result".into())),
                     },
                     ErrorTransport::Encoded {
                         decode_ops: self.expand_decode(&err_codec),
-                        encode_ops: Some(self.expand_encode(
-                            &err_codec,
-                            ValueExpr::Var("error".into()),
-                        )),
+                        encode_ops: Some(
+                            self.expand_encode(&err_codec, ValueExpr::Var("error".into())),
+                        ),
                     },
                 )
             }

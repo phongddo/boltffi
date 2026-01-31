@@ -3,7 +3,7 @@ source: riff_bindgen/src/render/swift/templates.rs
 expression: render_enum(&e)
 ---
 public enum SearchResult: Hashable, Equatable, Sendable {
-    case found(0: String)
+    case found(String)
     case notFound
 
     @inlinable static func decode(wireBuffer wire: WireBuffer, at offset: Int) -> (value: SearchResult, size: Int) {
@@ -11,8 +11,8 @@ public enum SearchResult: Hashable, Equatable, Sendable {
         var pos = offset + 4
         switch tag {
         case 0:
-            let 0 = { let (v, s) = wire.readString(at: pos); pos += s; return v }()
-            return (.found(0: 0), pos - offset)
+            let v = { let (v, s) = wire.readString(at: pos); pos += s; return v }()
+            return (.found(v), pos - offset)
         case 1:
             return (.notFound, pos - offset)
         default:
@@ -26,7 +26,7 @@ extension SearchResult: WireEncodable {
 
     @inlinable func wireEncodedSize() -> Int {
         switch self {
-        case let .found(0):
+        case let .found(value):
             return 4 + (4 + 0.utf8.count)
         case .notFound:
             return 4
@@ -35,7 +35,7 @@ extension SearchResult: WireEncodable {
 
     @inlinable func wireEncodeTo(_ data: inout Data) {
         switch self {
-        case let .found(0):
+        case let .found(value):
             data.appendI32(0)
             data.appendString(0)
         case .notFound:
@@ -45,7 +45,7 @@ extension SearchResult: WireEncodable {
 
     @inlinable func wireEncodeToBytes(_ bytes: inout [UInt8]) {
         switch self {
-        case let .found(0):
+        case let .found(value):
             bytes.appendI32(0)
             bytes.appendString(0)
         case .notFound:
