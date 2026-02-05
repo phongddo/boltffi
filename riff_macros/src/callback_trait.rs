@@ -277,50 +277,146 @@ fn expand_method(
                 let error_expr = parse_result_type(ret_ty)
                     .map(|(_, err_ty)| {
                         quote! {
-                            Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(::riff::UnexpectedFfiCallbackError))
+                            Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(
+                                ::riff::UnexpectedFfiCallbackError::new(error_msg)
+                            ))
                         }
-                    })
-                    .unwrap_or_else(|| quote! { result });
+                    });
 
-                let callback_body = if async_wire_return {
-                    quote! {
-                        extern "C" fn callback(data: u64, result_ptr: *const u8, result_len: usize, status: ::riff::__private::FfiStatus) {
-                            let decoded: #ret_ty = {
-                                let bytes = unsafe { ::core::slice::from_raw_parts(result_ptr, result_len) };
-                                ::riff::__private::wire::decode(bytes).expect("wire decode async callback return")
-                            };
-                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<#ret_ty>) };
-                            let waker = ctx
-                                .state
-                                .lock()
-                                .ok()
-                                .and_then(|mut guard| {
-                                    guard.result = Some(decoded);
-                                    guard.status = status;
-                                    guard.waker.take()
-                                });
-                            if let Some(waker) = waker {
-                                waker.wake();
+                let (callback_body, poll_body) = if async_wire_return {
+                    let poll_error_branch = error_expr
+                        .clone()
+                        .map(|expr| {
+                            quote! {
+                                if status.is_err() {
+                                    let error_msg: String = ::riff::__private::wire::decode(&bytes)
+                                        .unwrap_or_else(|_| "unknown callback error".into());
+                                    return std::task::Poll::Ready(#expr);
+                                }
                             }
+                        })
+                        .unwrap_or_default();
+
+                    (
+                        quote! {
+                            extern "C" fn callback(data: u64, result_ptr: *const u8, result_len: usize, status: ::riff::__private::FfiStatus) {
+                                let bytes = unsafe { ::core::slice::from_raw_parts(result_ptr, result_len) }.to_vec();
+                                let ctx = unsafe { Arc::from_raw(data as *const AsyncContext) };
+                                let waker = ctx
+                                    .state
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut guard| {
+                                        guard.result_bytes = Some(bytes);
+                                        guard.status = status;
+                                        guard.waker.take()
+                                    });
+                                if let Some(waker) = waker {
+                                    waker.wake();
+                                }
+                            }
+                        },
+                        quote! {
+                            std::future::poll_fn(move |cx| {
+                                let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
+                                if let Some(bytes) = guard.result_bytes.take() {
+                                    let status = guard.status;
+                                    #poll_error_branch
+                                    let result: #ret_ty = ::riff::__private::wire::decode(&bytes)
+                                        .expect("wire decode async callback return");
+                                    std::task::Poll::Ready(result)
+                                } else {
+                                    guard.waker = Some(cx.waker().clone());
+                                    std::task::Poll::Pending
+                                }
+                            }).await
+                        },
+                    )
+                } else {
+                    let poll_error_branch = error_expr
+                        .map(|expr| {
+                            quote! {
+                                if status.is_err() {
+                                    let error_msg = "callback returned error status".to_string();
+                                    return std::task::Poll::Ready(#expr);
+                                }
+                            }
+                        })
+                        .unwrap_or_default();
+
+                    (
+                        quote! {
+                            extern "C" fn callback(data: u64, result: #ret_ty, status: ::riff::__private::FfiStatus) {
+                                let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<#ret_ty>) };
+                                let waker = ctx
+                                    .state
+                                    .lock()
+                                    .ok()
+                                    .and_then(|mut guard| {
+                                        guard.result = Some(result);
+                                        guard.status = status;
+                                        guard.waker.take()
+                                    });
+                                if let Some(waker) = waker {
+                                    waker.wake();
+                                }
+                            }
+                        },
+                        quote! {
+                            std::future::poll_fn(move |cx| {
+                                let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
+                                if let Some(result) = guard.result.take() {
+                                    let status = guard.status;
+                                    #poll_error_branch
+                                    std::task::Poll::Ready(result)
+                                } else {
+                                    guard.waker = Some(cx.waker().clone());
+                                    std::task::Poll::Pending
+                                }
+                            }).await
+                        },
+                    )
+                };
+
+                let async_state = if async_wire_return {
+                    quote! {
+                        struct AsyncState {
+                            result_bytes: Option<Vec<u8>>,
+                            status: ::riff::__private::FfiStatus,
+                            waker: Option<Waker>,
                         }
+
+                        struct AsyncContext {
+                            state: Mutex<AsyncState>,
+                        }
+
+                        let ctx = Arc::new(AsyncContext {
+                            state: Mutex::new(AsyncState {
+                                result_bytes: None,
+                                status: ::riff::__private::FfiStatus::OK,
+                                waker: None,
+                            }),
+                        });
                     }
                 } else {
                     quote! {
-                        extern "C" fn callback(data: u64, result: #ret_ty, status: ::riff::__private::FfiStatus) {
-                            let ctx = unsafe { Arc::from_raw(data as *const AsyncContext<#ret_ty>) };
-                            let waker = ctx
-                                .state
-                                .lock()
-                                .ok()
-                                .and_then(|mut guard| {
-                                    guard.result = Some(result);
-                                    guard.status = status;
-                                    guard.waker.take()
-                                });
-                            if let Some(waker) = waker {
-                                waker.wake();
-                            }
+                        struct AsyncState<T> {
+                            result: Option<T>,
+                            status: ::riff::__private::FfiStatus,
+                            waker: Option<Waker>,
                         }
+
+                        struct AsyncContext<T> {
+                            state: Mutex<AsyncState<T>>,
+                        }
+
+                        let ctx = Arc::new(AsyncContext::<#ret_ty> {
+                            state: Mutex::new(AsyncState {
+                                result: None,
+                                status: ::riff::__private::FfiStatus::OK,
+                                waker: None,
+                            }),
+                        });
                     }
                 };
 
@@ -328,23 +424,7 @@ fn expand_method(
                     use std::sync::{Arc, Mutex};
                     use std::task::Waker;
 
-                    struct AsyncState<T> {
-                        result: Option<T>,
-                        status: ::riff::__private::FfiStatus,
-                        waker: Option<Waker>,
-                    }
-
-                    struct AsyncContext<T> {
-                        state: Mutex<AsyncState<T>>,
-                    }
-
-                    let ctx = Arc::new(AsyncContext::<#ret_ty> {
-                        state: Mutex::new(AsyncState {
-                            result: None,
-                            status: ::riff::__private::FfiStatus::OK,
-                            waker: None,
-                        }),
-                    });
+                    #async_state
 
                     #callback_body
 
@@ -361,19 +441,7 @@ fn expand_method(
                         }
                     }
 
-                    std::future::poll_fn(move |cx| {
-                        let mut guard = ctx.state.lock().expect("async callback mutex poisoned");
-                        if let Some(result) = guard.result.take() {
-                            let status = guard.status;
-                            if status.is_err() {
-                                return std::task::Poll::Ready(#error_expr);
-                            }
-                            std::task::Poll::Ready(result)
-                        } else {
-                            guard.waker = Some(cx.waker().clone());
-                            std::task::Poll::Pending
-                        }
-                    }).await
+                    #poll_body
                 }
             }
             None => quote! {
@@ -479,7 +547,9 @@ fn expand_method(
             Some(ret_ty) => {
                 let error_expr = parse_result_type(ret_ty).map(|(_, err_ty)| {
                     quote! {
-                        return Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(::riff::UnexpectedFfiCallbackError));
+                        return Err(<#err_ty as ::core::convert::From<::riff::UnexpectedFfiCallbackError>>::from(
+                            ::riff::UnexpectedFfiCallbackError::new("sync callback returned error status")
+                        ));
                     }
                 });
 

@@ -32,16 +32,22 @@ private func _{{ callback.vtable_var }}_{{ method.swift_name }}(_ wrapper: {{ ca
 {%- if let Some(err_type) = method.err_type() %}
 {%- if let Some(err_encoded) = method.wire_err_encode() %}
             guard let error = error as? {{ err_type }} else {
-                callback?(callbackData,{% if method.wire_encoded_return() %} nil, 0,{% endif %} FfiStatus(code: 1))
+                var errWriter = WireWriter()
+                errWriter.writeString(String(describing: error))
+                riffInvokeWireCallback(callback, callbackData, errWriter.finalize(), FfiStatus(code: 1))
                 return
             }
             {{ err_encoded }}
             riffInvokeWireCallback(callback, callbackData, encoded, FfiStatus(code: 0))
 {%- else %}
-            callback?(callbackData,{% if method.wire_encoded_return() %} nil, 0,{% endif %} FfiStatus(code: 1))
+            var errWriter = WireWriter()
+            errWriter.writeString(String(describing: error))
+            riffInvokeWireCallback(callback, callbackData, errWriter.finalize(), FfiStatus(code: 1))
 {%- endif %}
 {%- else %}
-            callback?(callbackData,{% if method.wire_encoded_return() %} nil, 0,{% endif %} FfiStatus(code: 1))
+            var errWriter = WireWriter()
+            errWriter.writeString(String(describing: error))
+            riffInvokeWireCallback(callback, callbackData, errWriter.finalize(), FfiStatus(code: 1))
 {%- endif %}
         }
 {%- else %}
