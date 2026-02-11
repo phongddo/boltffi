@@ -73,6 +73,7 @@ pub struct FunctionTemplate<'a> {
     pub return_abi: &'a TsReturnAbi,
     pub ffi_name: &'a str,
     pub call_args: &'a str,
+    pub call_args_with_out: &'a str,
     pub wrapper_code: &'a str,
     pub cleanup_code: &'a str,
     pub decode_expr: &'a str,
@@ -143,6 +144,11 @@ impl TypeScriptEmitter {
                 .flat_map(|p| p.ffi_args())
                 .collect::<Vec<_>>()
                 .join(", ");
+            let call_args_with_out = if call_args.is_empty() {
+                "outPtr".to_string()
+            } else {
+                format!("outPtr, {call_args}")
+            };
 
             let wrapper_code = function
                 .params
@@ -168,6 +174,7 @@ impl TypeScriptEmitter {
                     return_abi: &function.return_abi,
                     ffi_name: &function.ffi_name,
                     call_args: &call_args,
+                    call_args_with_out: &call_args_with_out,
                     wrapper_code: &wrapper_code,
                     cleanup_code: &cleanup_code,
                     decode_expr: &function.decode_expr,
@@ -429,6 +436,7 @@ mod tests {
             return_abi: &TsReturnAbi::Void,
             ffi_name: "boltffi_reset",
             call_args: "",
+            call_args_with_out: "outPtr",
             wrapper_code: "",
             cleanup_code: "",
             decode_expr: "",
@@ -461,6 +469,7 @@ mod tests {
             },
             ffi_name: "boltffi_add",
             call_args: "a, b",
+            call_args_with_out: "outPtr, a, b",
             wrapper_code: "",
             cleanup_code: "",
             decode_expr: "",
@@ -479,6 +488,7 @@ mod tests {
             return_abi: &TsReturnAbi::WireEncoded,
             ffi_name: "boltffi_get_users",
             call_args: "",
+            call_args_with_out: "outPtr",
             wrapper_code: "",
             cleanup_code: "",
             decode_expr: "reader.readArray(() => decodeUser(reader))",

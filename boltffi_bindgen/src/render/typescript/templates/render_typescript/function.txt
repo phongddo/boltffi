@@ -9,11 +9,21 @@
 {%- when TsReturnAbi::Direct with { ts_cast } %}
   return (_module.exports.{{ ffi_name }} as Function)({{ call_args }}){{ ts_cast }};
 {%- when TsReturnAbi::WireEncoded %}
-  const bufPtr = (_module.exports.{{ ffi_name }} as Function)({{ call_args }});
-  const reader = _module.readerFromBuf(bufPtr);
-  const result = {{ decode_expr }};
-  _module.freeBuf(bufPtr);
-  return result;
+  const outPtr = _module.allocBufDescriptor();
+  let callCompleted = false;
+  try {
+    (_module.exports.{{ ffi_name }} as Function)({{ call_args_with_out }});
+    callCompleted = true;
+    const reader = _module.readerFromBuf(outPtr);
+    const result = {{ decode_expr }};
+    return result;
+  } finally {
+    if (callCompleted) {
+      _module.freeBuf(outPtr);
+    } else {
+      _module.freeBufDescriptor(outPtr);
+    }
+  }
 {%- endmatch %}
 {%- else %}
   try {
@@ -23,11 +33,21 @@
 {%- when TsReturnAbi::Direct with { ts_cast } %}
     return (_module.exports.{{ ffi_name }} as Function)({{ call_args }}){{ ts_cast }};
 {%- when TsReturnAbi::WireEncoded %}
-    const bufPtr = (_module.exports.{{ ffi_name }} as Function)({{ call_args }});
-    const reader = _module.readerFromBuf(bufPtr);
-    const result = {{ decode_expr }};
-    _module.freeBuf(bufPtr);
-    return result;
+    const outPtr = _module.allocBufDescriptor();
+    let callCompleted = false;
+    try {
+      (_module.exports.{{ ffi_name }} as Function)({{ call_args_with_out }});
+      callCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ decode_expr }};
+      return result;
+    } finally {
+      if (callCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+    }
 {%- endmatch %}
   } finally {
     {{ cleanup_code }}

@@ -344,7 +344,7 @@ impl<'a> TypeScriptLowerer<'a> {
                 continue;
             }
 
-            let wasm_params: Vec<TsWasmParam> = call
+            let mut wasm_params: Vec<TsWasmParam> = call
                 .params
                 .iter()
                 .map(|p| TsWasmParam {
@@ -356,7 +356,16 @@ impl<'a> TypeScriptLowerer<'a> {
             let return_wasm_type = match &call.return_ {
                 ReturnTransport::Void => None,
                 ReturnTransport::Direct(abi_type) => Some(abi_type_to_wasm(abi_type)),
-                ReturnTransport::Encoded { .. } => Some("number".to_string()),
+                ReturnTransport::Encoded { .. } => {
+                    wasm_params.insert(
+                        0,
+                        TsWasmParam {
+                            name: "out".to_string(),
+                            wasm_type: "number".to_string(),
+                        },
+                    );
+                    None
+                }
                 ReturnTransport::Handle { .. } => Some("number".to_string()),
                 ReturnTransport::Callback { .. } => None,
             };

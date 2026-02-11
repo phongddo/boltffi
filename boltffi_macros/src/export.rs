@@ -206,10 +206,40 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 }
             };
 
-            if has_params {
+            let wasm_export = if has_params {
                 quote! {
-                    #input
+                    #[cfg(target_arch = "wasm32")]
+                    #[unsafe(no_mangle)]
+                    #fn_vis unsafe extern "C" fn #export_ident(
+                        out: *mut ::boltffi::__private::FfiBuf<u8>,
+                        #(#ffi_params),*
+                    ) {
+                        if out.is_null() {
+                            return;
+                        }
+                        let __boltffi_encoded: ::boltffi::__private::FfiBuf<u8> = { #encode_body };
+                        out.write(__boltffi_encoded);
+                    }
+                }
+            } else {
+                quote! {
+                    #[cfg(target_arch = "wasm32")]
+                    #[unsafe(no_mangle)]
+                    #fn_vis unsafe extern "C" fn #export_ident(
+                        out: *mut ::boltffi::__private::FfiBuf<u8>
+                    ) {
+                        if out.is_null() {
+                            return;
+                        }
+                        let __boltffi_encoded: ::boltffi::__private::FfiBuf<u8> = { #encode_body };
+                        out.write(__boltffi_encoded);
+                    }
+                }
+            };
 
+            let non_wasm_export = if has_params {
+                quote! {
+                    #[cfg(not(target_arch = "wasm32"))]
                     #[unsafe(no_mangle)]
                     #fn_vis unsafe extern "C" fn #export_ident(
                         #(#ffi_params),*
@@ -219,13 +249,19 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 }
             } else {
                 quote! {
-                    #input
-
+                    #[cfg(not(target_arch = "wasm32"))]
                     #[unsafe(no_mangle)]
                     #fn_vis extern "C" fn #export_ident() -> ::boltffi::__private::FfiBuf<u8> {
                         #encode_body
                     }
                 }
+            };
+
+            quote! {
+                #input
+
+                #wasm_export
+                #non_wasm_export
             }
         }
         ReturnKind::String
