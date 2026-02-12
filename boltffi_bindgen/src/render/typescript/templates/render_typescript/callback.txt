@@ -2,6 +2,9 @@ export interface {{ callback.interface_name }} {
 {%- for method in callback.methods %}
   {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_kind %}{% when TsCallbackReturnKind::Void %}{% when TsCallbackReturnKind::Primitive with { ts_type } %}: {{ ts_type }}{% when TsCallbackReturnKind::WireEncoded with { ts_type, .. } %}: {{ ts_type }}{% endmatch %};
 {%- endfor %}
+{%- for method in callback.async_methods %}
+  {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Promise<{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}>;
+{%- endfor %}
 }
 
 const _{{ callback.trait_name_snake }}_registry = new Map<number, {{ callback.interface_name }}>();
@@ -28,31 +31,87 @@ _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_clone"] = (
 {%- for method in callback.methods %}
 {% match method.return_kind %}
 {% when TsCallbackReturnKind::Void %}
-_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
   const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
   if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive %}{% endmatch %}{% endfor %}
-  impl.{{ method.ts_name }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
+  impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
 };
 {% when TsCallbackReturnKind::Primitive with { ts_type } %}
-_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): {{ ts_type }} => {
+_callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): {{ ts_type }} => {
   const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
   if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive %}{% endmatch %}{% endfor %}
-  return impl.{{ method.ts_name }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
+  return impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
 };
 {% when TsCallbackReturnKind::WireEncoded with { ts_type, encode_expr, size_expr } %}
-_callbackImports["{{ method.import_name }}"] = (handle: number, out_ptr: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive %}, {{ param.name }}: number{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+_callbackImports["{{ method.import_name }}"] = (handle: number, out_ptr: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
   const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
   if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
-  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive %}{% endmatch %}{% endfor %}
-  const result: {{ ts_type }} = impl.{{ method.ts_name }}({% for param in method.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+  const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
+  const result: {{ ts_type }} = impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
   const writer = _module.allocWriter({{ size_expr }});
   {{ encode_expr }};
   _module.writeBufDescriptor(out_ptr, writer.ptr, writer.len, writer.capacity);
 };
 {% endmatch %}
+{%- endfor %}
+
+{%- for method in callback.async_methods %}
+_callbackImports["{{ method.start_import_name }}"] = (handle: number, requestId: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
+  const complete = _module.exports.{{ method.complete_export_name }} as Function;
+  const completeError = (err: unknown): void => {
+    const errMsg = err instanceof Error ? err.message : String(err);
+    const errWriter = _module.allocWriter(4 + errMsg.length * 3);
+    try {
+      errWriter.writeString(errMsg);
+      complete(requestId, -2, errWriter.ptr, errWriter.len, errWriter.capacity);
+    } catch (completeErr) {
+      _module.freeWriter(errWriter);
+      throw completeErr;
+    }
+  };
+  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
+  if (!impl) {
+    completeError(new Error(`Callback handle ${handle} not found`));
+    return;
+  }
+  Promise.resolve()
+    .then(() => {
+      {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
+      const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
+      return impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+    })
+    .then((result) => {
+      {%- match method.return_type %}
+      {%- when Some with (t) %}
+      {%- match method.encode_expr %}
+      {%- when Some with (encode_expr) %}
+      const writer = _module.allocWriter({{ method.size_expr.as_ref().unwrap() }});
+      try {
+        {{ encode_expr }};
+        complete(requestId, 0, writer.ptr, writer.len, writer.capacity);
+      } catch (err) {
+        _module.freeWriter(writer);
+        throw err;
+      }
+      {%- when None %}
+      const writer = _module.allocWriter({{ method.direct_size.unwrap() }});
+      try {
+        writer.{{ method.direct_write_method.as_ref().unwrap() }}({{ method.direct_write_value_expr.as_ref().unwrap() }});
+        complete(requestId, 0, writer.ptr, writer.len, writer.capacity);
+      } catch (err) {
+        _module.freeWriter(writer);
+        throw err;
+      }
+      {%- endmatch %}
+      {%- when None %}
+      complete(requestId, 0, 0, 0, 0);
+      {%- endmatch %}
+    })
+    .catch((err) => completeError(err));
+};
 {%- endfor %}

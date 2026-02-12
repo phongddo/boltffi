@@ -103,9 +103,7 @@ impl TypeRegistry {
             TypeShape::Pending(PendingKind::Class) | TypeShape::Class { .. } => {
                 MType::Object(name.to_string())
             }
-            TypeShape::Pending(PendingKind::Callback) => {
-                MType::BoxedTrait(name.to_string())
-            }
+            TypeShape::Pending(PendingKind::Callback) => MType::BoxedTrait(name.to_string()),
             TypeShape::Custom { repr } => MType::Custom {
                 name: name.to_string(),
                 repr: Box::new(repr.clone()),

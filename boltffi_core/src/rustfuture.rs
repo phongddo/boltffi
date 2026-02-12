@@ -515,7 +515,9 @@ pub unsafe fn rust_future_poll_sync<T: Send + 'static>(handle: RustFutureHandle)
 }
 
 #[cfg(target_arch = "wasm32")]
-pub unsafe fn rust_future_panic_message<T: Send + 'static>(handle: RustFutureHandle) -> Option<String> {
+pub unsafe fn rust_future_panic_message<T: Send + 'static>(
+    handle: RustFutureHandle,
+) -> Option<String> {
     let rust_future_arc = unsafe { Arc::from_raw(handle as *const RustFuture<T>) };
     let message = rust_future_arc.panic_message();
     std::mem::forget(rust_future_arc);

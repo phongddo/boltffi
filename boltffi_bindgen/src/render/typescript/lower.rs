@@ -62,7 +62,11 @@ impl AbiIndex {
         }
     }
 
-    fn callback<'a>(&self, contract: &'a AbiContract, id: &CallbackId) -> &'a AbiCallbackInvocation {
+    fn callback<'a>(
+        &self,
+        contract: &'a AbiContract,
+        id: &CallbackId,
+    ) -> &'a AbiCallbackInvocation {
         &contract.callbacks[self.callbacks[id]]
     }
 
@@ -253,7 +257,10 @@ impl<'a> TypeScriptLowerer<'a> {
             .iter()
             .filter(|m| !m.is_async)
             .filter_map(|method_def| {
-                let abi_method = abi_callback.methods.iter().find(|am| am.id == method_def.id)?;
+                let abi_method = abi_callback
+                    .methods
+                    .iter()
+                    .find(|am| am.id == method_def.id)?;
                 let ts_name = camel_case(method_def.id.as_str());
                 let import_name = format!(
                     "__boltffi_callback_{}_{}",
@@ -267,21 +274,34 @@ impl<'a> TypeScriptLowerer<'a> {
                     .map(|p| {
                         let ts_type = emit::ts_type(&p.type_expr);
                         let param_name = p.name.as_str();
+                        let callback_param_name = camel_case(param_name);
                         let abi_param = abi_method
                             .params
                             .iter()
                             .find(|ap| ap.name.as_str() == param_name);
 
-                        let kind = match abi_param.map(|ap| &ap.role) {
-                            Some(ParamRole::InEncoded { decode_ops, .. }) => {
+                        let kind = match abi_param {
+                            Some(abi_param)
+                                if matches!(abi_param.role, ParamRole::InEncoded { .. }) =>
+                            {
+                                let ParamRole::InEncoded { decode_ops, .. } = &abi_param.role
+                                else {
+                                    unreachable!();
+                                };
                                 let decode_expr = emit::emit_reader_read(decode_ops);
                                 TsCallbackParamKind::WireEncoded { decode_expr }
                             }
-                            _ => TsCallbackParamKind::Primitive,
+                            Some(abi_param) => callback_primitive_param_kind(
+                                callback_param_name.as_str(),
+                                Some(abi_param.ffi_type),
+                            ),
+                            None => {
+                                callback_primitive_param_kind(callback_param_name.as_str(), None)
+                            }
                         };
 
                         TsCallbackParam {
-                            name: camel_case(param_name),
+                            name: callback_param_name,
                             ts_type,
                             kind,
                         }
@@ -312,7 +332,9 @@ impl<'a> TypeScriptLowerer<'a> {
                         }
                     }
                     ReturnTransport::Handle { .. } | ReturnTransport::Callback { .. } => {
-                        TsCallbackReturnKind::Primitive { ts_type: "number".to_string() }
+                        TsCallbackReturnKind::Primitive {
+                            ts_type: "number".to_string(),
+                        }
                     }
                 };
 
@@ -326,11 +348,139 @@ impl<'a> TypeScriptLowerer<'a> {
             })
             .collect();
 
+        let async_methods = def
+            .methods
+            .iter()
+            .filter(|m| m.is_async)
+            .filter_map(|method_def| {
+                let abi_method = abi_callback
+                    .methods
+                    .iter()
+                    .find(|am| am.id == method_def.id)?;
+                let ts_name = camel_case(method_def.id.as_str());
+                let method_name_snake = naming::to_snake_case(method_def.id.as_str());
+                let start_import_name = format!(
+                    "__boltffi_callback_{}_{}_start",
+                    trait_name_snake, method_name_snake
+                );
+                let complete_export_name = format!(
+                    "boltffi_callback_{}_{}_complete",
+                    trait_name_snake, method_name_snake
+                );
+
+                let params = method_def
+                    .params
+                    .iter()
+                    .map(|p| {
+                        let ts_type = emit::ts_type(&p.type_expr);
+                        let param_name = p.name.as_str();
+                        let callback_param_name = camel_case(param_name);
+                        let abi_param = abi_method
+                            .params
+                            .iter()
+                            .find(|ap| ap.name.as_str() == param_name);
+
+                        let kind = match abi_param {
+                            Some(abi_param)
+                                if matches!(abi_param.role, ParamRole::InEncoded { .. }) =>
+                            {
+                                let ParamRole::InEncoded { decode_ops, .. } = &abi_param.role
+                                else {
+                                    unreachable!();
+                                };
+                                let decode_expr = emit::emit_reader_read(decode_ops);
+                                TsCallbackParamKind::WireEncoded { decode_expr }
+                            }
+                            Some(abi_param) => callback_primitive_param_kind(
+                                callback_param_name.as_str(),
+                                Some(abi_param.ffi_type),
+                            ),
+                            None => {
+                                callback_primitive_param_kind(callback_param_name.as_str(), None)
+                            }
+                        };
+
+                        TsCallbackParam {
+                            name: callback_param_name,
+                            ts_type,
+                            kind,
+                        }
+                    })
+                    .collect();
+
+                let (
+                    return_type,
+                    encode_expr,
+                    size_expr,
+                    direct_write_method,
+                    direct_write_value_expr,
+                    direct_size,
+                ) = match &abi_method.return_ {
+                    ReturnTransport::Void => (None, None, None, None, None, None),
+                    ReturnTransport::Direct(abi) => {
+                        let ts_type = match &method_def.returns {
+                            ReturnDef::Value(ty) => emit::ts_type(ty),
+                            _ => "number".to_string(),
+                        };
+                        let direct_write = direct_write_info(abi);
+                        (
+                            Some(ts_type),
+                            None,
+                            None,
+                            Some(direct_write.method_name.to_string()),
+                            Some(direct_write_argument_expr(abi, "result")),
+                            Some(direct_write.byte_width),
+                        )
+                    }
+                    ReturnTransport::Encoded { encode_ops, .. } => {
+                        let ts_type = match &method_def.returns {
+                            ReturnDef::Value(ty) => emit::ts_type(ty),
+                            ReturnDef::Result { ok, .. } => emit::ts_type(ok),
+                            _ => "unknown".to_string(),
+                        };
+                        let encode_expr = emit::emit_writer_write(encode_ops, "writer", "result");
+                        let size_expr = emit::emit_size_expr(&encode_ops.size, "result");
+                        (
+                            Some(ts_type),
+                            Some(encode_expr),
+                            Some(size_expr),
+                            None,
+                            None,
+                            None,
+                        )
+                    }
+                    ReturnTransport::Handle { .. } | ReturnTransport::Callback { .. } => (
+                        Some("number".to_string()),
+                        None,
+                        None,
+                        Some("writeU32".to_string()),
+                        Some("result".to_string()),
+                        Some(4),
+                    ),
+                };
+
+                Some(TsAsyncCallbackMethod {
+                    ts_name,
+                    start_import_name,
+                    complete_export_name,
+                    params,
+                    return_type,
+                    encode_expr,
+                    size_expr,
+                    direct_write_method,
+                    direct_write_value_expr,
+                    direct_size,
+                    doc: method_def.doc.clone(),
+                })
+            })
+            .collect();
+
         TsCallback {
             interface_name,
             trait_name_snake,
             create_handle_fn,
             methods,
+            async_methods,
             doc: def.doc.clone(),
         }
     }
@@ -674,6 +824,102 @@ fn abi_type_to_wasm(abi_type: &AbiType) -> String {
         AbiType::I64 | AbiType::U64 => "bigint".to_string(),
         AbiType::F32 | AbiType::F64 => "number".to_string(),
         AbiType::Pointer => "number".to_string(),
+    }
+}
+
+fn callback_primitive_param_kind(
+    param_name: &str,
+    abi_type: Option<AbiType>,
+) -> TsCallbackParamKind {
+    let import_ts_type = abi_type
+        .as_ref()
+        .map(abi_type_to_wasm)
+        .unwrap_or_else(|| "number".to_string());
+    let call_expr = match abi_type {
+        Some(AbiType::Bool) => format!("{param_name} !== 0"),
+        _ => param_name.to_string(),
+    };
+
+    TsCallbackParamKind::Primitive {
+        import_ts_type,
+        call_expr,
+    }
+}
+
+struct DirectWriteInfo {
+    method_name: &'static str,
+    byte_width: usize,
+}
+
+fn direct_write_info(abi_type: &AbiType) -> DirectWriteInfo {
+    match abi_type {
+        AbiType::Void => DirectWriteInfo {
+            method_name: "",
+            byte_width: 0,
+        },
+        AbiType::Bool => DirectWriteInfo {
+            method_name: "writeBool",
+            byte_width: 1,
+        },
+        AbiType::I8 => DirectWriteInfo {
+            method_name: "writeI8",
+            byte_width: 1,
+        },
+        AbiType::U8 => DirectWriteInfo {
+            method_name: "writeU8",
+            byte_width: 1,
+        },
+        AbiType::I16 => DirectWriteInfo {
+            method_name: "writeI16",
+            byte_width: 2,
+        },
+        AbiType::U16 => DirectWriteInfo {
+            method_name: "writeU16",
+            byte_width: 2,
+        },
+        AbiType::I32 => DirectWriteInfo {
+            method_name: "writeI32",
+            byte_width: 4,
+        },
+        AbiType::U32 => DirectWriteInfo {
+            method_name: "writeU32",
+            byte_width: 4,
+        },
+        AbiType::I64 => DirectWriteInfo {
+            method_name: "writeI64",
+            byte_width: 8,
+        },
+        AbiType::U64 => DirectWriteInfo {
+            method_name: "writeU64",
+            byte_width: 8,
+        },
+        AbiType::ISize => DirectWriteInfo {
+            method_name: "writeI64",
+            byte_width: 8,
+        },
+        AbiType::USize => DirectWriteInfo {
+            method_name: "writeU64",
+            byte_width: 8,
+        },
+        AbiType::F32 => DirectWriteInfo {
+            method_name: "writeF32",
+            byte_width: 4,
+        },
+        AbiType::F64 => DirectWriteInfo {
+            method_name: "writeF64",
+            byte_width: 8,
+        },
+        AbiType::Pointer => DirectWriteInfo {
+            method_name: "writeU32",
+            byte_width: 4,
+        },
+    }
+}
+
+fn direct_write_argument_expr(abi_type: &AbiType, value_expr: &str) -> String {
+    match abi_type {
+        AbiType::ISize | AbiType::USize => format!("BigInt({value_expr})"),
+        _ => value_expr.to_string(),
     }
 }
 
@@ -1071,7 +1317,10 @@ mod tests {
         );
         assert_eq!(
             param.ffi_args(),
-            vec!["values_alloc.ptr".to_string(), "values_alloc.len".to_string()]
+            vec![
+                "values_alloc.ptr".to_string(),
+                "values_alloc.len".to_string()
+            ]
         );
         assert_eq!(
             param.cleanup_code(),
@@ -1109,11 +1358,81 @@ mod tests {
         );
         assert_eq!(
             param.ffi_args(),
-            vec!["values_alloc.ptr".to_string(), "values_alloc.len".to_string()]
+            vec![
+                "values_alloc.ptr".to_string(),
+                "values_alloc.len".to_string()
+            ]
         );
         assert_eq!(
             param.cleanup_code(),
             Some("_module.freeAlloc(values_alloc);".to_string())
         );
+    }
+
+    #[test]
+    fn direct_write_info_uses_bool_writer_for_bool() {
+        let info = direct_write_info(&AbiType::Bool);
+        assert_eq!(info.method_name, "writeBool");
+        assert_eq!(info.byte_width, 1);
+        assert_eq!(
+            direct_write_argument_expr(&AbiType::Bool, "result"),
+            "result"
+        );
+    }
+
+    #[test]
+    fn direct_write_info_uses_eight_bytes_for_isize_and_usize() {
+        let isize_info = direct_write_info(&AbiType::ISize);
+        let usize_info = direct_write_info(&AbiType::USize);
+        assert_eq!(isize_info.method_name, "writeI64");
+        assert_eq!(isize_info.byte_width, 8);
+        assert_eq!(usize_info.method_name, "writeU64");
+        assert_eq!(usize_info.byte_width, 8);
+    }
+
+    #[test]
+    fn direct_write_argument_expr_casts_pointer_sized_scalars_to_bigint() {
+        assert_eq!(
+            direct_write_argument_expr(&AbiType::ISize, "result"),
+            "BigInt(result)"
+        );
+        assert_eq!(
+            direct_write_argument_expr(&AbiType::USize, "result"),
+            "BigInt(result)"
+        );
+    }
+
+    #[test]
+    fn callback_primitive_param_kind_uses_bigint_for_i64() {
+        let kind = callback_primitive_param_kind("count", Some(AbiType::I64));
+        match kind {
+            TsCallbackParamKind::Primitive {
+                import_ts_type,
+                call_expr,
+            } => {
+                assert_eq!(import_ts_type, "bigint");
+                assert_eq!(call_expr, "count");
+            }
+            TsCallbackParamKind::WireEncoded { .. } => {
+                panic!("expected primitive callback param kind")
+            }
+        }
+    }
+
+    #[test]
+    fn callback_primitive_param_kind_coerces_bool_to_boolean_expression() {
+        let kind = callback_primitive_param_kind("isActive", Some(AbiType::Bool));
+        match kind {
+            TsCallbackParamKind::Primitive {
+                import_ts_type,
+                call_expr,
+            } => {
+                assert_eq!(import_ts_type, "number");
+                assert_eq!(call_expr, "isActive !== 0");
+            }
+            TsCallbackParamKind::WireEncoded { .. } => {
+                panic!("expected primitive callback param kind")
+            }
+        }
     }
 }

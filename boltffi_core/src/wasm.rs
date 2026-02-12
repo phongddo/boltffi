@@ -14,7 +14,11 @@ pub struct WasmCallbackOutBuf {
 #[cfg(target_arch = "wasm32")]
 impl WasmCallbackOutBuf {
     pub const fn empty() -> Self {
-        Self { ptr: 0, len: 0, cap: 0 }
+        Self {
+            ptr: 0,
+            len: 0,
+            cap: 0,
+        }
     }
 
     pub unsafe fn as_slice(&self) -> &[u8] {
@@ -55,7 +59,7 @@ fn boltffi_wasm_alloc_impl(size: usize) -> usize {
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
-fn boltffi_wasm_free_impl(ptr: usize, size: usize) {
+pub(crate) fn boltffi_wasm_free_impl(ptr: usize, size: usize) {
     if ptr == 0 || size == 0 {
         return;
     }

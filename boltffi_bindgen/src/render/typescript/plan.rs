@@ -37,6 +37,7 @@ pub struct TsCallback {
     pub trait_name_snake: String,
     pub create_handle_fn: String,
     pub methods: Vec<TsCallbackMethod>,
+    pub async_methods: Vec<TsAsyncCallbackMethod>,
     pub doc: Option<String>,
 }
 
@@ -52,8 +53,14 @@ pub struct TsCallbackMethod {
 #[derive(Debug, Clone)]
 pub enum TsCallbackReturnKind {
     Void,
-    Primitive { ts_type: String },
-    WireEncoded { ts_type: String, encode_expr: String, size_expr: String },
+    Primitive {
+        ts_type: String,
+    },
+    WireEncoded {
+        ts_type: String,
+        encode_expr: String,
+        size_expr: String,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -65,8 +72,28 @@ pub struct TsCallbackParam {
 
 #[derive(Debug, Clone)]
 pub enum TsCallbackParamKind {
-    Primitive,
-    WireEncoded { decode_expr: String },
+    Primitive {
+        import_ts_type: String,
+        call_expr: String,
+    },
+    WireEncoded {
+        decode_expr: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct TsAsyncCallbackMethod {
+    pub ts_name: String,
+    pub start_import_name: String,
+    pub complete_export_name: String,
+    pub params: Vec<TsCallbackParam>,
+    pub return_type: Option<String>,
+    pub encode_expr: Option<String>,
+    pub size_expr: Option<String>,
+    pub direct_write_method: Option<String>,
+    pub direct_write_value_expr: Option<String>,
+    pub direct_size: Option<usize>,
+    pub doc: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -326,7 +353,10 @@ mod tests {
         );
         assert_eq!(
             param.ffi_args(),
-            vec!["values_alloc.ptr".to_string(), "values_alloc.len".to_string()]
+            vec![
+                "values_alloc.ptr".to_string(),
+                "values_alloc.len".to_string()
+            ]
         );
         assert_eq!(
             param.cleanup_code(),
