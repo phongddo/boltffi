@@ -34,6 +34,7 @@ import {
   asyncDoubleAll,
   fetchWithCallback,
   fetchStringWithCallback,
+  Counter,
 } from './dist/wasm/pkg/node.js';
 
 await initialized;
@@ -382,5 +383,64 @@ assert(fetchedValue === 50, 'fetchWithCallback');
 const fetchedString = await fetchStringWithCallback(asyncFetcher, 'hello');
 console.log(`  fetchStringWithCallback('hello') = "${fetchedString}"`);
 assert(fetchedString === 'async: hello', 'fetchStringWithCallback');
+
+console.log('\nTesting Counter class...');
+{
+  const counter = Counter.new(10);
+  assert(counter.get() === 10, 'Counter.new(10).get()');
+
+  counter.increment();
+  assert(counter.get() === 11, 'increment()');
+
+  counter.add(5);
+  assert(counter.get() === 16, 'add(5)');
+
+  counter.reset();
+  assert(counter.get() === 0, 'reset()');
+
+  counter.dispose();
+  console.log('  sync methods ok');
+}
+
+{
+  const counter = Counter.createWithDefault();
+  assert(counter.get() === 0, 'createWithDefault().get()');
+  counter.dispose();
+  console.log('  createWithDefault ok');
+}
+
+{
+  const counter = Counter.new(100);
+  const result = await counter.asyncAdd(50);
+  assert(result === 150, 'asyncAdd(50)');
+  assert(counter.get() === 150, 'get() after asyncAdd');
+  counter.dispose();
+  console.log('  async methods ok');
+}
+
+{
+  const c1 = Counter.new(10);
+  const c2 = Counter.new(20);
+  c1.add(5);
+  assert(c1.get() === 15, 'c1 independent');
+  assert(c2.get() === 20, 'c2 independent');
+  c1.dispose();
+  c2.dispose();
+  console.log('  independent instances ok');
+}
+
+{
+  const counter = Counter.new(0);
+  counter.dispose();
+  let threw = false;
+  try {
+    counter.get();
+  } catch (e) {
+    threw = true;
+    assert(e.message.includes('disposed'), 'disposed error message');
+  }
+  assert(threw, 'disposed counter throws');
+  console.log('  dispose protection ok');
+}
 
 console.log('\nAll tests passed!');

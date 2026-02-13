@@ -657,6 +657,106 @@ mod tests {
     }
 
     #[test]
+    fn class_nullable_constructor_preserves_null_contract() {
+        let class = TsClass {
+            class_name: "Session".to_string(),
+            ffi_free: "boltffi_session_free".to_string(),
+            constructors: vec![TsClassConstructor {
+                ts_name: "open".to_string(),
+                ffi_name: "boltffi_session_open".to_string(),
+                is_default: false,
+                params: vec![TsParam {
+                    name: "path".to_string(),
+                    ts_type: "string".to_string(),
+                    conversion: TsParamConversion::String,
+                }],
+                returns_nullable_handle: true,
+                doc: None,
+            }],
+            methods: vec![],
+            doc: None,
+        };
+
+        let rendered = ClassTemplate { cls: &class }.render().unwrap();
+        assert!(rendered.contains("static open(path: string): Session | null {"));
+        assert!(rendered.contains("if (handle === 0) {\n        return null;\n      }"));
+    }
+
+    #[test]
+    fn class_async_return_frees_handles_on_decode_failures() {
+        let class = TsClass {
+            class_name: "Counter".to_string(),
+            ffi_free: "boltffi_counter_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "nextValue".to_string(),
+                ffi_name: "boltffi_counter_next_value".to_string(),
+                is_static: false,
+                params: vec![],
+                return_type: Some("number".to_string()),
+                return_handle: None,
+                mode: TsClassMethodMode::Async(TsClassAsyncMethod {
+                    poll_sync_ffi_name: "boltffi_counter_next_value_poll_sync".to_string(),
+                    complete_ffi_name: "boltffi_counter_next_value_complete".to_string(),
+                    panic_message_ffi_name: "boltffi_counter_next_value_panic_message"
+                        .to_string(),
+                    cancel_ffi_name: "boltffi_counter_next_value_cancel".to_string(),
+                    free_ffi_name: "boltffi_counter_next_value_free".to_string(),
+                    decode_expr: "reader.readI32()".to_string(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+
+        let rendered = ClassTemplate { cls: &class }.render().unwrap();
+        assert!(rendered.contains("let completeCompleted = false;"));
+        assert!(rendered.contains("_module.freeBuf(outPtr);"));
+        assert!(rendered.contains("_module.freeBufDescriptor(outPtr);"));
+        assert!(rendered.contains(
+            "(_module.exports.boltffi_counter_next_value_free as Function)(awaitedHandle);"
+        ));
+    }
+
+    #[test]
+    fn class_async_param_cleanup_runs_before_await() {
+        let class = TsClass {
+            class_name: "Database".to_string(),
+            ffi_free: "boltffi_database_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "query".to_string(),
+                ffi_name: "boltffi_database_query".to_string(),
+                is_static: false,
+                params: vec![TsParam {
+                    name: "sql".to_string(),
+                    ts_type: "string".to_string(),
+                    conversion: TsParamConversion::String,
+                }],
+                return_type: Some("QueryResult".to_string()),
+                return_handle: None,
+                mode: TsClassMethodMode::Async(TsClassAsyncMethod {
+                    poll_sync_ffi_name: "boltffi_database_query_poll_sync".to_string(),
+                    complete_ffi_name: "boltffi_database_query_complete".to_string(),
+                    panic_message_ffi_name: "boltffi_database_query_panic_message".to_string(),
+                    cancel_ffi_name: "boltffi_database_query_cancel".to_string(),
+                    free_ffi_name: "boltffi_database_query_free".to_string(),
+                    decode_expr: "QueryResultCodec.decode(reader)".to_string(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+
+        let rendered = ClassTemplate { cls: &class }.render().unwrap();
+        let cleanup_index = rendered.find("_module.freeAlloc(sql_alloc);").unwrap();
+        let await_index = rendered
+            .find("const awaitedHandle = await _module.asyncManager.pollAsync(")
+            .unwrap();
+        assert!(cleanup_index < await_index);
+    }
+
+    #[test]
     fn snapshot_wasm_exports() {
         let params = vec![
             TsWasmParam {
@@ -701,5 +801,207 @@ mod tests {
         };
         let rendered = template.render().unwrap();
         assert!(rendered.contains("boltffi_echo_payload(out: number, payload: number): void;"));
+    }
+
+    #[test]
+    fn snapshot_class_with_static_method() {
+        let class = TsClass {
+            class_name: "MathUtils".to_string(),
+            ffi_free: "boltffi_math_utils_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "add".to_string(),
+                ffi_name: "boltffi_math_utils_add".to_string(),
+                is_static: true,
+                params: vec![
+                    TsParam {
+                        name: "a".to_string(),
+                        ts_type: "number".to_string(),
+                        conversion: TsParamConversion::Direct,
+                    },
+                    TsParam {
+                        name: "b".to_string(),
+                        ts_type: "number".to_string(),
+                        conversion: TsParamConversion::Direct,
+                    },
+                ],
+                return_type: Some("number".to_string()),
+                return_handle: None,
+                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                    return_abi: TsReturnAbi::Direct {
+                        ts_cast: String::new(),
+                    },
+                    decode_expr: String::new(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_with_void_method() {
+        let class = TsClass {
+            class_name: "Logger".to_string(),
+            ffi_free: "boltffi_logger_free".to_string(),
+            constructors: vec![TsClassConstructor {
+                ts_name: "new".to_string(),
+                ffi_name: "boltffi_logger_new".to_string(),
+                is_default: true,
+                params: vec![],
+                returns_nullable_handle: false,
+                doc: None,
+            }],
+            methods: vec![TsClassMethod {
+                ts_name: "log".to_string(),
+                ffi_name: "boltffi_logger_log".to_string(),
+                is_static: false,
+                params: vec![TsParam {
+                    name: "message".to_string(),
+                    ts_type: "string".to_string(),
+                    conversion: TsParamConversion::String,
+                }],
+                return_type: None,
+                return_handle: None,
+                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                    return_abi: TsReturnAbi::Void,
+                    decode_expr: String::new(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_with_handle_return() {
+        let class = TsClass {
+            class_name: "Factory".to_string(),
+            ffi_free: "boltffi_factory_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "createChild".to_string(),
+                ffi_name: "boltffi_factory_create_child".to_string(),
+                is_static: false,
+                params: vec![],
+                return_type: Some("Child".to_string()),
+                return_handle: Some(TsHandleReturn {
+                    class_name: "Child".to_string(),
+                    nullable: false,
+                }),
+                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                    return_abi: TsReturnAbi::Direct {
+                        ts_cast: String::new(),
+                    },
+                    decode_expr: String::new(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_with_nullable_handle_return() {
+        let class = TsClass {
+            class_name: "Cache".to_string(),
+            ffi_free: "boltffi_cache_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "get".to_string(),
+                ffi_name: "boltffi_cache_get".to_string(),
+                is_static: false,
+                params: vec![TsParam {
+                    name: "key".to_string(),
+                    ts_type: "string".to_string(),
+                    conversion: TsParamConversion::String,
+                }],
+                return_type: Some("Entry | null".to_string()),
+                return_handle: Some(TsHandleReturn {
+                    class_name: "Entry".to_string(),
+                    nullable: true,
+                }),
+                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                    return_abi: TsReturnAbi::Direct {
+                        ts_cast: String::new(),
+                    },
+                    decode_expr: String::new(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_with_encoded_param() {
+        let class = TsClass {
+            class_name: "Renderer".to_string(),
+            ffi_free: "boltffi_renderer_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "draw".to_string(),
+                ffi_name: "boltffi_renderer_draw".to_string(),
+                is_static: false,
+                params: vec![TsParam {
+                    name: "point".to_string(),
+                    ts_type: "Point".to_string(),
+                    conversion: TsParamConversion::CodecEncoded {
+                        codec_name: "Point".to_string(),
+                    },
+                }],
+                return_type: None,
+                return_handle: None,
+                mode: TsClassMethodMode::Sync(TsClassSyncMethod {
+                    return_abi: TsReturnAbi::Void,
+                    decode_expr: String::new(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    #[test]
+    fn snapshot_class_async_with_encoded_return() {
+        let class = TsClass {
+            class_name: "Database".to_string(),
+            ffi_free: "boltffi_database_free".to_string(),
+            constructors: vec![],
+            methods: vec![TsClassMethod {
+                ts_name: "query".to_string(),
+                ffi_name: "boltffi_database_query".to_string(),
+                is_static: false,
+                params: vec![TsParam {
+                    name: "sql".to_string(),
+                    ts_type: "string".to_string(),
+                    conversion: TsParamConversion::String,
+                }],
+                return_type: Some("QueryResult".to_string()),
+                return_handle: None,
+                mode: TsClassMethodMode::Async(TsClassAsyncMethod {
+                    poll_sync_ffi_name: "boltffi_database_query_poll_sync".to_string(),
+                    complete_ffi_name: "boltffi_database_query_complete".to_string(),
+                    panic_message_ffi_name: "boltffi_database_query_panic_message".to_string(),
+                    cancel_ffi_name: "boltffi_database_query_cancel".to_string(),
+                    free_ffi_name: "boltffi_database_query_free".to_string(),
+                    decode_expr: "QueryResultCodec.decode(reader)".to_string(),
+                }),
+                doc: None,
+            }],
+            doc: None,
+        };
+        let template = ClassTemplate { cls: &class };
+        insta::assert_snapshot!(template.render().unwrap());
     }
 }

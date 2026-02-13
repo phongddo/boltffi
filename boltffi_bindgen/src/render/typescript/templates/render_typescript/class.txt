@@ -1,90 +1,244 @@
-{%- let registry_name = format!("_{}Registry", cls.class_name.to_lowercase()) -%}
-const {{ registry_name }} = new FinalizationRegistry<number>((handle) => {
-  if (_module.isAlive) {
-    (_module.exports.{{ cls.ffi_free }} as Function)(handle);
-  }
-});
+{{ crate::render::typescript::templates::ts_doc_block(cls.doc, "") -}}
+const _{{ cls.class_name }}Finalizer: FinalizationRegistry<number> | null =
+  typeof FinalizationRegistry === "undefined"
+    ? null
+    : new FinalizationRegistry<number>((handle) => {
+        (_module.exports.{{ cls.ffi_free }} as Function)(handle);
+      });
 
-{%- if let Some(text) = cls.doc %}
-/**
-{%- for line in text.lines() %}
- * {{ line }}
-{%- endfor %}
- */
-{% endif -%}
 export class {{ cls.class_name }} {
   private _handle: number;
-  private _freed: boolean = false;
+  private _disposed: boolean;
 
-{%- if cls.has_default_constructor() %}
-{%- if let Some(ctor) = cls.default_constructor() %}
-{%- if let Some(doc_text) = ctor.doc %}
-  /**
-{%- for line in doc_text.lines() %}
-   * {{ line }}
-{%- endfor %}
-   */
-{%- endif %}
-  constructor({% for p in ctor.params %}{{ p.name }}: {{ p.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}) {
-{%- let wrapper_code = ctor.wrapper_code() %}
-{%- if !wrapper_code.is_empty() %}
-    {{ wrapper_code }}
-{%- endif %}
-    this._handle = (_module.exports.{{ ctor.ffi_name }} as Function)({{ ctor.ffi_call_args() }});
-{%- let cleanup_code = ctor.cleanup_code() %}
-{%- if !cleanup_code.is_empty() %}
-    {{ cleanup_code }}
-{%- endif %}
-{%- if ctor.returns_nullable_handle %}
-    if (this._handle === 0) {
-      throw new Error("{{ cls.class_name }} constructor failed");
-    }
-{%- endif %}
-    {{ registry_name }}.register(this, this._handle);
-  }
-{%- endif %}
-{%- else %}
   private constructor(handle: number) {
     this._handle = handle;
-    {{ registry_name }}.register(this, handle);
+    this._disposed = false;
+    _{{ cls.class_name }}Finalizer?.register(this, handle, this);
   }
-{%- endif %}
 
-{%- for ctor in cls.named_constructors() %}
-{%- if let Some(doc_text) = ctor.doc %}
-  /**
-{%- for line in doc_text.lines() %}
-   * {{ line }}
-{%- endfor %}
-   */
+  static _fromHandle(handle: number): {{ cls.class_name }} {
+    if (handle === 0) {
+      throw new Error("{{ cls.class_name }} received a null handle");
+    }
+    return new {{ cls.class_name }}(handle);
+  }
+
+  [Symbol.dispose](): void {
+    this.dispose();
+  }
+
+  dispose(): void {
+    if (this._disposed) {
+      return;
+    }
+    this._disposed = true;
+    _{{ cls.class_name }}Finalizer?.unregister(this);
+    (_module.exports.{{ cls.ffi_free }} as Function)(this._handle);
+    this._handle = 0;
+  }
+
+  private _assertNotDisposed(): void {
+    if (this._disposed) {
+      throw new Error("{{ cls.class_name }} has been disposed");
+    }
+  }
+{%- for constructor in cls.constructors %}
+
+{{ crate::render::typescript::templates::ts_doc_block(constructor.doc, "  ") }}  static {{ constructor.ts_name }}({% for param in constructor.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ cls.class_name }}{% if constructor.returns_nullable_handle %} | null{% endif %} {
+{%- if !constructor.wrapper_code().is_empty() %}
+    {{ constructor.wrapper_code() }}
 {%- endif %}
-  static {{ ctor.ts_name }}({% for p in ctor.params %}{{ p.name }}: {{ p.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {{ cls.class_name }}{% if ctor.returns_nullable_handle %} | null{% endif %} {
-{%- let wrapper_code = ctor.wrapper_code() %}
-{%- if !wrapper_code.is_empty() %}
-    {{ wrapper_code }}
-{%- endif %}
-    const handle = (_module.exports.{{ ctor.ffi_name }} as Function)({{ ctor.ffi_call_args() }});
-{%- let cleanup_code = ctor.cleanup_code() %}
-{%- if !cleanup_code.is_empty() %}
-    {{ cleanup_code }}
-{%- endif %}
-{%- if ctor.returns_nullable_handle %}
+{%- if constructor.cleanup_code().is_empty() %}
+    const handle = (_module.exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
+{%- if constructor.returns_nullable_handle %}
     if (handle === 0) {
       return null;
     }
 {%- endif %}
-    const instance = Object.create({{ cls.class_name }}.prototype) as {{ cls.class_name }};
-    instance._handle = handle;
-    instance._freed = false;
-    {{ registry_name }}.register(instance, handle);
-    return instance;
+    return {{ cls.class_name }}._fromHandle(handle);
+{%- else %}
+    try {
+      const handle = (_module.exports.{{ constructor.ffi_name }} as Function)({{ constructor.ffi_call_args() }});
+{%- if constructor.returns_nullable_handle %}
+      if (handle === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ cls.class_name }}._fromHandle(handle);
+    } finally {
+      {{ constructor.cleanup_code() }}
+    }
+{%- endif %}
   }
 {%- endfor %}
+{%- for method in cls.methods %}
 
-  [Symbol.dispose](): void {
-    if (!this._freed) {
-      this._freed = true;
-      (_module.exports.{{ cls.ffi_free }} as Function)(this._handle);
+{{ crate::render::typescript::templates::ts_doc_block(method.doc, "  ") }}  {% if method.is_static %}static {% endif %}{% if method.is_async() %}async {% endif %}{{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): {% if method.is_async() %}Promise<{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}>{% else %}{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}{% endif %} {
+{%- if !method.is_static %}
+    this._assertNotDisposed();
+{%- endif %}
+{%- if !method.wrapper_code().is_empty() %}
+    {{ method.wrapper_code() }}
+{%- endif %}
+{%- if method.cleanup_code().is_empty() %}
+{%- match method.mode %}
+{%- when TsClassMethodMode::Sync with (sync_method) %}
+{%- match sync_method.return_abi %}
+{%- when TsReturnAbi::Void %}
+    (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- when TsReturnAbi::Direct with { ts_cast } %}
+{%- if let Some(handle_return) = method.return_handle %}
+    const result = (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- if handle_return.nullable %}
+    if (result === 0) {
+      return null;
     }
+{%- endif %}
+    return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+    return (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ ts_cast }};
+{%- endif %}
+{%- when TsReturnAbi::WireEncoded %}
+    const outPtr = _module.allocBufDescriptor();
+    let callCompleted = false;
+    try {
+      (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args_with_out() }});
+      callCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ sync_method.decode_expr }};
+      return result;
+    } finally {
+      if (callCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+    }
+{%- endmatch %}
+{%- when TsClassMethodMode::Async with (async_method) %}
+    const handle = (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => (_module.exports.{{ async_method.poll_sync_ffi_name }} as Function)(futureHandle),
+      (futureHandle: number) => (_module.exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
+      (futureHandle: number) => (_module.exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
+    );
+{%- match method.return_type %}
+{%- when Some with (t) %}
+    const outPtr = _module.allocBufDescriptor();
+    let completeCompleted = false;
+    try {
+      (_module.exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+      completeCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ async_method.decode_expr }};
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+      return result;
+{%- endif %}
+    } finally {
+      if (completeCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+      (_module.exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    }
+{%- when None %}
+    (_module.exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+{%- endmatch %}
+{%- endmatch %}
+{%- else %}
+{%- match method.mode %}
+{%- when TsClassMethodMode::Sync with (sync_method) %}
+    try {
+{%- match sync_method.return_abi %}
+{%- when TsReturnAbi::Void %}
+      (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- when TsReturnAbi::Direct with { ts_cast } %}
+{%- if let Some(handle_return) = method.return_handle %}
+      const result = (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+      return (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }}){{ ts_cast }};
+{%- endif %}
+{%- when TsReturnAbi::WireEncoded %}
+      const outPtr = _module.allocBufDescriptor();
+      let callCompleted = false;
+      try {
+        (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args_with_out() }});
+        callCompleted = true;
+        const reader = _module.readerFromBuf(outPtr);
+        const result = {{ sync_method.decode_expr }};
+        return result;
+      } finally {
+        if (callCompleted) {
+          _module.freeBuf(outPtr);
+        } else {
+          _module.freeBufDescriptor(outPtr);
+        }
+      }
+{%- endmatch %}
+    } finally {
+      {{ method.cleanup_code() }}
+    }
+{%- when TsClassMethodMode::Async with (async_method) %}
+    const handle = (() => {
+      try {
+        return (_module.exports.{{ method.ffi_name }} as Function)({{ method.ffi_call_args() }});
+      } finally {
+        {{ method.cleanup_code() }}
+      }
+    })();
+    const awaitedHandle = await _module.asyncManager.pollAsync(
+      handle,
+      (futureHandle: number) => (_module.exports.{{ async_method.poll_sync_ffi_name }} as Function)(futureHandle),
+      (futureHandle: number) => (_module.exports.{{ async_method.panic_message_ffi_name }} as Function)(futureHandle),
+      (futureHandle: number) => (_module.exports.{{ async_method.free_ffi_name }} as Function)(futureHandle)
+    );
+{%- match method.return_type %}
+{%- when Some with (t) %}
+    const outPtr = _module.allocBufDescriptor();
+    let completeCompleted = false;
+    try {
+      (_module.exports.{{ async_method.complete_ffi_name }} as Function)(outPtr, awaitedHandle, 0);
+      completeCompleted = true;
+      const reader = _module.readerFromBuf(outPtr);
+      const result = {{ async_method.decode_expr }};
+{%- if let Some(handle_return) = method.return_handle %}
+{%- if handle_return.nullable %}
+      if (result === 0) {
+        return null;
+      }
+{%- endif %}
+      return {{ handle_return.class_name }}._fromHandle(result);
+{%- else %}
+      return result;
+{%- endif %}
+    } finally {
+      if (completeCompleted) {
+        _module.freeBuf(outPtr);
+      } else {
+        _module.freeBufDescriptor(outPtr);
+      }
+      (_module.exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+    }
+{%- when None %}
+    (_module.exports.{{ async_method.free_ffi_name }} as Function)(awaitedHandle);
+{%- endmatch %}
+{%- endmatch %}
+{%- endif %}
   }
+{%- endfor %}
 }

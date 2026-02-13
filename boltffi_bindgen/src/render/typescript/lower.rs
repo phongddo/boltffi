@@ -952,7 +952,7 @@ impl<'a> TypeScriptLowerer<'a> {
                 .params
                 .iter()
                 .map(|p| TsWasmParam {
-                    name: camel_case(p.name.as_str()),
+                    name: emit::escape_ts_keyword(&camel_case(p.name.as_str())),
                     wasm_type: abi_type_to_wasm(&p.ffi_type),
                 })
                 .collect();
@@ -1721,6 +1721,609 @@ mod tests {
             TsCallbackParamKind::WireEncoded { .. } => {
                 panic!("expected primitive callback param kind")
             }
+        }
+    }
+
+    #[test]
+    fn class_constructor_generates_correct_ffi_name_and_params() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![ConstructorDef::Default {
+                params: vec![primitive_param("initial", PrimitiveType::I32)],
+                is_fallible: false,
+                doc: None,
+                deprecated: None,
+            }],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Counter")
+            .expect("class should be lowered");
+
+        assert_eq!(class.constructors.len(), 1);
+        let constructor = &class.constructors[0];
+        assert_eq!(constructor.ffi_name, "boltffi_counter_new");
+        assert_eq!(constructor.params.len(), 1);
+        assert_eq!(constructor.params[0].name, "initial");
+    }
+
+    #[test]
+    fn class_named_factory_constructor_uses_name_in_ffi() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Connection"),
+            constructors: vec![
+                ConstructorDef::Default {
+                    params: vec![],
+                    is_fallible: false,
+                    doc: None,
+                    deprecated: None,
+                },
+                ConstructorDef::NamedFactory {
+                    name: MethodId::new("connect"),
+                    is_fallible: false,
+                    doc: None,
+                    deprecated: None,
+                },
+            ],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Connection")
+            .expect("class should be lowered");
+
+        assert_eq!(class.constructors.len(), 2);
+        assert_eq!(class.constructors[0].ffi_name, "boltffi_connection_new");
+        assert_eq!(class.constructors[0].ts_name, "new");
+        assert_eq!(class.constructors[1].ffi_name, "boltffi_connection_connect");
+        assert_eq!(class.constructors[1].ts_name, "connect");
+    }
+
+    #[test]
+    fn class_static_method_excludes_handle_from_ffi_args() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Factory"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("create_item"),
+                receiver: Receiver::Static,
+                params: vec![primitive_param("id", PrimitiveType::I32)],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Factory")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert!(method.is_static);
+        assert_eq!(method.ffi_call_args(), "id");
+    }
+
+    #[test]
+    fn class_ref_mut_self_method_passes_handle_same_as_ref_self() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Buffer"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("push"),
+                receiver: Receiver::RefMutSelf,
+                params: vec![primitive_param("value", PrimitiveType::I32)],
+                returns: ReturnDef::Void,
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Buffer")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert!(!method.is_static);
+        assert_eq!(method.ffi_call_args(), "this._handle, value");
+    }
+
+    #[test]
+    fn class_async_method_with_params_includes_handle_in_entry_ffi() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Database"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("query"),
+                receiver: Receiver::RefSelf,
+                params: vec![ParamDef {
+                    name: ParamName::new("sql"),
+                    type_expr: TypeExpr::String,
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::String),
+                is_async: true,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Database")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.ffi_name, "boltffi_database_query");
+        assert!(!method.is_static);
+        assert!(method.params.iter().any(|p| p.name == "sql"));
+        assert!(!method.params.iter().any(|p| p.name == "handle"));
+    }
+
+    #[test]
+    fn class_ffi_free_uses_correct_naming() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Resource"),
+            constructors: vec![],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Resource")
+            .expect("class should be lowered");
+
+        assert_eq!(class.ffi_free, "boltffi_resource_free");
+    }
+
+    #[test]
+    fn wasm_import_escapes_reserved_keyword_params() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "use_default",
+            vec![primitive_param("default", PrimitiveType::I32)],
+            ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+            false,
+        ));
+
+        let module = lower_contract(&contract);
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|i| i.ffi_name == "boltffi_use_default")
+            .expect("wasm import should exist");
+
+        assert_eq!(import.params[0].name, "default_");
+    }
+
+    #[test]
+    fn class_async_method_with_mut_self_generates_correct_ffi_structure() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("increment_async"),
+                receiver: Receiver::RefMutSelf,
+                params: vec![primitive_param("amount", PrimitiveType::I32)],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: true,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Counter")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.ts_name, "incrementAsync");
+        assert!(!method.is_static);
+        assert_eq!(method.params.len(), 1);
+        assert_eq!(method.params[0].name, "amount");
+
+        match &method.mode {
+            TsClassMethodMode::Async(async_method) => {
+                assert_eq!(
+                    async_method.poll_sync_ffi_name,
+                    "boltffi_counter_increment_async_poll_sync"
+                );
+            }
+            TsClassMethodMode::Sync(_) => panic!("expected async method mode"),
+        }
+    }
+
+    #[test]
+    fn class_lowering_generates_pascal_case_class_name() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("http_client"),
+            constructors: vec![],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "HttpClient")
+            .expect("class should be lowered with PascalCase name");
+
+        assert_eq!(class.ffi_free, "boltffi_http_client_free");
+    }
+
+    #[test]
+    fn class_method_with_string_param_uses_string_conversion() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Logger"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("log"),
+                receiver: Receiver::RefSelf,
+                params: vec![ParamDef {
+                    name: ParamName::new("message"),
+                    type_expr: TypeExpr::String,
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Void,
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Logger")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.params[0].name, "message");
+        assert_eq!(method.params[0].ts_type, "string");
+        assert!(matches!(
+            method.params[0].conversion,
+            TsParamConversion::String
+        ));
+    }
+
+    #[test]
+    fn class_constructor_with_string_param_generates_wrapper_and_cleanup() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Connection"),
+            constructors: vec![ConstructorDef::Default {
+                params: vec![ParamDef {
+                    name: ParamName::new("url"),
+                    type_expr: TypeExpr::String,
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                is_fallible: false,
+                doc: None,
+                deprecated: None,
+            }],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Connection")
+            .expect("class should be lowered");
+
+        let ctor = &class.constructors[0];
+        assert_eq!(ctor.params[0].name, "url");
+        assert!(ctor.params[0].wrapper_code().is_some());
+        assert!(ctor.params[0].cleanup_code().is_some());
+    }
+
+    #[test]
+    fn class_method_returns_none_for_void_return_type() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Printer"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("print"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Void,
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Printer")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert!(method.return_type.is_none());
+        match &method.mode {
+            TsClassMethodMode::Sync(sync) => {
+                assert!(sync.return_abi.is_void());
+            }
+            _ => panic!("expected sync method"),
+        }
+    }
+
+    #[test]
+    fn class_method_with_record_param_uses_codec_conversion() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(crate::ir::definitions::RecordDef {
+            id: crate::ir::ids::RecordId::new("Point"),
+            fields: vec![
+                crate::ir::definitions::FieldDef {
+                    name: FieldName::new("x"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+                crate::ir::definitions::FieldDef {
+                    name: FieldName::new("y"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            doc: None,
+            deprecated: None,
+        });
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Canvas"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("draw_point"),
+                receiver: Receiver::RefSelf,
+                params: vec![ParamDef {
+                    name: ParamName::new("point"),
+                    type_expr: TypeExpr::Record(crate::ir::ids::RecordId::new("Point")),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Void,
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Canvas")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.params[0].name, "point");
+        assert_eq!(method.params[0].ts_type, "Point");
+        match &method.params[0].conversion {
+            TsParamConversion::CodecEncoded { codec_name } => {
+                assert_eq!(codec_name, "Point");
+            }
+            _ => panic!("expected codec encoded conversion"),
+        }
+    }
+
+    #[test]
+    fn class_sync_method_with_direct_return_has_correct_abi() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Counter"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("get"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Counter")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.return_type.as_deref(), Some("number"));
+        match &method.mode {
+            TsClassMethodMode::Sync(sync) => {
+                assert!(sync.return_abi.is_direct());
+            }
+            _ => panic!("expected sync method"),
+        }
+    }
+
+    #[test]
+    fn class_method_ts_name_uses_camel_case() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("Service"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("get_user_by_id"),
+                receiver: Receiver::RefSelf,
+                params: vec![primitive_param("user_id", PrimitiveType::I32)],
+                returns: ReturnDef::Void,
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "Service")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.ts_name, "getUserById");
+        assert_eq!(method.params[0].name, "userId");
+    }
+
+    #[test]
+    fn wasm_import_bigint_params_use_bigint_type() {
+        let mut contract = empty_contract();
+        contract.functions.push(function(
+            "process_large",
+            vec![primitive_param("value", PrimitiveType::I64)],
+            ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I64)),
+            false,
+        ));
+
+        let module = lower_contract(&contract);
+        let import = module
+            .wasm_imports
+            .iter()
+            .find(|i| i.ffi_name == "boltffi_process_large")
+            .expect("wasm import should exist");
+
+        assert_eq!(import.params[0].wasm_type, "bigint");
+        assert_eq!(import.return_wasm_type.as_deref(), Some("bigint"));
+    }
+
+    #[test]
+    fn class_async_method_all_ffi_names_follow_convention() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("NetworkClient"),
+            constructors: vec![],
+            methods: vec![MethodDef {
+                id: MethodId::new("fetch_data"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::String),
+                is_async: true,
+                doc: None,
+                deprecated: None,
+            }],
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower_contract(&contract);
+        let class = module
+            .classes
+            .iter()
+            .find(|c| c.class_name == "NetworkClient")
+            .expect("class should be lowered");
+
+        let method = &class.methods[0];
+        assert_eq!(method.ffi_name, "boltffi_network_client_fetch_data");
+
+        match &method.mode {
+            TsClassMethodMode::Async(async_method) => {
+                assert_eq!(
+                    async_method.poll_sync_ffi_name,
+                    "boltffi_network_client_fetch_data_poll_sync"
+                );
+                assert_eq!(
+                    async_method.complete_ffi_name,
+                    "boltffi_network_client_fetch_data_complete"
+                );
+                assert_eq!(
+                    async_method.panic_message_ffi_name,
+                    "boltffi_network_client_fetch_data_panic_message"
+                );
+                assert_eq!(
+                    async_method.cancel_ffi_name,
+                    "boltffi_network_client_fetch_data_cancel"
+                );
+                assert_eq!(
+                    async_method.free_ffi_name,
+                    "boltffi_network_client_fetch_data_free"
+                );
+            }
+            _ => panic!("expected async method"),
         }
     }
 }
