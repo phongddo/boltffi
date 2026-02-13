@@ -2,6 +2,7 @@ use proc_macro2::Span;
 use quote::quote;
 use syn::{FnArg, Pat};
 
+use boltffi_ffi_rules::callback as cb_naming;
 use crate::callback_registry::CallbackTraitRegistry;
 use crate::custom_types::{
     CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, to_wire_expr_owned,
@@ -11,6 +12,170 @@ use crate::util::{
     ParamTransform, classify_param_transform, foreign_trait_path, is_primitive_vec_inner,
     len_ident, ptr_ident,
 };
+
+fn generate_wasm_closure_codegen(
+    name: &syn::Ident,
+    arg_types: &[syn::Type],
+    returns: Option<&syn::Type>,
+    ffi_cb_args: &[proc_macro2::TokenStream],
+    custom_types: &CustomTypeRegistry,
+) -> proc_macro2::TokenStream {
+    let type_ids: Vec<cb_naming::TypeId> = arg_types
+        .iter()
+        .map(|ty| {
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            cb_naming::TypeId::from_rust_type_str(&ty_str)
+        })
+        .collect();
+
+    let return_type_id = returns
+        .map(|ty| {
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            cb_naming::TypeId::from_rust_type_str(&ty_str)
+        })
+        .unwrap_or(cb_naming::TypeId::Void);
+
+    let callback_id_snake = cb_naming::closure_callback_id_snake(&type_ids, &return_type_id);
+    let call_import_name = cb_naming::callback_wasm_import_call(&callback_id_snake);
+    let free_import_name = cb_naming::callback_wasm_import_free(&callback_id_snake);
+
+    let call_import_ident = syn::Ident::new(&call_import_name, name.span());
+    let free_import_ident = syn::Ident::new(&free_import_name, name.span());
+    let owner_name = syn::Ident::new(&format!("__{}_owner", name), name.span());
+
+    let (arg_names, wire_vars, call_args): (Vec<_>, Vec<_>, Vec<_>) = arg_types
+        .iter()
+        .enumerate()
+        .map(|(index, arg_ty)| {
+            let arg_name = syn::Ident::new(&format!("__arg{}", index), name.span());
+            let arg_ty_str = quote!(#arg_ty).to_string().replace(' ', "");
+
+            if is_primitive_vec_inner(&arg_ty_str) {
+                (arg_name.clone(), quote! {}, quote! { #arg_name })
+            } else {
+                let wire_name = syn::Ident::new(&format!("__wire{}", index), name.span());
+                let wire_var = if contains_custom_types(arg_ty, custom_types) {
+                    let wire_ty = wire_type_for(arg_ty, custom_types);
+                    let wire_value_ident =
+                        syn::Ident::new(&format!("__wire_value{}", index), name.span());
+                    let to_wire = to_wire_expr_owned(arg_ty, custom_types, &arg_name);
+                    quote! {
+                        let #wire_value_ident: #wire_ty = { #to_wire };
+                        let #wire_name = ::boltffi::__private::wire::encode(&#wire_value_ident);
+                    }
+                } else {
+                    quote! {
+                        let #wire_name = ::boltffi::__private::wire::encode(&#arg_name);
+                    }
+                };
+                (arg_name, wire_var, quote! { #wire_name.as_ptr(), #wire_name.len() })
+            }
+        })
+        .fold((vec![], vec![], vec![]), |(mut names, mut vars, mut args), (n, v, a)| {
+            names.push(n);
+            vars.push(v);
+            args.push(a);
+            (names, vars, args)
+        });
+
+    let closure_params: Vec<proc_macro2::TokenStream> = arg_names
+        .iter()
+        .zip(arg_types.iter())
+        .map(|(n, t)| quote! { #n: #t })
+        .collect();
+
+    let closure_params_tokens = if closure_params.is_empty() {
+        quote! {}
+    } else {
+        let first = &closure_params[0];
+        let rest = &closure_params[1..];
+        quote! { #first #(, #rest)* }
+    };
+
+    let mut extern_param_idx = 0;
+    let extern_params: Vec<proc_macro2::TokenStream> = ffi_cb_args
+        .iter()
+        .map(|t| {
+            let param_name = syn::Ident::new(&format!("__p{}", extern_param_idx), name.span());
+            extern_param_idx += 1;
+            quote! { #param_name: #t }
+        })
+        .collect();
+
+    let extern_params_tokens = if extern_params.is_empty() {
+        quote! {}
+    } else {
+        let first = &extern_params[0];
+        let rest = &extern_params[1..];
+        quote! { , #first #(, #rest)* }
+    };
+
+    let return_is_primitive = returns
+        .map(|ty| {
+            let ty_str = quote!(#ty).to_string().replace(' ', "");
+            is_primitive_vec_inner(&ty_str)
+        })
+        .unwrap_or(true);
+
+    if return_is_primitive {
+        let ffi_return_type = returns.map(|ty| quote! { -> #ty }).unwrap_or_default();
+        let closure_return_type = ffi_return_type.clone();
+
+        quote! {
+            #[cfg(target_arch = "wasm32")]
+            let #name = {
+                #[allow(improper_ctypes)]
+                unsafe extern "C" {
+                    fn #call_import_ident(handle: u32 #extern_params_tokens) #ffi_return_type;
+                    fn #free_import_ident(handle: u32);
+                }
+                let #owner_name = ::boltffi::__private::WasmCallbackOwner::new(#name, #free_import_ident);
+                move |#closure_params_tokens| #closure_return_type {
+                    #(#wire_vars)*
+                    unsafe { #call_import_ident(#owner_name.handle() #(, #call_args)*) }
+                }
+            };
+        }
+    } else {
+        let return_ty = returns.unwrap();
+        let from_wire = if contains_custom_types(return_ty, custom_types) {
+            let wire_ty = wire_type_for(return_ty, custom_types);
+            let wire_result_ident = syn::Ident::new("__wire_result", name.span());
+            let from_wire_conversion = from_wire_expr_owned(return_ty, custom_types, &wire_result_ident);
+            quote! {
+                let #wire_result_ident: #wire_ty = ::boltffi::__private::wire::decode(__result_bytes)
+                    .expect("closure return: wire decode failed");
+                #from_wire_conversion
+            }
+        } else {
+            quote! {
+                ::boltffi::__private::wire::decode(__result_bytes)
+                    .expect("closure return: wire decode failed")
+            }
+        };
+
+        quote! {
+            #[cfg(target_arch = "wasm32")]
+            let #name = {
+                #[allow(improper_ctypes)]
+                unsafe extern "C" {
+                    fn #call_import_ident(handle: u32, out: *mut ::boltffi::__private::FfiBuf<u8> #extern_params_tokens);
+                    fn #free_import_ident(handle: u32);
+                }
+                let #owner_name = ::boltffi::__private::WasmCallbackOwner::new(#name, #free_import_ident);
+                move |#closure_params_tokens| -> #return_ty {
+                    #(#wire_vars)*
+                    let mut __out_buf = ::boltffi::__private::FfiBuf::<u8>::empty();
+                    unsafe { #call_import_ident(#owner_name.handle(), &mut __out_buf #(, #call_args)*) };
+                    let __result_bytes = unsafe {
+                        ::core::slice::from_raw_parts(__out_buf.as_ptr(), __out_buf.len())
+                    };
+                    #from_wire
+                }
+            };
+        }
+    }
+}
 
 pub struct FfiParams {
     pub ffi_params: Vec<proc_macro2::TokenStream>,
@@ -166,17 +331,36 @@ pub fn transform_params(
                     let ffi_return_type = returns.as_ref().map(|ty| quote! { -> #ty }).unwrap_or_default();
                     let closure_return_type = returns.as_ref().map(|ty| quote! { -> #ty }).unwrap_or_default();
 
-                    acc.ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) #ffi_return_type },
+                    let closure_params: Vec<proc_macro2::TokenStream> = arg_names
+                        .iter()
+                        .zip(arg_types.iter())
+                        .map(|(n, t)| quote! { #n: #t })
+                        .collect();
+
+                    acc.ffi_params.push(quote! {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) #ffi_return_type,
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #ud_name: *mut ::core::ffi::c_void,
+                        #[cfg(target_arch = "wasm32")]
+                        #name: u32
+                    });
+
+                    let wasm_codegen = generate_wasm_closure_codegen(
+                        &name,
+                        &arg_types,
+                        returns.as_ref(),
+                        &ffi_cb_args,
+                        custom_types,
                     );
-                    acc.ffi_params
-                        .push(quote! { #ud_name: *mut ::core::ffi::c_void });
 
                     acc.conversions.push(quote! {
-                        let #name = |#(#arg_names: #arg_types),*| #closure_return_type {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let #name = |#(#closure_params),*| #closure_return_type {
                             #(#wire_vars)*
                             #cb_name(#ud_name, #(#cb_call_args),*)
                         };
+                        #wasm_codegen
                     });
 
                     acc.call_args.push(quote! { #name });
@@ -828,17 +1012,36 @@ pub fn transform_method_params(
                     let ffi_return_type = returns.as_ref().map(|ty| quote! { -> #ty }).unwrap_or_default();
                     let closure_return_type = returns.as_ref().map(|ty| quote! { -> #ty }).unwrap_or_default();
 
-                    acc.ffi_params.push(
-                        quote! { #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) #ffi_return_type },
+                    let closure_params: Vec<proc_macro2::TokenStream> = arg_names
+                        .iter()
+                        .zip(arg_types.iter())
+                        .map(|(n, t)| quote! { #n: #t })
+                        .collect();
+
+                    acc.ffi_params.push(quote! {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #cb_name: extern "C" fn(*mut ::core::ffi::c_void, #(#ffi_cb_args),*) #ffi_return_type,
+                        #[cfg(not(target_arch = "wasm32"))]
+                        #ud_name: *mut ::core::ffi::c_void,
+                        #[cfg(target_arch = "wasm32")]
+                        #name: u32
+                    });
+
+                    let wasm_codegen = generate_wasm_closure_codegen(
+                        &name,
+                        &arg_types,
+                        returns.as_ref(),
+                        &ffi_cb_args,
+                        custom_types,
                     );
-                    acc.ffi_params
-                        .push(quote! { #ud_name: *mut ::core::ffi::c_void });
 
                     acc.conversions.push(quote! {
-                        let #name = |#(#arg_names: #arg_types),*| #closure_return_type {
+                        #[cfg(not(target_arch = "wasm32"))]
+                        let #name = |#(#closure_params),*| #closure_return_type {
                             #(#wire_vars)*
                             #cb_name(#ud_name, #(#cb_call_args),*)
                         };
+                        #wasm_codegen
                     });
 
                     acc.call_args.push(quote! { #name });

@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
+use boltffi_ffi_rules::callback as cb_naming;
 use boltffi_ffi_rules::naming::{self, snake_to_camel as camel_case};
 
 use crate::ir::abi::{
@@ -491,7 +492,7 @@ impl<'a> TypeScriptLowerer<'a> {
         let abi_callback = index.callback(self.abi, &def.id);
         let interface_name = naming::to_upper_camel_case(def.id.as_str());
         let trait_name_snake = naming::to_snake_case(def.id.as_str());
-        let create_handle_fn = format!("boltffi_create_{}_handle", trait_name_snake);
+        let create_handle_fn = cb_naming::callback_create_handle_global().to_string();
 
         let methods = def
             .methods

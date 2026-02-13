@@ -30,6 +30,8 @@ pub use boltffi_macros::{
     ffi_stream, ffi_trait, name, skip,
 };
 pub use callback::{CallbackForeignType, CallbackHandle, FromCallbackHandle};
+#[cfg(target_arch = "wasm32")]
+pub use callback::WasmCallbackOwner;
 pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
 pub use pending::{CancellationToken, PendingHandle};

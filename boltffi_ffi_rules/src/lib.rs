@@ -603,6 +603,55 @@ pub mod callback {
         use super::*;
 
         #[test]
+        fn type_id_from_rust_primitives() {
+            assert_eq!(TypeId::from_rust_type_str("bool"), TypeId::Bool);
+            assert_eq!(TypeId::from_rust_type_str("i8"), TypeId::I8);
+            assert_eq!(TypeId::from_rust_type_str("u8"), TypeId::U8);
+            assert_eq!(TypeId::from_rust_type_str("i16"), TypeId::I16);
+            assert_eq!(TypeId::from_rust_type_str("u16"), TypeId::U16);
+            assert_eq!(TypeId::from_rust_type_str("i32"), TypeId::I32);
+            assert_eq!(TypeId::from_rust_type_str("u32"), TypeId::U32);
+            assert_eq!(TypeId::from_rust_type_str("i64"), TypeId::I64);
+            assert_eq!(TypeId::from_rust_type_str("u64"), TypeId::U64);
+            assert_eq!(TypeId::from_rust_type_str("f32"), TypeId::F32);
+            assert_eq!(TypeId::from_rust_type_str("f64"), TypeId::F64);
+            assert_eq!(TypeId::from_rust_type_str("isize"), TypeId::Isize);
+            assert_eq!(TypeId::from_rust_type_str("usize"), TypeId::Usize);
+        }
+
+        #[test]
+        fn type_id_from_rust_string_types() {
+            assert_eq!(TypeId::from_rust_type_str("String"), TypeId::String);
+            assert_eq!(TypeId::from_rust_type_str("&str"), TypeId::String);
+        }
+
+        #[test]
+        fn type_id_from_rust_void() {
+            assert_eq!(TypeId::from_rust_type_str("()"), TypeId::Void);
+        }
+
+        #[test]
+        fn type_id_from_rust_custom() {
+            assert_eq!(
+                TypeId::from_rust_type_str("Point"),
+                TypeId::Named("Point".into())
+            );
+            assert_eq!(
+                TypeId::from_rust_type_str("MyCustomType"),
+                TypeId::Named("MyCustomType".into())
+            );
+        }
+
+        #[test]
+        fn type_id_signature_parts() {
+            assert_eq!(TypeId::Void.as_signature_part(), "Void");
+            assert_eq!(TypeId::Bool.as_signature_part(), "Bool");
+            assert_eq!(TypeId::I32.as_signature_part(), "I32");
+            assert_eq!(TypeId::String.as_signature_part(), "String");
+            assert_eq!(TypeId::Named("Point".into()).as_signature_part(), "Point");
+        }
+
+        #[test]
         fn closure_i32_to_i32() {
             let params = vec![TypeId::I32];
             let returns = TypeId::I32;
@@ -638,6 +687,7 @@ pub mod callback {
             let params = vec![];
             let returns = TypeId::I32;
             assert_eq!(closure_signature_id(&params, &returns), "ToI32");
+            assert_eq!(closure_callback_id(&params, &returns), "__Closure_ToI32");
         }
 
         #[test]
@@ -645,6 +695,7 @@ pub mod callback {
             let params = vec![];
             let returns = TypeId::Void;
             assert_eq!(closure_signature_id(&params, &returns), "Void");
+            assert_eq!(closure_callback_id(&params, &returns), "__Closure_Void");
         }
 
         #[test]
@@ -652,6 +703,30 @@ pub mod callback {
             let params = vec![TypeId::I32, TypeId::String];
             let returns = TypeId::Bool;
             assert_eq!(closure_signature_id(&params, &returns), "I32_StringToBool");
+            assert_eq!(
+                closure_callback_id(&params, &returns),
+                "__Closure_I32_StringToBool"
+            );
+        }
+
+        #[test]
+        fn closure_all_primitives_void() {
+            let params = vec![
+                TypeId::Bool,
+                TypeId::I8,
+                TypeId::U8,
+                TypeId::I16,
+                TypeId::U16,
+                TypeId::I32,
+                TypeId::U32,
+                TypeId::I64,
+                TypeId::U64,
+                TypeId::F32,
+                TypeId::F64,
+            ];
+            let returns = TypeId::Void;
+            let sig = closure_signature_id(&params, &returns);
+            assert_eq!(sig, "Bool_I8_U8_I16_U16_I32_U32_I64_U64_F32_F64");
         }
 
         #[test]
@@ -672,8 +747,40 @@ pub mod callback {
         }
 
         #[test]
+        fn wasm_import_names_for_void_closure() {
+            let params = vec![];
+            let returns = TypeId::Void;
+            let id_snake = closure_callback_id_snake(&params, &returns);
+            assert_eq!(
+                callback_wasm_import_call(&id_snake),
+                "__boltffi_callback____closure__void_call"
+            );
+            assert_eq!(
+                callback_wasm_import_free(&id_snake),
+                "__boltffi_callback____closure__void_free"
+            );
+        }
+
+        #[test]
         fn global_create_handle_name() {
-            assert_eq!(callback_create_handle_global(), "boltffi_create_callback_handle");
+            assert_eq!(
+                callback_create_handle_global(),
+                "boltffi_create_callback_handle"
+            );
+        }
+
+        #[test]
+        fn inv09_naming_deterministic() {
+            let params = vec![TypeId::I32, TypeId::String];
+            let returns = TypeId::Bool;
+
+            let id1 = closure_callback_id_snake(&params, &returns);
+            let id2 = closure_callback_id_snake(&params, &returns);
+            assert_eq!(id1, id2, "INV-09: naming must be deterministic");
+
+            let call1 = callback_wasm_import_call(&id1);
+            let call2 = callback_wasm_import_call(&id2);
+            assert_eq!(call1, call2, "INV-09: import names must be deterministic");
         }
     }
 }
