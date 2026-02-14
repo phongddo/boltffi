@@ -70,3 +70,41 @@ impl std::fmt::Debug for CallbackHandle {
             .finish()
     }
 }
+
+#[cfg(target_arch = "wasm32")]
+#[unsafe(no_mangle)]
+pub extern "C" fn boltffi_create_callback_handle(js_handle: u32) -> u32 {
+    js_handle
+}
+
+#[cfg(target_arch = "wasm32")]
+pub struct WasmCallbackOwner {
+    handle: u32,
+    free_fn: unsafe extern "C" fn(u32),
+}
+
+#[cfg(target_arch = "wasm32")]
+impl WasmCallbackOwner {
+    #[inline]
+    pub fn new(handle: u32, free_fn: unsafe extern "C" fn(u32)) -> Self {
+        Self { handle, free_fn }
+    }
+
+    #[inline]
+    pub fn handle(&self) -> u32 {
+        self.handle
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+impl Drop for WasmCallbackOwner {
+    fn drop(&mut self) {
+        unsafe { (self.free_fn)(self.handle) }
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl Send for WasmCallbackOwner {}
+
+#[cfg(target_arch = "wasm32")]
+unsafe impl Sync for WasmCallbackOwner {}

@@ -35,6 +35,12 @@ import {
   fetchWithCallback,
   fetchStringWithCallback,
   Counter,
+  applyClosure,
+  applyBinaryClosure,
+  applyVoidClosure,
+  applyNullaryClosure,
+  applyPointClosure,
+  applyStringClosure,
 } from './dist/wasm/pkg/node.js';
 
 await initialized;
@@ -302,6 +308,38 @@ const echoedUrl = echoUrl(testUrl);
 assert(echoedUrl === testUrl, 'echoUrl');
 assert(urlToString(testUrl) === testUrl, 'urlToString');
 
+console.log('Testing Closure Callbacks...');
+const triple = (x) => x * 3;
+assert(applyClosure(triple, 7) === 21, 'applyClosure triple(7)');
+assert(applyClosure((x) => x + 100, 5) === 105, 'applyClosure inline');
+assert(applyClosure((x) => -x, 42) === -42, 'applyClosure negate');
+
+assert(applyBinaryClosure((a, b) => a + b, 10, 20) === 30, 'applyBinaryClosure add');
+assert(applyBinaryClosure((a, b) => a * b, 6, 7) === 42, 'applyBinaryClosure mul');
+
+let sideEffect = 0;
+applyVoidClosure((x) => { sideEffect = x * 2; }, 25);
+assert(sideEffect === 50, 'applyVoidClosure side effect');
+
+assert(applyNullaryClosure(() => 42) === 42, 'applyNullaryClosure constant');
+let counter = 0;
+assert(applyNullaryClosure(() => ++counter) === 1, 'applyNullaryClosure stateful');
+
+console.log('Testing Wire-encoded Closure Callbacks...');
+const doublePointClosure = (p) => ({ x: p.x * 2, y: p.y * 2 });
+const doubledPoint = applyPointClosure(doublePointClosure, { x: 5, y: 10 });
+assert(doubledPoint.x === 10 && doubledPoint.y === 20, 'applyPointClosure double');
+
+const shiftPointClosure = (p) => ({ x: p.x + 1, y: p.y + 1 });
+const shiftedPoint = applyPointClosure(shiftPointClosure, { x: 0, y: 0 });
+assert(shiftedPoint.x === 1 && shiftedPoint.y === 1, 'applyPointClosure shift');
+
+const upperStr = (s) => s.toUpperCase();
+assert(applyStringClosure(upperStr, 'hello') === 'HELLO', 'applyStringClosure upper');
+
+const repeatStr = (s) => s + s;
+assert(applyStringClosure(repeatStr, 'ab') === 'abab', 'applyStringClosure repeat');
+
 console.log('Testing Callbacks...');
 const doubler = { onValue: (v) => v * 2 };
 assert(invokeCallback(doubler, 5) === 10, 'invokeCallback doubler');
@@ -407,6 +445,22 @@ console.log('\nTesting Counter class...');
 }
 
 {
+  const counter = Counter.new(10);
+  const result = counter.transform((x) => x * 2);
+  assert(result === 20, 'transform(x => x * 2)');
+  assert(counter.get() === 20, 'get() after transform');
+
+  const sum = counter.applyBinary((a, b) => a + b, 5);
+  assert(sum === 25, 'applyBinary add');
+
+  const product = counter.applyBinary((a, b) => a * b, 3);
+  assert(product === 60, 'applyBinary mul');
+
+  counter.dispose();
+  console.log('  closure methods ok');
+}
+
+{
   const counter = Counter.createWithDefault();
   assert(counter.get() === 0, 'createWithDefault().get()');
   counter.dispose();
@@ -445,6 +499,84 @@ console.log('\nTesting Counter class...');
   }
   assert(threw, 'disposed counter throws');
   console.log('  dispose protection ok');
+}
+
+console.log('\nTesting Callback Registry (T01-T11)...');
+import {
+  registerValueCallback,
+  unregisterValueCallback,
+} from './dist/wasm/pkg/node.js';
+
+{
+  // T01: register once - handle non-null
+  const handle = registerValueCallback({ onValue: (v) => v });
+  assert(handle !== null && handle !== undefined && handle > 0, 'T01: register returns non-null handle');
+  unregisterValueCallback(handle);
+  console.log('  T01: register returns non-null handle - ok');
+}
+
+{
+  // T07: deterministic return - exact value
+  const callback = { onValue: (v) => v * 3 + 7 };
+  const result1 = invokeCallback(callback, 10);
+  const result2 = invokeCallback(callback, 10);
+  assert(result1 === 37, 'T07: deterministic return value');
+  assert(result1 === result2, 'T07: same input produces same output');
+  console.log('  T07: deterministic return - ok');
+}
+
+{
+  // T09: side effect counter - +1 per call
+  let callCount = 0;
+  const callback = { onValue: (v) => { callCount++; return v; } };
+  
+  invokeCallback(callback, 1);
+  assert(callCount === 1, 'T09: side effect count after 1 call');
+  
+  invokeCallback(callback, 2);
+  assert(callCount === 2, 'T09: side effect count after 2 calls');
+  
+  invokeCallbackTwice(callback, 3, 4);
+  assert(callCount === 4, 'T09: side effect count after invokeCallbackTwice');
+  console.log('  T09: side effect counter - ok');
+}
+
+{
+  // T10: reentrant callback - correct call order
+  const callOrder = [];
+  const outerCallback = {
+    onValue: (v) => {
+      callOrder.push(`outer-start-${v}`);
+      if (v > 0) {
+        invokeCallback(innerCallback, v - 1);
+      }
+      callOrder.push(`outer-end-${v}`);
+      return v;
+    }
+  };
+  const innerCallback = {
+    onValue: (v) => {
+      callOrder.push(`inner-${v}`);
+      return v;
+    }
+  };
+  
+  invokeCallback(outerCallback, 2);
+  assert(callOrder.length === 3, 'T10: reentrant callback call count');
+  assert(callOrder[0] === 'outer-start-2', 'T10: reentrant order[0]');
+  assert(callOrder[1] === 'inner-1', 'T10: reentrant order[1]');
+  assert(callOrder[2] === 'outer-end-2', 'T10: reentrant order[2]');
+  console.log('  T10: reentrant callback - ok');
+}
+
+{
+  // T15: large payload args/returns - identical decoded value
+  const largeVec = Array.from({ length: 1000 }, (_, i) => i);
+  const processor = { process: (values) => values.map(v => v * 2) };
+  const result = processVecI32(processor, largeVec);
+  assert(result.length === 1000, 'T15: large payload length');
+  assert(result[0] === 0 && result[999] === 1998, 'T15: large payload values');
+  console.log('  T15: large payload - ok');
 }
 
 console.log('\nAll tests passed!');

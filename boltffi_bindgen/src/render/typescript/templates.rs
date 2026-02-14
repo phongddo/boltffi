@@ -619,6 +619,121 @@ mod tests {
         insta::assert_snapshot!(template.render().unwrap());
     }
 
+    fn sync_callback_fixture() -> TsCallback {
+        TsCallback {
+            interface_name: "ValueHandler".to_string(),
+            trait_name_snake: "value_handler".to_string(),
+            create_handle_fn: "boltffi_create_value_handler_handle".to_string(),
+            methods: vec![TsCallbackMethod {
+                ts_name: "onValue".to_string(),
+                import_name: "__boltffi_callback_value_handler_on_value".to_string(),
+                params: vec![TsCallbackParam {
+                    name: "value".to_string(),
+                    ts_type: "number".to_string(),
+                    kind: TsCallbackParamKind::Primitive {
+                        import_ts_type: "number".to_string(),
+                        call_expr: "value".to_string(),
+                    },
+                }],
+                return_kind: TsCallbackReturnKind::Primitive {
+                    ts_type: "number".to_string(),
+                },
+                doc: None,
+            }],
+            async_methods: vec![],
+            closure_fn_type: None,
+            doc: None,
+        }
+    }
+
+    fn async_callback_fixture() -> TsCallback {
+        TsCallback {
+            interface_name: "AsyncFetcher".to_string(),
+            trait_name_snake: "async_fetcher".to_string(),
+            create_handle_fn: "boltffi_create_async_fetcher_handle".to_string(),
+            methods: vec![],
+            async_methods: vec![TsAsyncCallbackMethod {
+                ts_name: "fetch".to_string(),
+                start_import_name: "__boltffi_callback_async_fetcher_fetch_start".to_string(),
+                complete_export_name: "boltffi_callback_async_fetcher_fetch_complete".to_string(),
+                params: vec![TsCallbackParam {
+                    name: "key".to_string(),
+                    ts_type: "number".to_string(),
+                    kind: TsCallbackParamKind::Primitive {
+                        import_ts_type: "number".to_string(),
+                        call_expr: "key".to_string(),
+                    },
+                }],
+                return_type: Some("number".to_string()),
+                encode_expr: None,
+                size_expr: None,
+                direct_write_method: Some("writeI32".to_string()),
+                direct_write_value_expr: Some("result".to_string()),
+                direct_size: Some(4),
+                doc: None,
+            }],
+            closure_fn_type: None,
+            doc: None,
+        }
+    }
+
+    #[test]
+    fn callback_registry_emits_refcounted_lifecycle_contract() {
+        let callback = sync_callback_fixture();
+        let rendered = CallbackTemplate {
+            callback: &callback,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains(
+            "const _value_handler_ref_counts = new Map<number, number>();"
+        ));
+        assert!(rendered.contains("_value_handler_ref_counts.set(id, 1);"));
+        assert!(rendered.contains("return _value_handler_retain(handle);"));
+        assert!(rendered.contains("_value_handler_release(handle);"));
+        assert!(rendered.contains("const impl = _value_handler_lookup(handle);"));
+    }
+
+    #[test]
+    fn callback_registry_emits_invalid_handle_and_no_resurrection_guards() {
+        let callback = sync_callback_fixture();
+        let rendered = CallbackTemplate {
+            callback: &callback,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains(
+            "Cannot clone unknown callback handle ${handle} in ValueHandler registry"
+        ));
+        assert!(rendered.contains(
+            "Cannot free unknown callback handle ${handle} in ValueHandler registry"
+        ));
+        assert!(rendered.contains(
+            "Callback handle ${handle} not found in ValueHandler registry"
+        ));
+        assert!(rendered.contains("if (currentCount === 1) {"));
+        assert!(rendered.contains("_value_handler_ref_counts.delete(handle);"));
+        assert!(rendered.contains("_value_handler_registry.delete(handle);"));
+        assert!(rendered.contains("return handle;"));
+    }
+
+    #[test]
+    fn async_callback_invalid_handle_is_reported_through_completion() {
+        let callback = async_callback_fixture();
+        let rendered = CallbackTemplate {
+            callback: &callback,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("let impl: AsyncFetcher;"));
+        assert!(rendered.contains("impl = _async_fetcher_lookup(handle);"));
+        assert!(rendered.contains("completeError(err);"));
+        assert!(rendered.contains("return;"));
+    }
+
     #[test]
     fn snapshot_class_with_constructor_and_methods() {
         let class = TsClass {

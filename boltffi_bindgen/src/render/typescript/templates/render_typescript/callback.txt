@@ -1,3 +1,7 @@
+{%- match callback.closure_fn_type %}
+{%- when Some with (fn_type) %}
+export type {{ callback.interface_name }} = {{ fn_type }};
+{%- when None %}
 export interface {{ callback.interface_name }} {
 {%- for method in callback.methods %}
   {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}){% match method.return_kind %}{% when TsCallbackReturnKind::Void %}{% when TsCallbackReturnKind::Primitive with { ts_type } %}: {{ ts_type }}{% when TsCallbackReturnKind::WireEncoded with { ts_type, .. } %}: {{ ts_type }}{% endmatch %};
@@ -6,53 +10,83 @@ export interface {{ callback.interface_name }} {
   {{ method.ts_name }}({% for param in method.params %}{{ param.name }}: {{ param.ts_type }}{% if !loop.last %}, {% endif %}{% endfor %}): Promise<{% match method.return_type %}{% when Some with (t) %}{{ t }}{% when None %}void{% endmatch %}>;
 {%- endfor %}
 }
+{%- endmatch %}
 
 const _{{ callback.trait_name_snake }}_registry = new Map<number, {{ callback.interface_name }}>();
+const _{{ callback.trait_name_snake }}_ref_counts = new Map<number, number>();
 let _{{ callback.trait_name_snake }}_next_id = 1;
+
+const _{{ callback.trait_name_snake }}_lookup = (handle: number): {{ callback.interface_name }} => {
+  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
+  if (!impl) {
+    throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
+  }
+  return impl;
+};
+
+const _{{ callback.trait_name_snake }}_retain = (handle: number): number => {
+  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot clone unknown callback handle ${handle} in {{ callback.interface_name }} registry`);
+  }
+  _{{ callback.trait_name_snake }}_ref_counts.set(handle, currentCount + 1);
+  return handle;
+};
+
+const _{{ callback.trait_name_snake }}_release = (handle: number): void => {
+  const currentCount = _{{ callback.trait_name_snake }}_ref_counts.get(handle);
+  if (currentCount === undefined) {
+    throw new Error(`Cannot free unknown callback handle ${handle} in {{ callback.interface_name }} registry`);
+  }
+  if (currentCount === 1) {
+    _{{ callback.trait_name_snake }}_ref_counts.delete(handle);
+    _{{ callback.trait_name_snake }}_registry.delete(handle);
+    return;
+  }
+  _{{ callback.trait_name_snake }}_ref_counts.set(handle, currentCount - 1);
+};
 
 export function register{{ callback.interface_name }}(impl: {{ callback.interface_name }}): number {
   const id = _{{ callback.trait_name_snake }}_next_id++;
   _{{ callback.trait_name_snake }}_registry.set(id, impl);
+  _{{ callback.trait_name_snake }}_ref_counts.set(id, 1);
   return (_module.exports.{{ callback.create_handle_fn }} as Function)(id);
 }
 
 export function unregister{{ callback.interface_name }}(handle: number): void {
-  _{{ callback.trait_name_snake }}_registry.delete(handle);
+  _{{ callback.trait_name_snake }}_release(handle);
 }
 
 _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_free"] = (handle: number): void => {
-  _{{ callback.trait_name_snake }}_registry.delete(handle);
+  _{{ callback.trait_name_snake }}_release(handle);
 };
 
 _callbackImports["__boltffi_callback_{{ callback.trait_name_snake }}_clone"] = (handle: number): number => {
-  return handle;
+  return _{{ callback.trait_name_snake }}_retain(handle);
 };
 
 {%- for method in callback.methods %}
 {% match method.return_kind %}
 {% when TsCallbackReturnKind::Void %}
 _callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
-  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
-  if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
+  const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
   const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
 };
 {% when TsCallbackReturnKind::Primitive with { ts_type } %}
 _callbackImports["{{ method.import_name }}"] = (handle: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): {{ ts_type }} => {
-  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
-  if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
+  const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
   const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  return impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
 };
 {% when TsCallbackReturnKind::WireEncoded with { ts_type, encode_expr, size_expr } %}
 _callbackImports["{{ method.import_name }}"] = (handle: number, out_ptr: number{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { import_ts_type, .. } %}, {{ param.name }}: {{ import_ts_type }}{% when TsCallbackParamKind::WireEncoded with { .. } %}, {{ param.name }}_ptr: number, {{ param.name }}_len: number{% endmatch %}{% endfor %}): void => {
-  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
-  if (!impl) throw new Error(`Callback handle ${handle} not found in {{ callback.interface_name }} registry`);
+  const impl = _{{ callback.trait_name_snake }}_lookup(handle);
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
   const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
-  const result: {{ ts_type }} = impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+  const result: {{ ts_type }} = {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
   const writer = _module.allocWriter({{ size_expr }});
   {{ encode_expr }};
   _module.writeBufDescriptor(out_ptr, writer.ptr, writer.len, writer.capacity);
@@ -74,16 +108,18 @@ _callbackImports["{{ method.start_import_name }}"] = (handle: number, requestId:
       throw completeErr;
     }
   };
-  const impl = _{{ callback.trait_name_snake }}_registry.get(handle);
-  if (!impl) {
-    completeError(new Error(`Callback handle ${handle} not found`));
+  let impl: {{ callback.interface_name }};
+  try {
+    impl = _{{ callback.trait_name_snake }}_lookup(handle);
+  } catch (err) {
+    completeError(err);
     return;
   }
   {%- for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::WireEncoded with { decode_expr } %}
   const {{ param.name }} = (() => { const reader = new WireReader(_module.readFromMemory({{ param.name }}_ptr, {{ param.name }}_len).buffer as ArrayBuffer); return {{ decode_expr }}; })();{% when TsCallbackParamKind::Primitive with { .. } %}{% endmatch %}{% endfor %}
   Promise.resolve()
     .then(() => {
-      return impl.{{ method.ts_name }}({% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
+      return {% if callback.closure_fn_type.is_some() %}impl({% else %}impl.{{ method.ts_name }}({% endif %}{% for param in method.params %}{% match param.kind %}{% when TsCallbackParamKind::Primitive with { call_expr, .. } %}{{ call_expr }}{% when TsCallbackParamKind::WireEncoded with { .. } %}{{ param.name }}{% endmatch %}{% if !loop.last %}, {% endif %}{% endfor %});
     })
     .then((result) => {
       {%- match method.return_type %}

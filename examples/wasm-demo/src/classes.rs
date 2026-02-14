@@ -34,4 +34,13 @@ impl Counter {
         self.count += amount;
         self.count
     }
+
+    pub fn transform(&mut self, f: impl Fn(i32) -> i32) -> i32 {
+        self.count = f(self.count);
+        self.count
+    }
+
+    pub fn apply_binary(&self, f: impl Fn(i32, i32) -> i32, other: i32) -> i32 {
+        f(self.count, other)
+    }
 }

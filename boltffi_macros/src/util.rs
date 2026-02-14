@@ -26,7 +26,10 @@ pub enum ParamTransform {
     PassThrough,
     StrRef,
     OwnedString,
-    Callback(Vec<syn::Type>),
+    Callback {
+        params: Vec<syn::Type>,
+        returns: Option<syn::Type>,
+    },
     SliceRef(syn::Type),
     SliceMut(syn::Type),
     BoxedDynTrait(syn::Path),
@@ -39,10 +42,14 @@ pub enum ParamTransform {
     RecordWireEncoded(syn::Type),
 }
 
-pub fn extract_fn_arg_types(ty: &Type) -> Option<Vec<syn::Type>> {
+pub fn extract_closure_signature(ty: &Type) -> Option<(Vec<syn::Type>, Option<syn::Type>)> {
     if let Type::BareFn(bare_fn) = ty {
-        let args: Vec<syn::Type> = bare_fn.inputs.iter().map(|arg| arg.ty.clone()).collect();
-        return Some(args);
+        let params: Vec<syn::Type> = bare_fn.inputs.iter().map(|arg| arg.ty.clone()).collect();
+        let returns = match &bare_fn.output {
+            syn::ReturnType::Default => None,
+            syn::ReturnType::Type(_, ty) => Some((**ty).clone()),
+        };
+        return Some((params, returns));
     }
 
     if let Type::ImplTrait(impl_trait) = ty {
@@ -63,7 +70,14 @@ pub fn extract_fn_arg_types(ty: &Type) -> Option<Vec<syn::Type>> {
                 syn::PathArguments::Parenthesized(args) => Some(args),
                 _ => None,
             })
-            .map(|args| args.inputs.iter().cloned().collect())
+            .map(|args| {
+                let params: Vec<syn::Type> = args.inputs.iter().cloned().collect();
+                let returns = match &args.output {
+                    syn::ReturnType::Default => None,
+                    syn::ReturnType::Type(_, ty) => Some((**ty).clone()),
+                };
+                (params, returns)
+            })
             .next();
     }
 
@@ -358,8 +372,8 @@ pub fn is_primitive_vec_inner(s: &str) -> bool {
 pub fn classify_param_transform(ty: &Type) -> ParamTransform {
     let type_str = quote!(#ty).to_string().replace(' ', "");
 
-    if let Some(arg_types) = extract_fn_arg_types(ty) {
-        return ParamTransform::Callback(arg_types);
+    if let Some((params, returns)) = extract_closure_signature(ty) {
+        return ParamTransform::Callback { params, returns };
     }
 
     if let Some(trait_path) = extract_impl_callback_trait(ty) {

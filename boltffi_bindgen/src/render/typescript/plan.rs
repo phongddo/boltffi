@@ -187,6 +187,7 @@ pub struct TsCallback {
     pub create_handle_fn: String,
     pub methods: Vec<TsCallbackMethod>,
     pub async_methods: Vec<TsAsyncCallbackMethod>,
+    pub closure_fn_type: Option<String>,
     pub doc: Option<String>,
 }
 
