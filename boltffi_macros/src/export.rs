@@ -260,13 +260,27 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 quote! {
                     #(#conversions)*
                     let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
-                    ::boltffi::__private::FfiBuf::from_raw_vec(#result_ident)
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        ::boltffi::__private::FfiBuf::from_raw_vec(#result_ident)
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
+                    }
                 }
             } else if is_string_type(&inner_ty) {
                 quote! {
                     #(#conversions)*
                     let #result_ident: #inner_ty = #fn_name(#(#call_args),*);
-                    ::boltffi::__private::FfiBuf::from_vec(#result_ident.into_bytes())
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        ::boltffi::__private::FfiBuf::from_vec(#result_ident.into_bytes())
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        ::boltffi::__private::FfiBuf::wire_encode(&#result_ident)
+                    }
                 }
             // custom types like UtcDateTime have to be converted to their
             // underlying repr (e.g. i64) before wire encoding, the wire

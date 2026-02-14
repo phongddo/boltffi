@@ -896,10 +896,15 @@ mod tests {
         .render()
         .unwrap();
 
-        assert!(rendered
-            .contains("Cannot clone unknown callback handle ${handle} in ValueHandler registry"));
-        assert!(rendered
-            .contains("Cannot free unknown callback handle ${handle} in ValueHandler registry"));
+        assert!(
+            rendered.contains(
+                "Cannot clone unknown callback handle ${handle} in ValueHandler registry"
+            )
+        );
+        assert!(
+            rendered
+                .contains("Cannot free unknown callback handle ${handle} in ValueHandler registry")
+        );
         assert!(rendered.contains("Callback handle ${handle} not found in ValueHandler registry"));
         assert!(rendered.contains("if (currentCount === 1) {"));
         assert!(rendered.contains("_value_handler_ref_counts.delete(handle);"));
@@ -1039,8 +1044,10 @@ mod tests {
         assert!(rendered.contains("let completeCompleted = false;"));
         assert!(rendered.contains("_module.freeBuf(outPtr);"));
         assert!(rendered.contains("_module.freeBufDescriptor(outPtr);"));
-        assert!(rendered
-            .contains("(_exports.boltffi_counter_next_value_free as Function)(awaitedHandle);"));
+        assert!(
+            rendered
+                .contains("(_exports.boltffi_counter_next_value_free as Function)(awaitedHandle);")
+        );
     }
 
     #[test]

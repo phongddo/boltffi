@@ -206,7 +206,7 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
                 let inner = emit_reader_read(element);
                 format!("reader.readArray(() => {inner})")
             }
-        }
+        },
         ReadOp::Record { id, .. } => {
             format!("{}Codec.decode(reader)", to_pascal_case(id.as_str()))
         }
