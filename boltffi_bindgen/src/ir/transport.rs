@@ -41,7 +41,7 @@ impl TransportCall {
             },
             CallMode::Async(async_call) => TransportCallMode::Async {
                 entry_output: SyncOutputAbi::from_abi_call(call),
-                completion: AsyncCompletionAbi::from_async_call(async_call),
+                completion: Box::new(AsyncCompletionAbi::from_async_call(async_call)),
             },
         };
 
@@ -62,7 +62,7 @@ pub enum TransportCallMode {
     },
     Async {
         entry_output: SyncOutputAbi,
-        completion: AsyncCompletionAbi,
+        completion: Box<AsyncCompletionAbi>,
     },
 }
 

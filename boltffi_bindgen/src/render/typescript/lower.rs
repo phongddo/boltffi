@@ -1075,7 +1075,7 @@ impl<'a> TypeScriptLowerer<'a> {
             let return_wasm_type = match (&return_output, &return_route) {
                 (_, TsSyncTransportRoute::Void) => None,
                 (SyncOutputAbi::Scalar { abi_type }, TsSyncTransportRoute::Direct { .. }) => {
-                    Some(abi_type_to_wasm(&abi_type))
+                    Some(abi_type_to_wasm(abi_type))
                 }
                 (SyncOutputAbi::Handle { .. }, TsSyncTransportRoute::Direct { .. }) => {
                     Some("number".to_string())

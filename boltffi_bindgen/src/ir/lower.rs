@@ -571,14 +571,14 @@ impl<'c> Lowerer<'c> {
                     read: read.clone(),
                     write: write.clone(),
                 }),
-            ReadOp::Vec { element_type, .. } => match element_type {
-                TypeExpr::Primitive(primitive) => Some(ValueShape::PrimitiveVec {
-                    element_abi: primitive_to_abi(*primitive),
-                    read: read.clone(),
-                    write: write.clone(),
-                }),
-                _ => None,
-            },
+            ReadOp::Vec {
+                element_type: TypeExpr::Primitive(primitive),
+                ..
+            } => Some(ValueShape::PrimitiveVec {
+                element_abi: primitive_to_abi(*primitive),
+                read: read.clone(),
+                write: write.clone(),
+            }),
             ReadOp::Record { id, .. } => {
                 self.blittable_record_size_by_id(id)
                     .map(|size| ValueShape::BlittableRecord {
