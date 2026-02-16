@@ -531,7 +531,7 @@ impl<'a> TypeScriptLowerer<'a> {
                         let kind = match abi_param {
                             Some(abi_param) => match abi_param.input_binding() {
                                 Some(InputBinding::WirePacket { decode_ops, .. }) => {
-                                    let decode_expr = emit::emit_reader_read(&decode_ops);
+                                    let decode_expr = emit::emit_reader_read(decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
                                 }
                                 _ => callback_primitive_param_kind(
@@ -568,7 +568,7 @@ impl<'a> TypeScriptLowerer<'a> {
                             _ => "unknown".to_string(),
                         };
                         let encode_ops = binding.encode_ops().expect("encoded callback return");
-                        let encode_expr = emit::emit_writer_write(&encode_ops, "writer", "result");
+                        let encode_expr = emit::emit_writer_write(encode_ops, "writer", "result");
                         let size_expr = emit::emit_size_expr(&encode_ops.size, "result");
                         TsCallbackReturnKind::WireEncoded {
                             ts_type,
@@ -628,7 +628,7 @@ impl<'a> TypeScriptLowerer<'a> {
                         let kind = match abi_param {
                             Some(abi_param) => match abi_param.input_binding() {
                                 Some(InputBinding::WirePacket { decode_ops, .. }) => {
-                                    let decode_expr = emit::emit_reader_read(&decode_ops);
+                                    let decode_expr = emit::emit_reader_read(decode_ops);
                                     TsCallbackParamKind::WireEncoded { decode_expr }
                                 }
                                 _ => callback_primitive_param_kind(
@@ -680,7 +680,7 @@ impl<'a> TypeScriptLowerer<'a> {
                             _ => "unknown".to_string(),
                         };
                         let encode_ops = binding.encode_ops().expect("encoded callback return");
-                        let encode_expr = emit::emit_writer_write(&encode_ops, "writer", "result");
+                        let encode_expr = emit::emit_writer_write(encode_ops, "writer", "result");
                         let size_expr = emit::emit_size_expr(&encode_ops.size, "result");
                         (
                             Some(ts_type),
@@ -935,7 +935,7 @@ impl<'a> TypeScriptLowerer<'a> {
                 self.encoded_output_route(decode_ops, execution_model)
             }
             OutputBinding::Wire(wire) => {
-                self.encoded_output_route(&wire.decode_ops, execution_model)
+                self.encoded_output_route(wire.decode_ops, execution_model)
             }
             OutputBinding::Handle { class_id, nullable } => {
                 self.handle_output_route(class_id.as_str(), nullable, execution_model)
@@ -1031,7 +1031,10 @@ impl<'a> TypeScriptLowerer<'a> {
                     _ => None,
                 };
                 if let Some(decode) = slot_decode {
-                    (Some(ts_type_str), TsOutputRoute::void_slot(decode.to_string()))
+                    (
+                        Some(ts_type_str),
+                        TsOutputRoute::void_slot(decode.to_string()),
+                    )
                 } else {
                     let decode = emit::emit_reader_read(decode_ops);
                     (Some(ts_type_str), TsOutputRoute::packed(decode))

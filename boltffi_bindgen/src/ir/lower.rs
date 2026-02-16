@@ -144,7 +144,7 @@ impl<'c> Lowerer<'c> {
             })
             .collect();
 
-        let abi_contract = AbiContract {
+        AbiContract {
             package: self.contract.package.clone(),
             calls,
             callbacks,
@@ -153,8 +153,7 @@ impl<'c> Lowerer<'c> {
             enums,
             free_buf: naming::free_buf_u8(),
             atomic_cas: naming::atomic_u8_cas(),
-        };
-        abi_contract
+        }
     }
 
     fn abi_call_for_function(&self, func: &FunctionDef) -> AbiCall {
@@ -634,12 +633,11 @@ impl<'c> Lowerer<'c> {
                 )
                 .map(|(ok, err)| ValueShapeClass::ResultScalar { ok, err })
                 .unwrap_or(ValueShapeClass::Encoded),
-            ReadOp::Vec { element_type, .. } => match element_type {
-                TypeExpr::Primitive(primitive) => {
-                    ValueShapeClass::PrimitiveVec(primitive_to_abi(*primitive))
-                }
-                _ => ValueShapeClass::Encoded,
-            },
+            ReadOp::Vec {
+                element_type: TypeExpr::Primitive(primitive),
+                ..
+            } => ValueShapeClass::PrimitiveVec(primitive_to_abi(*primitive)),
+            ReadOp::Vec { .. } => ValueShapeClass::Encoded,
             ReadOp::Record { id, .. } => self
                 .blittable_record_size_by_id(id)
                 .map(|size| ValueShapeClass::BlittableRecord {
@@ -673,12 +671,11 @@ impl<'c> Lowerer<'c> {
                 )
                 .map(|(ok, err)| ValueShapeClass::ResultScalar { ok, err })
                 .unwrap_or(ValueShapeClass::Encoded),
-            WriteOp::Vec { element_type, .. } => match element_type {
-                TypeExpr::Primitive(primitive) => {
-                    ValueShapeClass::PrimitiveVec(primitive_to_abi(*primitive))
-                }
-                _ => ValueShapeClass::Encoded,
-            },
+            WriteOp::Vec {
+                element_type: TypeExpr::Primitive(primitive),
+                ..
+            } => ValueShapeClass::PrimitiveVec(primitive_to_abi(*primitive)),
+            WriteOp::Vec { .. } => ValueShapeClass::Encoded,
             WriteOp::Record { id, .. } => self
                 .blittable_record_size_by_id(id)
                 .map(|size| ValueShapeClass::BlittableRecord {

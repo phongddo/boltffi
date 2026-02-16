@@ -680,7 +680,7 @@ impl<'a> SwiftLowerer<'a> {
             }
             Some(InputBinding::WirePacket { decode_ops, .. }) => {
                 let len_name = format!("{}Len", label);
-                let reader_decode = emit::emit_reader_read(&decode_ops);
+                let reader_decode = emit::emit_reader_read(decode_ops);
                 (
                     self.swift_type(&def.type_expr),
                     vec![label.clone(), len_name.clone()],
@@ -783,7 +783,7 @@ impl<'a> SwiftLowerer<'a> {
                 },
             ),
             InputBinding::Handle { class_id, nullable } => {
-                let class_name = self.swift_name_for_class(&class_id);
+                let class_name = self.swift_name_for_class(class_id);
                 let swift_type = if nullable {
                     format!("{}?", class_name)
                 } else {
@@ -815,7 +815,7 @@ impl<'a> SwiftLowerer<'a> {
                     )
                 }
                 CallbackStyle::ImplTrait => {
-                    let closure_plan = self.build_closure_trampoline(&callback_id, &swift_name);
+                    let closure_plan = self.build_closure_trampoline(callback_id, &swift_name);
                     let swift_type = format!("@escaping {}", closure_plan.swift_type);
                     (
                         swift_type,
@@ -898,7 +898,7 @@ impl<'a> SwiftLowerer<'a> {
                 encode: wire.encode_ops.clone(),
             },
             OutputBinding::Handle { class_id, nullable } => {
-                let class_name = self.swift_name_for_class(&class_id);
+                let class_name = self.swift_name_for_class(class_id);
                 SwiftReturn::Handle {
                     class_name,
                     nullable,
@@ -1281,7 +1281,7 @@ impl<'a> SwiftLowerer<'a> {
             InputBinding::WirePacket { decode_ops, .. } => {
                 let ptr_name = format!("ptr{}", idx);
                 let len_name = format!("len{}", idx);
-                let reader_decode = emit::emit_reader_read(&decode_ops);
+                let reader_decode = emit::emit_reader_read(decode_ops);
                 let decode_expr = format!(
                     "{{ var reader = WireReader(ptr: {}!, len: Int({})); return {} }}()",
                     ptr_name, len_name, reader_decode
@@ -1388,12 +1388,12 @@ impl<'a> SwiftLowerer<'a> {
             }
             OutputBinding::Handle { class_id, nullable } => SwiftAsyncResult::Direct {
                 swift_type: if nullable {
-                    format!("{}?", self.swift_name_for_class(&class_id))
+                    format!("{}?", self.swift_name_for_class(class_id))
                 } else {
-                    self.swift_name_for_class(&class_id)
+                    self.swift_name_for_class(class_id)
                 },
                 conversion: SwiftAsyncConversion::Handle {
-                    class_name: self.swift_name_for_class(&class_id),
+                    class_name: self.swift_name_for_class(class_id),
                     nullable,
                 },
             },

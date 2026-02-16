@@ -6,8 +6,8 @@ use syn::{FnArg, ReturnType, Type};
 use crate::callback_registry;
 use crate::custom_types;
 use crate::params::{FfiParams, transform_method_params, transform_method_params_async};
-use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 use crate::returns::{ReturnAbi, classify_return, encoded_return_body, lower_return_abi};
+use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 
 pub fn ffi_class_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
     let thread_unsafe = attr.to_string().contains("thread_unsafe");

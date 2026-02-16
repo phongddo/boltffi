@@ -41,8 +41,6 @@ pub use rustfuture::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use rustfuture::{WasmPollStatus, rust_future_panic_message, rust_future_poll_sync};
-#[cfg(target_arch = "wasm32")]
-pub use wasm::write_return_slot;
 pub use safety::catch_ffi_panic;
 pub use status::{FfiStatus, clear_last_error, set_last_error, take_last_error};
 pub use subscription::{
@@ -53,6 +51,8 @@ pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiString};
 pub use wasm::WASM_ABI_VERSION;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::WasmCallbackOutBuf;
+#[cfg(target_arch = "wasm32")]
+pub use wasm::write_return_slot;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnexpectedFfiCallbackError(pub String);

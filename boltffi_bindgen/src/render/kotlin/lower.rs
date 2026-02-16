@@ -1275,7 +1275,7 @@ impl<'a> KotlinLowerer<'a> {
                 name: name.clone(),
                 kotlin_type,
                 jni_type: "ByteBuffer".to_string(),
-                conversion: self.callback_encoded_conversion(&decode_ops, &name),
+                conversion: self.callback_encoded_conversion(decode_ops, &name),
             },
             _ => unreachable!(
                 "unsupported callback param role: {:?}",
