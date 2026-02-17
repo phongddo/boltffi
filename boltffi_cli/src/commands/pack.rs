@@ -13,9 +13,16 @@ use crate::pack::{AndroidPackager, SpmPackageGenerator, XcframeworkBuilder, comp
 use crate::target::{BuiltLibrary, Platform};
 
 pub enum PackCommand {
+    All(PackAllOptions),
     Apple(PackAppleOptions),
     Android(PackAndroidOptions),
     Wasm(PackWasmOptions),
+}
+
+pub struct PackAllOptions {
+    pub release: bool,
+    pub regenerate: bool,
+    pub no_build: bool,
 }
 
 pub struct PackAppleOptions {
@@ -42,10 +49,52 @@ pub struct PackWasmOptions {
 
 pub fn run_pack(config: &Config, command: PackCommand) -> Result<()> {
     match command {
+        PackCommand::All(options) => pack_all(config, options),
         PackCommand::Apple(options) => pack_apple(config, options),
         PackCommand::Android(options) => pack_android(config, options),
         PackCommand::Wasm(options) => pack_wasm(config, options),
     }
+}
+
+fn pack_all(config: &Config, options: PackAllOptions) -> Result<()> {
+    if config.is_apple_enabled() {
+        pack_apple(
+            config,
+            PackAppleOptions {
+                release: options.release,
+                version: None,
+                regenerate: options.regenerate,
+                no_build: options.no_build,
+                spm_only: false,
+                xcframework_only: false,
+                layout: None,
+            },
+        )?;
+    }
+
+    if config.is_android_enabled() {
+        pack_android(
+            config,
+            PackAndroidOptions {
+                release: options.release,
+                regenerate: options.regenerate,
+                no_build: options.no_build,
+            },
+        )?;
+    }
+
+    if config.is_wasm_enabled() {
+        pack_wasm(
+            config,
+            PackWasmOptions {
+                release: options.release,
+                regenerate: options.regenerate,
+                no_build: options.no_build,
+            },
+        )?;
+    }
+
+    Ok(())
 }
 
 fn pack_apple(config: &Config, options: PackAppleOptions) -> Result<()> {
