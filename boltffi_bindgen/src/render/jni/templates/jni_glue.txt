@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 #include "{{ module_name }}.h"
 
 static inline void boltffi_free_buf(uint8_t* ptr, size_t len) {
@@ -32,16 +33,6 @@ static inline jbyteArray boltffi_status_buf_to_jbytearray(JNIEnv* env, FfiStatus
     return boltffi_buf_to_jbytearray(env, buf);
 }
 
-static inline jobject boltffi_buf_to_direct_bytebuffer(JNIEnv* env, FfiBuf_u8 buf) {
-    if (buf.ptr == NULL) return NULL;
-    jobject result = (*env)->NewDirectByteBuffer(env, (void*)buf.ptr, (jlong)buf.len);
-    if (result == NULL) {
-        boltffi_free_buf(buf.ptr, buf.len);
-        return NULL;
-    }
-    return result;
-}
-
 static inline bool boltffi_lookup_static_method(
     JNIEnv* env,
     jclass cls,
@@ -55,6 +46,121 @@ static inline bool boltffi_lookup_static_method(
         (*env)->ExceptionClear(env);
     }
     return false;
+}
+
+typedef enum {
+    BOLTFFI_GLOBAL_CLASS_OK = 0,
+    BOLTFFI_GLOBAL_CLASS_MISSING = 1,
+    BOLTFFI_GLOBAL_CLASS_FATAL = 2
+} BoltFFIGlobalClassResult;
+
+static inline BoltFFIGlobalClassResult boltffi_lookup_global_class(
+    JNIEnv* env,
+    const char* class_name,
+    jclass* out_class
+) {
+    *out_class = NULL;
+    jclass local_class = (*env)->FindClass(env, class_name);
+    if (local_class == NULL) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        return BOLTFFI_GLOBAL_CLASS_MISSING;
+    }
+    jclass global_class = (*env)->NewGlobalRef(env, local_class);
+    (*env)->DeleteLocalRef(env, local_class);
+    if (global_class == NULL) {
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionClear(env);
+        }
+        return BOLTFFI_GLOBAL_CLASS_FATAL;
+    }
+    *out_class = global_class;
+    return BOLTFFI_GLOBAL_CLASS_OK;
+}
+
+typedef enum {
+    BOLTFFI_STATIC_CALL_CACHE_UNINIT = 0,
+    BOLTFFI_STATIC_CALL_CACHE_INITING = 1,
+    BOLTFFI_STATIC_CALL_CACHE_READY = 2,
+    BOLTFFI_STATIC_CALL_CACHE_FAILED = 3
+} BoltFFIStaticCallCacheState;
+
+typedef struct {
+    atomic_int state;
+    jclass class_ref;
+    jmethodID method;
+} BoltFFIStaticCallCache;
+
+#define BOLTFFI_STATIC_CALL_CACHE_INIT { ATOMIC_VAR_INIT(BOLTFFI_STATIC_CALL_CACHE_UNINIT), NULL, NULL }
+
+static inline bool boltffi_static_call_cache_ensure(
+    JNIEnv* env,
+    BoltFFIStaticCallCache* cache,
+    const char* class_name,
+    const char* method_name,
+    const char* method_signature
+) {
+    int state = atomic_load_explicit(&cache->state, memory_order_acquire);
+    if (state == BOLTFFI_STATIC_CALL_CACHE_READY) return true;
+    if (state == BOLTFFI_STATIC_CALL_CACHE_FAILED) return false;
+
+    int expected = BOLTFFI_STATIC_CALL_CACHE_UNINIT;
+    if (atomic_compare_exchange_strong_explicit(
+            &cache->state,
+            &expected,
+            BOLTFFI_STATIC_CALL_CACHE_INITING,
+            memory_order_acq_rel,
+            memory_order_acquire)) {
+        jclass class_ref = NULL;
+        jmethodID method = NULL;
+        BoltFFIGlobalClassResult class_result =
+            boltffi_lookup_global_class(env, class_name, &class_ref);
+        if (class_result != BOLTFFI_GLOBAL_CLASS_OK) {
+            cache->class_ref = NULL;
+            cache->method = NULL;
+            atomic_store_explicit(
+                &cache->state,
+                BOLTFFI_STATIC_CALL_CACHE_FAILED,
+                memory_order_release
+            );
+            return false;
+        }
+        if (!boltffi_lookup_static_method(env, class_ref, method_name, method_signature, &method)) {
+            (*env)->DeleteGlobalRef(env, class_ref);
+            cache->class_ref = NULL;
+            cache->method = NULL;
+            atomic_store_explicit(
+                &cache->state,
+                BOLTFFI_STATIC_CALL_CACHE_FAILED,
+                memory_order_release
+            );
+            return false;
+        }
+        cache->class_ref = class_ref;
+        cache->method = method;
+        atomic_store_explicit(
+            &cache->state,
+            BOLTFFI_STATIC_CALL_CACHE_READY,
+            memory_order_release
+        );
+        return true;
+    }
+
+    do {
+        state = atomic_load_explicit(&cache->state, memory_order_acquire);
+    } while (state == BOLTFFI_STATIC_CALL_CACHE_INITING);
+
+    return state == BOLTFFI_STATIC_CALL_CACHE_READY;
+}
+
+static inline void boltffi_static_call_cache_reset(JNIEnv* env, BoltFFIStaticCallCache* cache) {
+    if (cache->class_ref != NULL) {
+        (*env)->DeleteGlobalRef(env, cache->class_ref);
+        cache->class_ref = NULL;
+    }
+    cache->method = NULL;
+    atomic_store_explicit(&cache->state, BOLTFFI_STATIC_CALL_CACHE_UNINIT, memory_order_release);
 }
 
 {%- if has_async %}
@@ -84,14 +190,14 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM* vm, void* reserved) {
     if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
         return JNI_ERR;
     }
-    jclass local_class = (*env)->FindClass(env, "{{ package_path }}/Native");
-    if (local_class == NULL) {
+    if (boltffi_lookup_global_class(env, "{{ package_path }}/Native", &g_callback_class) != BOLTFFI_GLOBAL_CLASS_OK) {
+        g_callback_class = NULL;
         return JNI_ERR;
     }
-    g_callback_class = (*env)->NewGlobalRef(env, local_class);
-    (*env)->DeleteLocalRef(env, local_class);
-    g_callback_method = (*env)->GetStaticMethodID(env, g_callback_class, "boltffiFutureContinuationCallback", "(JB)V");
-    if (g_callback_method == NULL) {
+    if (!boltffi_lookup_static_method(env, g_callback_class, "boltffiFutureContinuationCallback", "(JB)V", &g_callback_method)) {
+        (*env)->DeleteGlobalRef(env, g_callback_class);
+        g_callback_class = NULL;
+        g_callback_method = NULL;
         return JNI_ERR;
     }
 {%- for cb in callback_traits %}
@@ -122,8 +228,7 @@ static void boltffi_jni_continuation_callback(uint64_t handle, int8_t poll_resul
 {%- endif %}
 
 {%- for trampoline in closure_trampolines %}
-static jclass g_{{ trampoline.signature_id }}_class = NULL;
-static jmethodID g_{{ trampoline.signature_id }}_call = NULL;
+static BoltFFIStaticCallCache g_{{ trampoline.signature_id }}_cache = BOLTFFI_STATIC_CALL_CACHE_INIT;
 
 static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* user_data{{ trampoline.c_params }}) {
     JNIEnv* env;
@@ -149,40 +254,19 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- for rp in trampoline.record_params %}
     jobject buf_p{{ rp.index }} = (*env)->NewDirectByteBuffer(env, (void*)p{{ rp.index }}_ptr, (jlong)p{{ rp.index }}_len);
 {%- endfor %}
-    if (g_{{ trampoline.signature_id }}_class == NULL) {
-        jclass local_class = (*env)->FindClass(env, "{{ trampoline.callbacks_class_jni_path }}");
-        if (local_class == NULL) {
+    if (!boltffi_static_call_cache_ensure(env, &g_{{ trampoline.signature_id }}_cache, "{{ trampoline.callbacks_class_jni_path }}", "call", "(J{{ trampoline.jni_params_signature }}){{ trampoline.jni_return_signature() }}")) {
 {%- for rp in trampoline.record_params %}
-            if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
 {%- endfor %}
-            if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
 {%- if trampoline.is_void() %}
-            return;
+        return;
 {%- else %}
-            {{ trampoline.c_return_type() }} zero = {0}; return zero;
+        {{ trampoline.c_return_type() }} zero = {0}; return zero;
 {%- endif %}
-        }
-        g_{{ trampoline.signature_id }}_class = (*env)->NewGlobalRef(env, local_class);
-        (*env)->DeleteLocalRef(env, local_class);
-        if (g_{{ trampoline.signature_id }}_class == NULL || !boltffi_lookup_static_method(env, g_{{ trampoline.signature_id }}_class, "call", "(J{{ trampoline.jni_params_signature }}){{ trampoline.jni_return_signature() }}", &g_{{ trampoline.signature_id }}_call)) {
-            if (g_{{ trampoline.signature_id }}_class != NULL) {
-                (*env)->DeleteGlobalRef(env, g_{{ trampoline.signature_id }}_class);
-                g_{{ trampoline.signature_id }}_class = NULL;
-            }
-            g_{{ trampoline.signature_id }}_call = NULL;
-{%- for rp in trampoline.record_params %}
-            if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
-{%- endfor %}
-            if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
-{%- if trampoline.is_void() %}
-            return;
-{%- else %}
-            {{ trampoline.c_return_type() }} zero = {0}; return zero;
-{%- endif %}
-        }
     }
 {%- if trampoline.is_void() %}
-    (*env)->CallStaticVoidMethod(env, g_{{ trampoline.signature_id }}_class, g_{{ trampoline.signature_id }}_call, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    (*env)->CallStaticVoidMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
 {%- endfor %}
@@ -191,7 +275,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     }
 {%- else %}
 {%- if trampoline.is_wire_encoded_return() %}
-    jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_class, g_{{ trampoline.signature_id }}_call, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     FfiBuf_u8 _result = {0};
     if (_jarr != NULL) {
         jsize _len = (*env)->GetArrayLength(env, _jarr);
@@ -212,7 +296,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     }
     return _result;
 {%- elif trampoline.is_callback_handle_return() %}
-    jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_class, g_{{ trampoline.signature_id }}_call, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     BoltFFICallbackHandle _result = {{ trampoline.callback_create_fn() }}((uint64_t)_handle_val);
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
@@ -222,7 +306,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     }
     return _result;
 {%- else %}
-    {{ trampoline.c_return_type() }} _result = {{ trampoline.jni_return_cast() }}(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_class, g_{{ trampoline.signature_id }}_call, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    {{ trampoline.c_return_type() }} _result = {{ trampoline.jni_return_cast() }}(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
 {%- endfor %}
@@ -566,17 +650,12 @@ static {{ cb.vtable_type }} g_{{ cb.trait_name }}_vtable = {
 };
 
 static BoltFFICallbackInitResult init_{{ cb.trait_name }}_callbacks(JNIEnv* env) {
-    jclass local_class = (*env)->FindClass(env, "{{ cb.callbacks_class }}");
-    if (local_class == NULL) {
-        (*env)->ExceptionClear(env);
+    BoltFFIGlobalClassResult class_result =
+        boltffi_lookup_global_class(env, "{{ cb.callbacks_class }}", &g_{{ cb.trait_name }}_callbacks_class);
+    if (class_result == BOLTFFI_GLOBAL_CLASS_MISSING) {
         return BOLTFFI_CALLBACK_INIT_SKIPPED;
     }
-    g_{{ cb.trait_name }}_callbacks_class = (*env)->NewGlobalRef(env, local_class);
-    (*env)->DeleteLocalRef(env, local_class);
-    if (g_{{ cb.trait_name }}_callbacks_class == NULL) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
+    if (class_result != BOLTFFI_GLOBAL_CLASS_OK) {
         return BOLTFFI_CALLBACK_INIT_FATAL;
     }
     if (!boltffi_lookup_static_method(env, g_{{ cb.trait_name }}_callbacks_class, "free", "(J)V", &g_{{ cb.trait_name }}_free_method)) goto fail;
@@ -595,6 +674,37 @@ fail:
     return BOLTFFI_CALLBACK_INIT_FATAL;
 }
 {%- endfor %}
+
+{%- if has_async %}
+JNIEXPORT void JNICALL JNI_OnUnload(JavaVM* vm, void* reserved) {
+    JNIEnv* env;
+    if ((*vm)->GetEnv(vm, (void**)&env, JNI_VERSION_1_6) != JNI_OK) {
+        return;
+    }
+    if (g_callback_class != NULL) {
+        (*env)->DeleteGlobalRef(env, g_callback_class);
+        g_callback_class = NULL;
+    }
+    g_callback_method = NULL;
+{%- for trampoline in closure_trampolines %}
+    boltffi_static_call_cache_reset(env, &g_{{ trampoline.signature_id }}_cache);
+{%- endfor %}
+{%- for cb in callback_traits %}
+    if (g_{{ cb.trait_name }}_callbacks_class != NULL) {
+        (*env)->DeleteGlobalRef(env, g_{{ cb.trait_name }}_callbacks_class);
+        g_{{ cb.trait_name }}_callbacks_class = NULL;
+    }
+    g_{{ cb.trait_name }}_free_method = NULL;
+    g_{{ cb.trait_name }}_clone_method = NULL;
+{%- for method in cb.sync_methods %}
+    g_{{ cb.trait_name }}_{{ method.ffi_name }}_method = NULL;
+{%- endfor %}
+{%- for method in cb.async_methods %}
+    g_{{ cb.trait_name }}_{{ method.ffi_name }}_method = NULL;
+{%- endfor %}
+{%- endfor %}
+}
+{%- endif %}
 
 {%- for invoker in async_callback_invokers %}
 
