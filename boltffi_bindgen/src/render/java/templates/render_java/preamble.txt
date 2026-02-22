@@ -3,4 +3,78 @@ package {{ module.package_name }};
 
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
+import java.nio.charset.StandardCharsets;
+
+final class WireReader {
+    private final byte[] data;
+    private int pos;
+
+    WireReader(byte[] data) {
+        this.data = data;
+        this.pos = 0;
+    }
+
+    boolean readBool() {
+        return data[pos++] != 0;
+    }
+
+    byte readI8() {
+        return data[pos++];
+    }
+
+    short readI16() {
+        short v = (short) ((data[pos] & 0xFF) | ((data[pos + 1] & 0xFF) << 8));
+        pos += 2;
+        return v;
+    }
+
+    int readI32() {
+        int v = (data[pos] & 0xFF)
+              | ((data[pos + 1] & 0xFF) << 8)
+              | ((data[pos + 2] & 0xFF) << 16)
+              | ((data[pos + 3] & 0xFF) << 24);
+        pos += 4;
+        return v;
+    }
+
+    long readI64() {
+        long v = (data[pos] & 0xFFL)
+               | ((data[pos + 1] & 0xFFL) << 8)
+               | ((data[pos + 2] & 0xFFL) << 16)
+               | ((data[pos + 3] & 0xFFL) << 24)
+               | ((data[pos + 4] & 0xFFL) << 32)
+               | ((data[pos + 5] & 0xFFL) << 40)
+               | ((data[pos + 6] & 0xFFL) << 48)
+               | ((data[pos + 7] & 0xFFL) << 56);
+        pos += 8;
+        return v;
+    }
+
+    float readF32() {
+        return Float.intBitsToFloat(readI32());
+    }
+
+    double readF64() {
+        return Double.longBitsToDouble(readI64());
+    }
+
+    String readString() {
+        int len = readI32();
+        if (len == 0) return "";
+        if (len < 0) throw new RuntimeException("corrupt wire: negative string length");
+        String v = new String(data, pos, len, StandardCharsets.UTF_8);
+        pos += len;
+        return v;
+    }
+
+    byte[] readBytes() {
+        int len = readI32();
+        if (len == 0) return new byte[0];
+        if (len < 0) throw new RuntimeException("corrupt wire: negative bytes length");
+        byte[] v = new byte[len];
+        System.arraycopy(data, pos, v, 0, len);
+        pos += len;
+        return v;
+    }
+}
 

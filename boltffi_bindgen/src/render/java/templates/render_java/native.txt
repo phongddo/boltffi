@@ -20,9 +20,9 @@ final class Native {
     static void boltffiFutureContinuationCallback(long handle, byte pollResult) {
     }
 
-    static native void {{ module.native.prefix }}_free_string(long ptr);
-    static native String {{ module.native.prefix }}_last_error_message();
-{%- for func in module.native.functions %}
-    static native {{ func.return_type }} {{ func.ffi_name }}({% for param in func.params %}{{ param.jni_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    static native void {{ module.prefix }}_free_string(long ptr);
+    static native byte[] {{ module.prefix }}_last_error_message();
+{%- for func in module.functions %}
+    static native {{ func.native_return_type() }} {{ func.ffi_name }}({% for param in func.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- endfor %}
 }

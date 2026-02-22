@@ -23,8 +23,8 @@ use super::plan::{
     JniAsyncFunction, JniCallbackCParam, JniCallbackMethod, JniCallbackReturn, JniCallbackTrait,
     JniClass, JniClosureRecordParam, JniClosureTrampoline, JniClosureTrampolineReturn, JniFunction,
     JniInvokerResult, JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniParamKind,
-    JniResultVariant, JniResultView, JniReturnKind, JniStream, JniWireCtor, JniWireFunction,
-    JniWireMethod,
+    JniPrimitiveArrayElementsKind, JniResultVariant, JniResultView, JniReturnKind, JniStream,
+    JniWireCtor, JniWireFunction, JniWireMethod,
 };
 
 struct JniReturnMeta {
@@ -35,11 +35,39 @@ struct JniReturnMeta {
     jni_result_cast: String,
 }
 
+/// Controls how JNI string parameters cross the FFI boundary.
+///
+/// `ByteArray` (default) passes strings as `jbyteArray` using
+/// `GetByteArrayElements` which gives raw UTF-8 bytes with no
+/// encoding conversion. The caller (Java/Kotlin) is responsible for
+/// calling `String.getBytes(UTF_8)` / `toByteArray(Charsets.UTF_8)`
+/// before the native call.
+///
+/// `JString` uses the classic `jstring` + `GetStringUTFChars` path
+/// which returns Modified UTF-8 -- an encoding that mangles non-BMP
+/// codepoints (emoji, some CJK) into CESU-8 surrogate pairs. This
+/// silently corrupts any `char` above U+FFFF on round-trip.
+///
+/// `ByteArray` is both correct and safe:
+///   - No encoding mismatch: Rust receives real UTF-8 bytes.
+///   - Array length is O(1) via `GetArrayLength`; the `JString` path
+///     requires an O(n) `strlen` after conversion.
+///   - `GetByteArrayElements` does not enter a JNI critical region,
+///     avoiding the strict GC/liveness constraints of
+///     `GetPrimitiveArrayCritical`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum JniStringEncoding {
+    JString,
+    #[default]
+    ByteArray,
+}
+
 pub struct JniLowerer<'a> {
     contract: &'a FfiContract,
     abi: &'a AbiContract,
     package: String,
     class_name: String,
+    string_encoding: JniStringEncoding,
 }
 
 impl<'a> JniLowerer<'a> {
@@ -54,7 +82,13 @@ impl<'a> JniLowerer<'a> {
             abi,
             package,
             class_name,
+            string_encoding: JniStringEncoding::default(),
         }
+    }
+
+    pub fn with_string_encoding(mut self, encoding: JniStringEncoding) -> Self {
+        self.string_encoding = encoding;
+        self
     }
 
     pub fn lower(&self) -> JniModule {
@@ -619,6 +653,8 @@ impl<'a> JniLowerer<'a> {
     fn lower_param(&self, param: &ParamDef) -> JniParam {
         let name = naming::escape_c_keyword(param.name.as_str());
         let is_string = matches!(param.type_expr, TypeExpr::String);
+        let string_as_byte_array =
+            is_string && self.string_encoding == JniStringEncoding::ByteArray;
         let (array_primitive, array_is_mutable) = match &param.type_expr {
             TypeExpr::Vec(inner) => match inner.as_ref() {
                 TypeExpr::Primitive(p) => (Some(*p), matches!(param.passing, ParamPassing::RefMut)),
@@ -635,46 +671,59 @@ impl<'a> JniLowerer<'a> {
             param.type_expr,
             TypeExpr::Callback(ref callback_id) if self.is_closure_callback(callback_id)
         );
-        let jni_type = self.param_jni_type(
-            &param.type_expr,
-            is_wire_param,
-            data_enum_info.is_some(),
-            array_primitive.is_some(),
-            is_closure,
-        );
+
+        let (jni_type, ffi_arg, kind) = if string_as_byte_array {
+            let jni_type = "jbyteArray".to_string();
+            let ffi_arg = format!("(const uint8_t*)_{}_ptr, (uintptr_t)_{}_len", name, name);
+            let kind = JniParamKind::PrimitiveArray {
+                c_type: "uint8_t".to_string(),
+                elements_kind: JniPrimitiveArrayElementsKind::Byte,
+                release_mode: JniArrayReleaseMode::Abort,
+            };
+            (jni_type, ffi_arg, kind)
+        } else {
+            let jni_type = self.param_jni_type(
+                &param.type_expr,
+                is_wire_param,
+                data_enum_info.is_some(),
+                array_primitive.is_some(),
+                is_closure,
+            );
+            let ffi_arg = self.param_ffi_arg(
+                &name,
+                &param.type_expr,
+                array_primitive,
+                array_is_mutable,
+                is_wire_param,
+                record_info.clone(),
+                data_enum_info.clone(),
+            );
+            let kind = if is_closure {
+                JniParamKind::Closure
+            } else if is_string {
+                JniParamKind::String
+            } else if let Some(primitive) = array_primitive {
+                let c_type = self.primitive_c_type(primitive);
+                let release_mode = if array_is_mutable {
+                    JniArrayReleaseMode::Commit
+                } else {
+                    JniArrayReleaseMode::Abort
+                };
+                let elements_kind = self.primitive_array_elements_kind(primitive);
+                JniParamKind::PrimitiveArray {
+                    c_type,
+                    elements_kind,
+                    release_mode,
+                }
+            } else if is_wire_param || data_enum_info.is_some() {
+                JniParamKind::Buffer
+            } else {
+                JniParamKind::Primitive
+            };
+            (jni_type, ffi_arg, kind)
+        };
 
         let jni_decl = format!("{} {}", jni_type, name);
-
-        let ffi_arg = self.param_ffi_arg(
-            &name,
-            &param.type_expr,
-            array_primitive,
-            array_is_mutable,
-            is_wire_param,
-            record_info.clone(),
-            data_enum_info.clone(),
-        );
-
-        let kind = if is_closure {
-            JniParamKind::Closure
-        } else if is_string {
-            JniParamKind::String
-        } else if let Some(primitive) = array_primitive {
-            let c_type = self.primitive_c_type(primitive);
-            let release_mode = if array_is_mutable {
-                JniArrayReleaseMode::Commit
-            } else {
-                JniArrayReleaseMode::Abort
-            };
-            JniParamKind::PrimitiveArray {
-                c_type,
-                release_mode,
-            }
-        } else if is_wire_param || data_enum_info.is_some() {
-            JniParamKind::Buffer
-        } else {
-            JniParamKind::Primitive
-        };
 
         JniParam {
             name,
@@ -749,6 +798,24 @@ impl<'a> JniLowerer<'a> {
             PrimitiveType::U64 | PrimitiveType::USize => "uint64_t".to_string(),
             PrimitiveType::F32 => "float".to_string(),
             PrimitiveType::F64 => "double".to_string(),
+        }
+    }
+
+    fn primitive_array_elements_kind(
+        &self,
+        primitive: PrimitiveType,
+    ) -> JniPrimitiveArrayElementsKind {
+        match primitive {
+            PrimitiveType::Bool => JniPrimitiveArrayElementsKind::Boolean,
+            PrimitiveType::I8 | PrimitiveType::U8 => JniPrimitiveArrayElementsKind::Byte,
+            PrimitiveType::I16 | PrimitiveType::U16 => JniPrimitiveArrayElementsKind::Short,
+            PrimitiveType::I32 | PrimitiveType::U32 => JniPrimitiveArrayElementsKind::Int,
+            PrimitiveType::I64
+            | PrimitiveType::U64
+            | PrimitiveType::ISize
+            | PrimitiveType::USize => JniPrimitiveArrayElementsKind::Long,
+            PrimitiveType::F32 => JniPrimitiveArrayElementsKind::Float,
+            PrimitiveType::F64 => JniPrimitiveArrayElementsKind::Double,
         }
     }
 

@@ -6,9 +6,7 @@ use crate::ir::types::TypeExpr;
 use super::JavaOptions;
 use super::mappings;
 use super::names::NamingConvention;
-use super::plan::{
-    JavaFunction, JavaModule, JavaNative, JavaNativeFunction, JavaNativeParam, JavaParam,
-};
+use super::plan::{JavaFunction, JavaModule, JavaParam, JavaParamKind, JavaReturnStrategy};
 
 pub struct JavaLowerer<'a> {
     ffi: &'a FfiContract,
@@ -49,16 +47,8 @@ impl<'a> JavaLowerer<'a> {
             .ffi
             .functions
             .iter()
-            .filter(|f| self.is_primitive_function(f))
+            .filter(|f| !f.is_async && self.is_supported_function(f))
             .map(|f| self.lower_function(f))
-            .collect();
-
-        let native_functions: Vec<JavaNativeFunction> = self
-            .ffi
-            .functions
-            .iter()
-            .filter(|f| self.is_primitive_function(f))
-            .map(|f| self.lower_native_function(f))
             .collect();
 
         JavaModule {
@@ -66,29 +56,33 @@ impl<'a> JavaLowerer<'a> {
             class_name: NamingConvention::class_name(&self.module_name),
             lib_name,
             java_version: self.options.min_java_version,
+            prefix,
             functions,
-            native: JavaNative {
-                prefix,
-                functions: native_functions,
-            },
         }
     }
 
-    fn is_primitive_function(&self, func: &FunctionDef) -> bool {
-        let params_primitive = func
+    fn is_supported_function(&self, func: &FunctionDef) -> bool {
+        let params_ok = func
             .params
             .iter()
-            .all(|p| self.is_primitive_type(&p.type_expr));
-        let return_primitive = match &func.returns {
+            .all(|p| self.is_supported_param(&p.type_expr));
+        let return_ok = match &func.returns {
             ReturnDef::Void => true,
-            ReturnDef::Value(ty) => self.is_primitive_type(ty),
+            ReturnDef::Value(ty) => self.is_supported_return(ty),
             ReturnDef::Result { .. } => false,
         };
-        params_primitive && return_primitive && !func.is_async
+        params_ok && return_ok
     }
 
-    fn is_primitive_type(&self, ty: &TypeExpr) -> bool {
-        matches!(ty, TypeExpr::Primitive(_))
+    fn is_supported_param(&self, ty: &TypeExpr) -> bool {
+        matches!(ty, TypeExpr::Primitive(_) | TypeExpr::String)
+    }
+
+    fn is_supported_return(&self, ty: &TypeExpr) -> bool {
+        matches!(
+            ty,
+            TypeExpr::Void | TypeExpr::Primitive(_) | TypeExpr::String
+        )
     }
 
     fn lower_function(&self, func: &FunctionDef) -> JavaFunction {
@@ -97,48 +91,59 @@ impl<'a> JavaLowerer<'a> {
         let params: Vec<JavaParam> = func
             .params
             .iter()
-            .map(|p| JavaParam {
-                name: NamingConvention::field_name(p.name.as_str()),
-                java_type: self.java_type(&p.type_expr),
-            })
+            .map(|p| self.lower_param(p.name.as_str(), &p.type_expr))
             .collect();
 
-        let return_type = match &func.returns {
-            ReturnDef::Void => "void".to_string(),
-            ReturnDef::Value(ty) => self.java_type(ty),
-            ReturnDef::Result { .. } => "void".to_string(),
-        };
+        let strategy = self.return_strategy(&func.returns);
 
         JavaFunction {
             name: NamingConvention::method_name(func.id.as_str()),
-            params,
-            return_type,
             ffi_name: call.symbol.as_str().to_string(),
+            params,
+            return_type: self.return_java_type(&func.returns),
+            strategy,
         }
     }
 
-    fn lower_native_function(&self, func: &FunctionDef) -> JavaNativeFunction {
-        let call = self.abi_call_for_function(func);
+    fn lower_param(&self, name: &str, ty: &TypeExpr) -> JavaParam {
+        let field_name = NamingConvention::field_name(name);
+        let java_type = self.java_type(ty);
+        let (native_type, kind) = self.native_param_mapping(ty);
+        JavaParam {
+            name: field_name,
+            java_type,
+            native_type,
+            kind,
+        }
+    }
 
-        let params: Vec<JavaNativeParam> = func
-            .params
-            .iter()
-            .map(|p| JavaNativeParam {
-                name: NamingConvention::field_name(p.name.as_str()),
-                jni_type: self.jni_type(&p.type_expr),
-            })
-            .collect();
+    fn native_param_mapping(&self, ty: &TypeExpr) -> (String, JavaParamKind) {
+        match ty {
+            TypeExpr::String => ("byte[]".to_string(), JavaParamKind::Utf8Bytes),
+            other => (self.java_type(other), JavaParamKind::Direct),
+        }
+    }
 
-        let return_type = match &func.returns {
+    fn return_java_type(&self, returns: &ReturnDef) -> String {
+        match returns {
             ReturnDef::Void => "void".to_string(),
-            ReturnDef::Value(ty) => self.jni_type(ty),
+            ReturnDef::Value(TypeExpr::Void) => "void".to_string(),
+            ReturnDef::Value(ty) => self.java_type(ty),
             ReturnDef::Result { .. } => "void".to_string(),
-        };
+        }
+    }
 
-        JavaNativeFunction {
-            ffi_name: call.symbol.as_str().to_string(),
-            params,
-            return_type,
+    fn return_strategy(&self, returns: &ReturnDef) -> JavaReturnStrategy {
+        match returns {
+            ReturnDef::Void | ReturnDef::Result { .. } => JavaReturnStrategy::Void,
+            ReturnDef::Value(ty) => match ty {
+                TypeExpr::Void => JavaReturnStrategy::Void,
+                TypeExpr::Primitive(_) => JavaReturnStrategy::Direct,
+                TypeExpr::String => JavaReturnStrategy::WireDecode {
+                    decode_expr: "reader.readString()".to_string(),
+                },
+                _ => JavaReturnStrategy::Void,
+            },
         }
     }
 
@@ -153,13 +158,7 @@ impl<'a> JavaLowerer<'a> {
     fn java_type(&self, ty: &TypeExpr) -> String {
         match ty {
             TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
-            _ => "Object".to_string(),
-        }
-    }
-
-    fn jni_type(&self, ty: &TypeExpr) -> String {
-        match ty {
-            TypeExpr::Primitive(p) => mappings::jni_type(*p).to_string(),
+            TypeExpr::String => "String".to_string(),
             _ => "Object".to_string(),
         }
     }

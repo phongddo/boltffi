@@ -15,7 +15,7 @@ private object Native {
     }
 
     @JvmStatic external fun {{ prefix }}_free_string(ptr: Long)
-    @JvmStatic external fun {{ prefix }}_last_error_message(): String
+    @JvmStatic external fun {{ prefix }}_last_error_message(): ByteArray
 
     @JvmStatic fun boltffiFutureContinuationCallback(handle: Long, pollResult: Byte) {
         val continuation = boltffiContinuationMap.tryRemove(handle)

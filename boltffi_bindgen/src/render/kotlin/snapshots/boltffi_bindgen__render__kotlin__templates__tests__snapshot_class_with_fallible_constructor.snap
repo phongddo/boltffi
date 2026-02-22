@@ -14,7 +14,7 @@ class Connection private constructor(internal val handle: Long) : AutoCloseable 
                     BoltFFIWire.writeString(url)
                 }
                 val handle = Native.boltffi_connection_open(urlWire.ptr, urlWire.len)
-                if (handle == 0L) throw FfiException(1, Native.boltffi_last_error_message())
+                if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
                 handle
             } finally {
                 urlWire.close().close()

@@ -37,6 +37,9 @@ value class {{ custom.class_name }}(val value: {{ custom.repr_kotlin_type }}) {
 
 class FfiException(val code: Int, message: String) : Exception(message)
 
+private fun takeLastErrorMessage(): String =
+    Native.{{ prefix }}_last_error_message().toString(Charsets.UTF_8)
+
 object BoltFFIScope : CoroutineScope {
     override val coroutineContext = Dispatchers.Default + SupervisorJob()
 
@@ -185,7 +188,8 @@ internal class BoltFFIStreamContext(
         try {
             if (!lifecycleTag.compareAndSet(0, 0)) return
             while (true) {
-                val bytes = popBatch(subscription, batchSize) ?: break
+                val bytes = popBatch(subscription, batchSize)
+                    ?: throw RuntimeException("BoltFFI: stream pop_batch failed (null)")
                 if (bytes.isEmpty()) break
                 val reader = WireReader(bytes)
                 processItems(reader)
@@ -212,31 +216,77 @@ interface WireCodable {
     }
 }
 
-class WireReader(private val array: ByteArray) {
+class WireReader {
+    private val array: ByteArray?
+    private val buffer: ByteBuffer?
     private var pos: Int = 0
 
-    @PublishedApi internal fun leI16(o: Int): Short =
-        ((array[o].toInt() and 0xFF) or ((array[o + 1].toInt() and 0xFF) shl 8)).toShort()
+    constructor(array: ByteArray) {
+        this.array = array
+        this.buffer = null
+    }
 
-    @PublishedApi internal fun leI32(o: Int): Int =
-        (array[o].toInt() and 0xFF) or
-        ((array[o + 1].toInt() and 0xFF) shl 8) or
-        ((array[o + 2].toInt() and 0xFF) shl 16) or
-        ((array[o + 3].toInt() and 0xFF) shl 24)
+    constructor(buffer: ByteBuffer) {
+        this.array = null
+        this.buffer = buffer.slice().order(ByteOrder.LITTLE_ENDIAN)
+    }
 
-    @PublishedApi internal fun leI64(o: Int): Long =
-        (array[o].toLong() and 0xFFL) or
-        ((array[o + 1].toLong() and 0xFFL) shl 8) or
-        ((array[o + 2].toLong() and 0xFFL) shl 16) or
-        ((array[o + 3].toLong() and 0xFFL) shl 24) or
-        ((array[o + 4].toLong() and 0xFFL) shl 32) or
-        ((array[o + 5].toLong() and 0xFFL) shl 40) or
-        ((array[o + 6].toLong() and 0xFFL) shl 48) or
-        ((array[o + 7].toLong() and 0xFFL) shl 56)
+    private fun byteAt(index: Int): Byte = array?.get(index) ?: buffer!!.get(index)
 
-    fun readBool(): Boolean { val v = array[pos] != 0.toByte(); pos += 1; return v }
-    fun readI8(): Byte { val v = array[pos]; pos += 1; return v }
-    fun readU8(): UByte { val v = array[pos].toUByte(); pos += 1; return v }
+    private fun copyRange(start: Int, len: Int): ByteArray {
+        val localArray = array
+        if (localArray != null) {
+            return localArray.copyOfRange(start, start + len)
+        }
+        val bytes = ByteArray(len)
+        if (len == 0) return bytes
+        val source = buffer!!.duplicate().order(ByteOrder.LITTLE_ENDIAN)
+        source.position(start)
+        source.limit(start + len)
+        source.get(bytes)
+        return bytes
+    }
+
+    @PublishedApi internal fun leI16(o: Int): Short {
+        val localArray = array
+        return if (localArray != null) {
+            ((localArray[o].toInt() and 0xFF) or ((localArray[o + 1].toInt() and 0xFF) shl 8)).toShort()
+        } else {
+            buffer!!.getShort(o)
+        }
+    }
+
+    @PublishedApi internal fun leI32(o: Int): Int {
+        val localArray = array
+        return if (localArray != null) {
+            (localArray[o].toInt() and 0xFF) or
+            ((localArray[o + 1].toInt() and 0xFF) shl 8) or
+            ((localArray[o + 2].toInt() and 0xFF) shl 16) or
+            ((localArray[o + 3].toInt() and 0xFF) shl 24)
+        } else {
+            buffer!!.getInt(o)
+        }
+    }
+
+    @PublishedApi internal fun leI64(o: Int): Long {
+        val localArray = array
+        return if (localArray != null) {
+            (localArray[o].toLong() and 0xFFL) or
+            ((localArray[o + 1].toLong() and 0xFFL) shl 8) or
+            ((localArray[o + 2].toLong() and 0xFFL) shl 16) or
+            ((localArray[o + 3].toLong() and 0xFFL) shl 24) or
+            ((localArray[o + 4].toLong() and 0xFFL) shl 32) or
+            ((localArray[o + 5].toLong() and 0xFFL) shl 40) or
+            ((localArray[o + 6].toLong() and 0xFFL) shl 48) or
+            ((localArray[o + 7].toLong() and 0xFFL) shl 56)
+        } else {
+            buffer!!.getLong(o)
+        }
+    }
+
+    fun readBool(): Boolean { val v = byteAt(pos) != 0.toByte(); pos += 1; return v }
+    fun readI8(): Byte { val v = byteAt(pos); pos += 1; return v }
+    fun readU8(): UByte { val v = byteAt(pos).toUByte(); pos += 1; return v }
     fun readI16(): Short { val v = leI16(pos); pos += 2; return v }
     fun readU16(): UShort { val v = leI16(pos).toUShort(); pos += 2; return v }
     fun readI32(): Int { val v = leI32(pos); pos += 4; return v }
@@ -252,7 +302,12 @@ class WireReader(private val array: ByteArray) {
         if (len == 0) return ""
         val start = pos
         pos += len
-        return String(array, start, len, Charsets.UTF_8)
+        val localArray = array
+        return if (localArray != null) {
+            String(localArray, start, len, Charsets.UTF_8)
+        } else {
+            String(copyRange(start, len), Charsets.UTF_8)
+        }
     }
 
     fun readBytes(): ByteArray {
@@ -261,7 +316,7 @@ class WireReader(private val array: ByteArray) {
         if (len == 0) return ByteArray(0)
         val start = pos
         pos += len
-        return array.copyOfRange(start, start + len)
+        return copyRange(start, len)
     }
 
     fun readDuration(): Duration {
@@ -308,7 +363,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return ShortArray(0)
         val base = pos
         pos += count * 2
-        return ShortArray(count) { i -> leI16(base + i * 2) }
+        val localArray = array
+        return if (localArray != null) {
+            ShortArray(count) { i -> leI16(base + i * 2) }
+        } else {
+            val localBuffer = buffer!!
+            ShortArray(count) { i -> localBuffer.getShort(base + i * 2) }
+        }
     }
 
     fun readIntArray(): IntArray {
@@ -316,7 +377,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return IntArray(0)
         val base = pos
         pos += count * 4
-        return IntArray(count) { i -> leI32(base + i * 4) }
+        val localArray = array
+        return if (localArray != null) {
+            IntArray(count) { i -> leI32(base + i * 4) }
+        } else {
+            val localBuffer = buffer!!
+            IntArray(count) { i -> localBuffer.getInt(base + i * 4) }
+        }
     }
 
     fun readLongArray(): LongArray {
@@ -324,7 +391,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return LongArray(0)
         val base = pos
         pos += count * 8
-        return LongArray(count) { i -> leI64(base + i * 8) }
+        val localArray = array
+        return if (localArray != null) {
+            LongArray(count) { i -> leI64(base + i * 8) }
+        } else {
+            val localBuffer = buffer!!
+            LongArray(count) { i -> localBuffer.getLong(base + i * 8) }
+        }
     }
 
     fun readFloatArray(): FloatArray {
@@ -332,7 +405,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return FloatArray(0)
         val base = pos
         pos += count * 4
-        return FloatArray(count) { i -> Float.fromBits(leI32(base + i * 4)) }
+        val localArray = array
+        return if (localArray != null) {
+            FloatArray(count) { i -> Float.fromBits(leI32(base + i * 4)) }
+        } else {
+            val localBuffer = buffer!!
+            FloatArray(count) { i -> localBuffer.getFloat(base + i * 4) }
+        }
     }
 
     fun readDoubleArray(): DoubleArray {
@@ -340,7 +419,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return DoubleArray(0)
         val base = pos
         pos += count * 8
-        return DoubleArray(count) { i -> Double.fromBits(leI64(base + i * 8)) }
+        val localArray = array
+        return if (localArray != null) {
+            DoubleArray(count) { i -> Double.fromBits(leI64(base + i * 8)) }
+        } else {
+            val localBuffer = buffer!!
+            DoubleArray(count) { i -> localBuffer.getDouble(base + i * 8) }
+        }
     }
 
     fun readBooleanArray(): BooleanArray {
@@ -348,7 +433,13 @@ class WireReader(private val array: ByteArray) {
         if (count == 0) return BooleanArray(0)
         val base = pos
         pos += count
-        return BooleanArray(count) { i -> array[base + i] != 0.toByte() }
+        val localArray = array
+        return if (localArray != null) {
+            BooleanArray(count) { i -> localArray[base + i] != 0.toByte() }
+        } else {
+            val localBuffer = buffer!!
+            BooleanArray(count) { i -> localBuffer.get(base + i) != 0.toByte() }
+        }
     }
 
     fun skip(count: Int) { pos += count }
@@ -356,7 +447,7 @@ class WireReader(private val array: ByteArray) {
     fun readBlittable(sizeBytes: Int): ByteArray {
         val start = pos
         pos += sizeBytes
-        return array.copyOfRange(start, start + sizeBytes)
+        return copyRange(start, sizeBytes)
     }
 }
 

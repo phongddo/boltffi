@@ -3,6 +3,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 #include <stdatomic.h>
 #include "{{ module_name }}.h"
 
@@ -11,15 +12,62 @@ static inline void boltffi_free_buf(uint8_t* ptr, size_t len) {
     {{ prefix }}_free_buf_u8(buf);
 }
 
+static inline bool boltffi_exception_pending(JNIEnv* env) {
+    return (*env)->ExceptionCheck(env);
+}
+
+static inline bool boltffi_consume_pending_exception(JNIEnv* env) {
+    if (!boltffi_exception_pending(env)) return false;
+    (*env)->ExceptionClear(env);
+    return true;
+}
+
+static inline void boltffi_throw_out_of_memory(JNIEnv* env, const char* message) {
+    jclass oom_class = (*env)->FindClass(env, "java/lang/OutOfMemoryError");
+    if (oom_class == NULL) return;
+    (*env)->ThrowNew(env, oom_class, message);
+    (*env)->DeleteLocalRef(env, oom_class);
+}
+
+static inline void boltffi_throw_illegal_argument(JNIEnv* env, const char* message) {
+    jclass exception_class = (*env)->FindClass(env, "java/lang/IllegalArgumentException");
+    if (exception_class == NULL) return;
+    (*env)->ThrowNew(env, exception_class, message);
+    (*env)->DeleteLocalRef(env, exception_class);
+}
+
+static inline bool boltffi_try_jlong_to_usize(jlong value, uintptr_t* out_value) {
+    if (value < 0) return false;
+    uint64_t unsigned_value = (uint64_t)value;
+    if (unsigned_value > (uint64_t)UINTPTR_MAX) return false;
+    *out_value = (uintptr_t)unsigned_value;
+    return true;
+}
+
 static inline jbyteArray boltffi_buf_to_jbytearray(JNIEnv* env, FfiBuf_u8 buf) {
-    if (buf.ptr == NULL) return NULL;
-    jbyteArray arr = (*env)->NewByteArray(env, (jint)buf.len);
+    if (buf.ptr == NULL) {
+        if (buf.len != 0) {
+            boltffi_throw_out_of_memory(env, "BoltFFI buffer pointer was null");
+        }
+        return NULL;
+    }
+    if (buf.len > (size_t)INT32_MAX) {
+        boltffi_free_buf(buf.ptr, buf.len);
+        boltffi_throw_out_of_memory(env, "BoltFFI buffer too large for Java byte array");
+        return NULL;
+    }
+    jsize len = (jsize)buf.len;
+    jbyteArray arr = (*env)->NewByteArray(env, len);
     if (arr == NULL) {
         boltffi_free_buf(buf.ptr, buf.len);
         return NULL;
     }
-    (*env)->SetByteArrayRegion(env, arr, 0, (jint)buf.len, (const jbyte*)buf.ptr);
+    (*env)->SetByteArrayRegion(env, arr, 0, len, (const jbyte*)buf.ptr);
     boltffi_free_buf(buf.ptr, buf.len);
+    if (boltffi_exception_pending(env)) {
+        (*env)->DeleteLocalRef(env, arr);
+        return NULL;
+    }
     return arr;
 }
 
@@ -42,9 +90,7 @@ static inline bool boltffi_lookup_static_method(
 ) {
     *out_method = (*env)->GetStaticMethodID(env, cls, name, signature);
     if (*out_method != NULL) return true;
-    if ((*env)->ExceptionCheck(env)) {
-        (*env)->ExceptionClear(env);
-    }
+    boltffi_consume_pending_exception(env);
     return false;
 }
 
@@ -62,17 +108,13 @@ static inline BoltFFIGlobalClassResult boltffi_lookup_global_class(
     *out_class = NULL;
     jclass local_class = (*env)->FindClass(env, class_name);
     if (local_class == NULL) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
+        boltffi_consume_pending_exception(env);
         return BOLTFFI_GLOBAL_CLASS_MISSING;
     }
     jclass global_class = (*env)->NewGlobalRef(env, local_class);
     (*env)->DeleteLocalRef(env, local_class);
     if (global_class == NULL) {
-        if ((*env)->ExceptionCheck(env)) {
-            (*env)->ExceptionClear(env);
-        }
+        boltffi_consume_pending_exception(env);
         return BOLTFFI_GLOBAL_CLASS_FATAL;
     }
     *out_class = global_class;
@@ -92,7 +134,7 @@ typedef struct {
     jmethodID method;
 } BoltFFIStaticCallCache;
 
-#define BOLTFFI_STATIC_CALL_CACHE_INIT { ATOMIC_VAR_INIT(BOLTFFI_STATIC_CALL_CACHE_UNINIT), NULL, NULL }
+#define BOLTFFI_STATIC_CALL_CACHE_INIT { 0, NULL, NULL }
 
 static inline bool boltffi_static_call_cache_ensure(
     JNIEnv* env,
@@ -221,6 +263,7 @@ static void boltffi_jni_continuation_callback(uint64_t handle, int8_t poll_resul
         return;
     }
     (*env)->CallStaticVoidMethod(env, g_callback_class, g_callback_method, (jlong)handle, (jbyte)poll_result);
+    boltffi_consume_pending_exception(env);
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
     }
@@ -267,6 +310,15 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     }
 {%- if trampoline.is_void() %}
     (*env)->CallStaticVoidMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    if (boltffi_consume_pending_exception(env)) {
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return;
+    }
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
 {%- endfor %}
@@ -277,6 +329,16 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- if trampoline.is_wire_encoded_return() %}
     jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     FfiBuf_u8 _result = {0};
+    if (boltffi_consume_pending_exception(env)) {
+        if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return _result;
+    }
     if (_jarr != NULL) {
         jsize _len = (*env)->GetArrayLength(env, _jarr);
         uint8_t* _ptr = (uint8_t*)malloc((size_t)_len);
@@ -297,6 +359,16 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     return _result;
 {%- elif trampoline.is_callback_handle_return() %}
     jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    if (boltffi_consume_pending_exception(env)) {
+        BoltFFICallbackHandle _zero = {0};
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return _zero;
+    }
     BoltFFICallbackHandle _result = {{ trampoline.callback_create_fn() }}((uint64_t)_handle_val);
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
@@ -307,6 +379,16 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     return _result;
 {%- else %}
     {{ trampoline.c_return_type() }} _result = {{ trampoline.jni_return_cast() }}(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    if (boltffi_consume_pending_exception(env)) {
+        {{ trampoline.c_return_type() }} _zero = {0};
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return _zero;
+    }
 {%- for rp in trampoline.record_params %}
     if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
 {%- endfor %}
@@ -323,25 +405,17 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {{ wire_fn }}
 {%- endfor %}
 
-JNIEXPORT jstring JNICALL Java_{{ jni_prefix }}_Native_{{ prefix }}_1last_1error_1message(JNIEnv *env, jclass cls) {
+JNIEXPORT jbyteArray JNICALL Java_{{ jni_prefix }}_Native_{{ prefix }}_1last_1error_1message(JNIEnv *env, jclass cls) {
     FfiString out = { 0 };
     FfiStatus status = {{ prefix }}_last_error_message(&out);
-    if (status.code != 0) {
-        return (*env)->NewStringUTF(env, "");
-    }
-    if (out.ptr == NULL || out.len == 0) {
+    if (status.code != 0 || out.ptr == NULL || out.len == 0) {
         {{ prefix }}_free_string(out);
-        return (*env)->NewStringUTF(env, "");
+        return (*env)->NewByteArray(env, 0);
     }
-    char* tmp = (char*)malloc(out.len + 1);
-    if (!tmp) {
-        {{ prefix }}_free_string(out);
-        return (*env)->NewStringUTF(env, "");
+    jbyteArray result = (*env)->NewByteArray(env, (jsize)out.len);
+    if (result != NULL) {
+        (*env)->SetByteArrayRegion(env, result, 0, (jsize)out.len, (const jbyte*)out.ptr);
     }
-    memcpy(tmp, out.ptr, out.len);
-    tmp[out.len] = '\0';
-    jstring result = (*env)->NewStringUTF(env, tmp);
-    free(tmp);
     {{ prefix }}_free_string(out);
     return result;
 }
@@ -389,8 +463,8 @@ JNIEXPORT jlong JNICALL {{ func.jni_create_name }}(JNIEnv *env, jclass cls, jlon
 {%- endif %}
 {%- if param.is_primitive_array() %}
     uintptr_t _{{ param.name }}_len = (uintptr_t)(*env)->GetArrayLength(env, {{ param.name }});
-    {{ param.array_c_type() }}* _{{ param.name }}_ptr = ({{ param.array_c_type() }}*)(*env)->GetPrimitiveArrayCritical(env, {{ param.name }}, NULL);
-    if (_{{ param.name }}_ptr == NULL) _{{ param.name }}_len = 0;
+    {{ param.array_c_type() }}* _{{ param.name }}_ptr = ({{ param.array_c_type() }}*)(*env)->{{ param.array_get_elements_fn() }}(env, {{ param.name }}, NULL);
+    if (_{{ param.name }}_ptr == NULL) { _{{ param.name }}_len = 0; _boltffi_input_error = true; }
 {%- endif %}
 {%- if param.is_buffer() %}
     jlong _{{ param.name }}_size = (*env)->GetDirectBufferCapacity(env, {{ param.name }});
@@ -404,7 +478,7 @@ JNIEXPORT jlong JNICALL {{ func.jni_create_name }}(JNIEnv *env, jclass cls, jlon
 boltffi_input_cleanup:
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
-    if (_{{ param.name }}_ptr != NULL) (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+    if (_{{ param.name }}_ptr != NULL) (*env)->{{ param.array_release_elements_fn() }}(env, {{ param.name }}, ({{ param.array_elements_ptr_type() }})_{{ param.name }}_ptr, {{ param.array_release_mode() }});
 {%- endif %}
 {%- if param.is_string() %}
     if (_{{ param.name }}_c != NULL) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
@@ -456,10 +530,15 @@ JNIEXPORT void JNICALL {{ stream.poll_jni }}(JNIEnv *env, jclass cls, jlong subs
 
 JNIEXPORT jbyteArray JNICALL {{ stream.pop_batch_jni }}(JNIEnv *env, jclass cls, jlong subscription_handle, jlong max_count) {
     if (subscription_handle == 0) return NULL;
-    FfiBuf_u8 _buf = {{ stream.pop_batch_ffi }}((SubscriptionHandle)subscription_handle, (uintptr_t)max_count);
+    uintptr_t _max_count = 0;
+    if (!boltffi_try_jlong_to_usize(max_count, &_max_count)) {
+        boltffi_throw_illegal_argument(env, "max_count must be a non-negative size");
+        return NULL;
+    }
+    FfiBuf_u8 _buf = {{ stream.pop_batch_ffi }}((SubscriptionHandle)subscription_handle, _max_count);
     if (_buf.len == 0) {
         if (_buf.ptr != NULL) boltffi_free_buf(_buf.ptr, _buf.len);
-        return NULL;
+        return (*env)->NewByteArray(env, 0);
     }
     return boltffi_buf_to_jbytearray(env, _buf);
 }
@@ -493,8 +572,8 @@ JNIEXPORT jlong JNICALL {{ func.jni_create_name }}(JNIEnv *env, jclass cls{{ fun
 {%- endif %}
 {%- if param.is_primitive_array() %}
     uintptr_t _{{ param.name }}_len = (uintptr_t)(*env)->GetArrayLength(env, {{ param.name }});
-    {{ param.array_c_type() }}* _{{ param.name }}_ptr = ({{ param.array_c_type() }}*)(*env)->GetPrimitiveArrayCritical(env, {{ param.name }}, NULL);
-    if (_{{ param.name }}_ptr == NULL) _{{ param.name }}_len = 0;
+    {{ param.array_c_type() }}* _{{ param.name }}_ptr = ({{ param.array_c_type() }}*)(*env)->{{ param.array_get_elements_fn() }}(env, {{ param.name }}, NULL);
+    if (_{{ param.name }}_ptr == NULL) { _{{ param.name }}_len = 0; _boltffi_input_error = true; }
 {%- endif %}
 {%- if param.is_buffer() %}
     jlong _{{ param.name }}_size = (*env)->GetDirectBufferCapacity(env, {{ param.name }});
@@ -508,7 +587,7 @@ JNIEXPORT jlong JNICALL {{ func.jni_create_name }}(JNIEnv *env, jclass cls{{ fun
 boltffi_input_cleanup:
 {%- for param in func.params %}
 {%- if param.is_primitive_array() %}
-    if (_{{ param.name }}_ptr != NULL) (*env)->ReleasePrimitiveArrayCritical(env, {{ param.name }}, _{{ param.name }}_ptr, {{ param.array_release_mode() }});
+    if (_{{ param.name }}_ptr != NULL) (*env)->{{ param.array_release_elements_fn() }}(env, {{ param.name }}, ({{ param.array_elements_ptr_type() }})_{{ param.name }}_ptr, {{ param.array_release_mode() }});
 {%- endif %}
 {%- if param.is_string() %}
     if (_{{ param.name }}_c != NULL) (*env)->ReleaseStringUTFChars(env, {{ param.name }}, _{{ param.name }}_c);
@@ -567,6 +646,7 @@ static void {{ cb.trait_name }}_vtable_free(uint64_t handle) {
         attached = 1;
     } else if (get_env_result != JNI_OK) return;
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_free_method, (jlong)handle);
+    boltffi_consume_pending_exception(env);
     if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
 }
 
@@ -579,6 +659,10 @@ static uint64_t {{ cb.trait_name }}_vtable_clone(uint64_t handle) {
         attached = 1;
     } else if (get_env_result != JNI_OK) return 0;
     jlong result = (*env)->CallStaticLongMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_clone_method, (jlong)handle);
+    if (boltffi_consume_pending_exception(env)) {
+        if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+        return 0;
+    }
     if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
     return (uint64_t)result;
 }
@@ -604,9 +688,17 @@ static void {{ cb.trait_name }}_vtable_{{ method.ffi_name }}(uint64_t handle{% f
 {%- endfor %}
 {%- if method.has_return() %}
     {{ method.jni_return_type() }} _result = (*env)->CallStatic{{ method.jni_call_type() }}Method(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_{{ method.ffi_name }}_method, (jlong)handle{% for arg in method.jni_args %}, {{ arg }}{% endfor %});
+    if (boltffi_consume_pending_exception(env)) {
+        status->code = 1;
+        goto cleanup;
+    }
     *out = ({{ method.c_return_type() }})_result;
 {%- else %}
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_{{ method.ffi_name }}_method, (jlong)handle{% for arg in method.jni_args %}, {{ arg }}{% endfor %});
+    if (boltffi_consume_pending_exception(env)) {
+        status->code = 1;
+        goto cleanup;
+    }
 {%- endif %}
     status->code = 0;
 cleanup:
@@ -621,20 +713,50 @@ cleanup:
 static void {{ cb.trait_name }}_vtable_{{ method.ffi_name }}(uint64_t handle{% for param in method.c_params %}, {{ param.c_type }} {{ param.name }}{% endfor %}, void (*callback)(uint64_t{% if method.is_wire() %}, const uint8_t*, size_t{% elif method.has_return() %}, {{ method.return_c_type() }}{% endif %}, FfiStatus), uint64_t callback_data) {
     JNIEnv* env;
     int attached = 0;
+    bool _boltffi_dispatch_succeeded = false;
     jint get_env_result = (*g_jvm)->GetEnv(g_jvm, (void**)&env, JNI_VERSION_1_6);
     if (get_env_result == JNI_EDETACHED) {
-        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) return;
+        if (boltffi_attach_current_thread(g_jvm, &env) != JNI_OK) {
+{%- if method.is_wire() %}
+            callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
+{%- elif method.has_return() %}
+            callback((uint64_t)callback_data, ({{ method.return_c_type() }}){0}, (FfiStatus){.code = 1});
+{%- else %}
+            callback((uint64_t)callback_data, (FfiStatus){.code = 1});
+{%- endif %}
+            return;
+        }
         attached = 1;
-    } else if (get_env_result != JNI_OK) return;
+    } else if (get_env_result != JNI_OK) {
+{%- if method.is_wire() %}
+        callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
+{%- elif method.has_return() %}
+        callback((uint64_t)callback_data, ({{ method.return_c_type() }}){0}, (FfiStatus){.code = 1});
+{%- else %}
+        callback((uint64_t)callback_data, (FfiStatus){.code = 1});
+{%- endif %}
+        return;
+    }
 {%- for line in method.setup_lines %}
     {{ line }}
 {%- endfor %}
     (*env)->CallStaticVoidMethod(env, g_{{ cb.trait_name }}_callbacks_class, g_{{ cb.trait_name }}_{{ method.ffi_name }}_method, (jlong)handle{% for arg in method.jni_args %}, {{ arg }}{% endfor %}, (jlong)callback, (jlong)callback_data);
+    if (!boltffi_consume_pending_exception(env)) {
+        _boltffi_dispatch_succeeded = true;
+    }
 cleanup:
 {%- for line in method.cleanup_lines %}
     {{ line }}
 {%- endfor %}
     if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
+    if (_boltffi_dispatch_succeeded) return;
+{%- if method.is_wire() %}
+    callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
+{%- elif method.has_return() %}
+    callback((uint64_t)callback_data, ({{ method.return_c_type() }}){0}, (FfiStatus){.code = 1});
+{%- else %}
+    callback((uint64_t)callback_data, (FfiStatus){.code = 1});
+{%- endif %}
 }
 {%- endfor %}
 

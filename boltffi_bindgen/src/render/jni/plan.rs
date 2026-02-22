@@ -208,10 +208,22 @@ pub enum JniParamKind {
     String,
     PrimitiveArray {
         c_type: String,
+        elements_kind: JniPrimitiveArrayElementsKind,
         release_mode: JniArrayReleaseMode,
     },
     Buffer,
     Closure,
+}
+
+#[derive(Clone, Copy)]
+pub enum JniPrimitiveArrayElementsKind {
+    Boolean,
+    Byte,
+    Short,
+    Int,
+    Long,
+    Float,
+    Double,
 }
 
 #[derive(Clone, Copy)]
@@ -225,6 +237,44 @@ impl JniArrayReleaseMode {
         match self {
             Self::Commit => "0",
             Self::Abort => "JNI_ABORT",
+        }
+    }
+}
+
+impl JniPrimitiveArrayElementsKind {
+    pub fn get_fn(&self) -> &'static str {
+        match self {
+            Self::Boolean => "GetBooleanArrayElements",
+            Self::Byte => "GetByteArrayElements",
+            Self::Short => "GetShortArrayElements",
+            Self::Int => "GetIntArrayElements",
+            Self::Long => "GetLongArrayElements",
+            Self::Float => "GetFloatArrayElements",
+            Self::Double => "GetDoubleArrayElements",
+        }
+    }
+
+    pub fn release_fn(&self) -> &'static str {
+        match self {
+            Self::Boolean => "ReleaseBooleanArrayElements",
+            Self::Byte => "ReleaseByteArrayElements",
+            Self::Short => "ReleaseShortArrayElements",
+            Self::Int => "ReleaseIntArrayElements",
+            Self::Long => "ReleaseLongArrayElements",
+            Self::Float => "ReleaseFloatArrayElements",
+            Self::Double => "ReleaseDoubleArrayElements",
+        }
+    }
+
+    pub fn ptr_type(&self) -> &'static str {
+        match self {
+            Self::Boolean => "jboolean*",
+            Self::Byte => "jbyte*",
+            Self::Short => "jshort*",
+            Self::Int => "jint*",
+            Self::Long => "jlong*",
+            Self::Float => "jfloat*",
+            Self::Double => "jdouble*",
         }
     }
 }
@@ -264,6 +314,27 @@ impl JniParam {
     pub fn array_release_mode(&self) -> &str {
         match &self.kind {
             JniParamKind::PrimitiveArray { release_mode, .. } => release_mode.as_str(),
+            _ => "",
+        }
+    }
+
+    pub fn array_get_elements_fn(&self) -> &str {
+        match &self.kind {
+            JniParamKind::PrimitiveArray { elements_kind, .. } => elements_kind.get_fn(),
+            _ => "",
+        }
+    }
+
+    pub fn array_release_elements_fn(&self) -> &str {
+        match &self.kind {
+            JniParamKind::PrimitiveArray { elements_kind, .. } => elements_kind.release_fn(),
+            _ => "",
+        }
+    }
+
+    pub fn array_elements_ptr_type(&self) -> &str {
+        match &self.kind {
+            JniParamKind::PrimitiveArray { elements_kind, .. } => elements_kind.ptr_type(),
             _ => "",
         }
     }

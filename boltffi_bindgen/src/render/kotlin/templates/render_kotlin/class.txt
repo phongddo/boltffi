@@ -7,7 +7,7 @@
 {%- if ctor.is_fallible %}
         kotlin.run {
             val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
             handle
         }
 {%- else %}
@@ -27,7 +27,7 @@
 {%- endfor %}
 {%- if ctor.is_fallible %}
                 val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
                 handle
 {%- else %}
                 Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
@@ -47,7 +47,7 @@
 {%- if ctor.is_fallible %}
         kotlin.run {
             val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
             handle
         }
 {%- else %}
@@ -67,7 +67,7 @@
 {%- endfor %}
 {%- if ctor.is_fallible %}
                 val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
                 handle
 {%- else %}
                 Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
@@ -94,7 +94,7 @@
 {%- if ctor.wire_writers.is_empty() %}
 {%- if ctor.is_fallible %}
             val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-            if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+            if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
             return {{ class_name }}(handle)
 {%- else %}
             return {{ class_name }}(Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}))
@@ -112,7 +112,7 @@
 {%- endfor %}
 {%- if ctor.is_fallible %}
                 val handle = Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %})
-                if (handle == 0L) throw FfiException(1, Native.{{ prefix }}_last_error_message())
+                if (handle == 0L) throw FfiException(1, takeLastErrorMessage())
                 return {{ class_name }}(handle)
 {%- else %}
                 return {{ class_name }}(Native.{{ ctor.ffi_name }}({% for arg in ctor.native_args %}{{ arg }}{% if !loop.last %}, {% endif %}{% endfor %}))
@@ -236,7 +236,8 @@ class {{ class_name }}{{ method_name_pascal }}Subscription(
 
     fun popBatch(maxCount: Long = 16L): List<{{ stream.item_type }}> {
         if (handle == 0L) return emptyList()
-        val bytes = popBatchFn(handle, maxCount) ?: return emptyList()
+        val bytes = popBatchFn(handle, maxCount)
+            ?: throw RuntimeException("BoltFFI: stream pop_batch failed (null)")
         if (bytes.isEmpty()) return emptyList()
         val reader = WireReader(bytes)
         val count = reader.readI32()

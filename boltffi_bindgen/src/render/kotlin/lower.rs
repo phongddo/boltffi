@@ -1393,8 +1393,8 @@ impl<'a> KotlinLowerer<'a> {
     fn callback_encoded_conversion(&self, decode_ops: &ReadSeq, name: &str) -> String {
         let decode_expr = emit::emit_reader_read(decode_ops);
         format!(
-            "run {{ val bytes = ByteArray({}.remaining()); {}.get(bytes); val reader = WireReader(bytes); {} }}",
-            name, name, decode_expr
+            "run {{ val reader = WireReader({}); {} }}",
+            name, decode_expr
         )
     }
 
@@ -2169,7 +2169,8 @@ impl<'a> KotlinLowerer<'a> {
                 AbiType::U8 => format!("{}.toByte()", name),
                 _ => name,
             },
-            JniParamRole::StringParam | JniParamRole::Buffer { .. } => name,
+            JniParamRole::StringParam => format!("{}.toByteArray(Charsets.UTF_8)", name),
+            JniParamRole::Buffer { .. } => name,
             JniParamRole::Encoded => writers
                 .iter()
                 .find(|w| w.binding_name == format!("wire_writer_{}", param.name.as_str()))
@@ -3321,7 +3322,7 @@ impl JniParamMapping {
             JniParamRole::Direct { jni_type } | JniParamRole::Buffer { jni_type } => {
                 jni_type.clone()
             }
-            JniParamRole::StringParam => "String".to_string(),
+            JniParamRole::StringParam => "ByteArray".to_string(),
             JniParamRole::Encoded | JniParamRole::OutBuffer => "ByteBuffer".to_string(),
             JniParamRole::Handle { .. } | JniParamRole::Callback { .. } => "Long".to_string(),
             JniParamRole::Hidden => "Unit".to_string(),
