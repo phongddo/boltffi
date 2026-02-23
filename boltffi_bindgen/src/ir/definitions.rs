@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::classification::{self, FieldPrimitive, PassableCategory};
+
 use crate::ir::ids::{
     CallbackId, ClassId, ConverterPath, CustomTypeId, EnumId, FieldName, FunctionId, MethodId,
     ParamName, QualifiedName, RecordId, StreamId, VariantName,
@@ -20,9 +22,24 @@ pub struct RecordDef {
 
 impl RecordDef {
     pub fn is_blittable(&self) -> bool {
-        self.fields
+        let field_primitives: Vec<FieldPrimitive> = self
+            .fields
             .iter()
-            .all(|f| matches!(f.type_expr, TypeExpr::Primitive(_)))
+            .filter_map(|f| match &f.type_expr {
+                TypeExpr::Primitive(p) => Some(p.to_field_primitive()),
+                _ => None,
+            })
+            .collect();
+        let all_primitive = field_primitives.len() == self.fields.len();
+        let classify_fields = if all_primitive {
+            &field_primitives[..]
+        } else {
+            &[]
+        };
+        matches!(
+            classification::classify_struct(true, classify_fields),
+            PassableCategory::Blittable,
+        )
     }
 }
 

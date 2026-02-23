@@ -441,15 +441,15 @@ pub fn classify_param_transform(ty: &Type) -> ParamTransform {
         ParamTransform::StrRef
     } else if type_str == "String" || type_str == "std::string::String" {
         ParamTransform::OwnedString
-    } else if is_record_type(&type_str) {
+    } else if is_user_defined_type(&type_str) {
         ParamTransform::Passable(ty.clone())
     } else {
         ParamTransform::PassThrough
     }
 }
 
-fn is_record_type(type_str: &str) -> bool {
-    if is_primitive_type(type_str) {
+fn is_user_defined_type(type_str: &str) -> bool {
+    if is_builtin_type(type_str) {
         return false;
     }
     if type_str.starts_with('&') || type_str.starts_with('*') {
@@ -461,9 +461,9 @@ fn is_record_type(type_str: &str) -> bool {
     type_str.chars().next().is_some_and(|c| c.is_uppercase())
 }
 
-fn is_primitive_type(s: &str) -> bool {
+fn is_builtin_type(type_str: &str) -> bool {
     matches!(
-        s,
+        type_str,
         "i8" | "i16"
             | "i32"
             | "i64"

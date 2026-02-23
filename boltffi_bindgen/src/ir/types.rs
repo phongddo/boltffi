@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::classification::FieldPrimitive;
+
 use crate::ir::ids::{
     BuiltinId, CallbackId, ClassId, CustomTypeId, EnumId, QualifiedName, RecordId,
 };
@@ -47,6 +49,14 @@ impl PrimitiveType {
 
     pub const fn is_platform_sized(self) -> bool {
         matches!(self, Self::ISize | Self::USize)
+    }
+
+    pub fn to_field_primitive(self) -> FieldPrimitive {
+        if self.is_platform_sized() {
+            FieldPrimitive::platform_sized()
+        } else {
+            FieldPrimitive::fixed()
+        }
     }
 
     pub const fn wire_size_bytes(self) -> usize {

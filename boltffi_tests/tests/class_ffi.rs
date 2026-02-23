@@ -567,13 +567,10 @@ mod fixture_wire_encoded_constructors {
     #[test]
     fn new_with_point_accepts_record() {
         let point = FixturePoint { x: 1.5, y: 2.5 };
-        let encoded = encode(&point);
-        let handle =
-            unsafe { boltffi_class_test_fixture_new_with_point(encoded.as_ptr(), encoded.len()) };
+        let handle = unsafe { boltffi_class_test_fixture_new_with_point(point) };
         assert!(!handle.is_null());
 
-        let buf = unsafe { boltffi_class_test_fixture_get_point(handle) };
-        let result: FixturePoint = decode_buf(&buf);
+        let result = unsafe { boltffi_class_test_fixture_get_point(handle) };
         assert_eq!(result.x, 1.5);
         assert_eq!(result.y, 2.5);
 
@@ -582,14 +579,12 @@ mod fixture_wire_encoded_constructors {
 
     #[test]
     fn new_with_status_accepts_enum() {
-        let status = FixtureStatus::Active;
-        let encoded = encode(&status);
         let handle =
-            unsafe { boltffi_class_test_fixture_new_with_status(encoded.as_ptr(), encoded.len()) };
+            unsafe { boltffi_class_test_fixture_new_with_status(FixtureStatus::Active as i32) };
         assert!(!handle.is_null());
 
-        let buf = unsafe { boltffi_class_test_fixture_get_status(handle) };
-        let result: FixtureStatus = decode_buf(&buf);
+        let raw = unsafe { boltffi_class_test_fixture_get_status(handle) };
+        let result: FixtureStatus = unsafe { std::mem::transmute(raw) };
         assert_eq!(result, FixtureStatus::Active);
 
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -597,42 +592,37 @@ mod fixture_wire_encoded_constructors {
 
     #[test]
     fn new_with_status_all_variants() {
-        for status in [
+        [
             FixtureStatus::Pending,
             FixtureStatus::Active,
             FixtureStatus::Completed,
             FixtureStatus::Failed,
-        ] {
-            let encoded = encode(&status);
-            let handle = unsafe {
-                boltffi_class_test_fixture_new_with_status(encoded.as_ptr(), encoded.len())
-            };
+        ]
+        .iter()
+        .for_each(|&status| {
+            let handle =
+                unsafe { boltffi_class_test_fixture_new_with_status(status as i32) };
 
-            let buf = unsafe { boltffi_class_test_fixture_get_status(handle) };
-            let result: FixtureStatus = decode_buf(&buf);
+            let raw = unsafe { boltffi_class_test_fixture_get_status(handle) };
+            let result: FixtureStatus = unsafe { std::mem::transmute(raw) };
             assert_eq!(result, status);
 
             unsafe { boltffi_class_test_fixture_free(handle) };
-        }
+        });
     }
 
     #[test]
     fn new_full_accepts_all_params() {
         let name = "full_test";
         let point = FixturePoint { x: 3.0, y: 4.0 };
-        let status = FixtureStatus::Completed;
-        let point_encoded = encode(&point);
-        let status_encoded = encode(&status);
 
         let handle = unsafe {
             boltffi_class_test_fixture_new_full(
                 42,
                 name.as_ptr(),
                 name.len(),
-                point_encoded.as_ptr(),
-                point_encoded.len(),
-                status_encoded.as_ptr(),
-                status_encoded.len(),
+                point,
+                FixtureStatus::Completed as i32,
             )
         };
         assert!(!handle.is_null());
@@ -642,16 +632,13 @@ mod fixture_wire_encoded_constructors {
         let name_buf = unsafe { boltffi_class_test_fixture_get_name(handle) };
         assert_eq!(decode_buf::<String>(&name_buf), "full_test");
 
-        let point_buf = unsafe { boltffi_class_test_fixture_get_point(handle) };
-        let result_point: FixturePoint = decode_buf(&point_buf);
+        let result_point = unsafe { boltffi_class_test_fixture_get_point(handle) };
         assert_eq!(result_point.x, 3.0);
         assert_eq!(result_point.y, 4.0);
 
-        let status_buf = unsafe { boltffi_class_test_fixture_get_status(handle) };
-        assert_eq!(
-            decode_buf::<FixtureStatus>(&status_buf),
-            FixtureStatus::Completed
-        );
+        let raw_status = unsafe { boltffi_class_test_fixture_get_status(handle) };
+        let result_status: FixtureStatus = unsafe { std::mem::transmute(raw_status) };
+        assert_eq!(result_status, FixtureStatus::Completed);
 
         unsafe { boltffi_class_test_fixture_free(handle) };
     }
@@ -675,12 +662,9 @@ mod fixture_wire_encoded_getters {
     #[test]
     fn get_point_returns_record() {
         let point = FixturePoint { x: 10.0, y: 20.0 };
-        let encoded = encode(&point);
-        let handle =
-            unsafe { boltffi_class_test_fixture_new_with_point(encoded.as_ptr(), encoded.len()) };
+        let handle = unsafe { boltffi_class_test_fixture_new_with_point(point) };
 
-        let buf = unsafe { boltffi_class_test_fixture_get_point(handle) };
-        let result: FixturePoint = decode_buf(&buf);
+        let result = unsafe { boltffi_class_test_fixture_get_point(handle) };
         assert_eq!(result.x, 10.0);
         assert_eq!(result.y, 20.0);
 
@@ -689,13 +673,11 @@ mod fixture_wire_encoded_getters {
 
     #[test]
     fn get_status_returns_enum() {
-        let status = FixtureStatus::Failed;
-        let encoded = encode(&status);
         let handle =
-            unsafe { boltffi_class_test_fixture_new_with_status(encoded.as_ptr(), encoded.len()) };
+            unsafe { boltffi_class_test_fixture_new_with_status(FixtureStatus::Failed as i32) };
 
-        let buf = unsafe { boltffi_class_test_fixture_get_status(handle) };
-        let result: FixtureStatus = decode_buf(&buf);
+        let raw = unsafe { boltffi_class_test_fixture_get_status(handle) };
+        let result: FixtureStatus = unsafe { std::mem::transmute(raw) };
         assert_eq!(result, FixtureStatus::Failed);
 
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -811,11 +793,9 @@ mod fixture_wire_encoded_setters {
     fn set_point_accepts_record() {
         let handle = boltffi_class_test_fixture_new_default();
         let point = FixturePoint { x: 5.5, y: 6.6 };
-        let encoded = encode(&point);
-        unsafe { boltffi_class_test_fixture_set_point(handle, encoded.as_ptr(), encoded.len()) };
+        unsafe { boltffi_class_test_fixture_set_point(handle, point) };
 
-        let buf = unsafe { boltffi_class_test_fixture_get_point(handle) };
-        let result: FixturePoint = decode_buf(&buf);
+        let result = unsafe { boltffi_class_test_fixture_get_point(handle) };
         assert_eq!(result.x, 5.5);
         assert_eq!(result.y, 6.6);
 
@@ -825,12 +805,10 @@ mod fixture_wire_encoded_setters {
     #[test]
     fn set_status_accepts_enum() {
         let handle = boltffi_class_test_fixture_new_default();
-        let status = FixtureStatus::Completed;
-        let encoded = encode(&status);
-        unsafe { boltffi_class_test_fixture_set_status(handle, encoded.as_ptr(), encoded.len()) };
+        unsafe { boltffi_class_test_fixture_set_status(handle, FixtureStatus::Completed as i32) };
 
-        let buf = unsafe { boltffi_class_test_fixture_get_status(handle) };
-        let result: FixtureStatus = decode_buf(&buf);
+        let raw = unsafe { boltffi_class_test_fixture_get_status(handle) };
+        let result: FixtureStatus = unsafe { std::mem::transmute(raw) };
         assert_eq!(result, FixtureStatus::Completed);
 
         unsafe { boltffi_class_test_fixture_free(handle) };
@@ -941,27 +919,27 @@ mod fixture_wire_encoded_static {
 
     #[test]
     fn static_make_point_returns_record() {
-        let buf = unsafe { boltffi_class_test_fixture_static_make_point(7.0, 8.0) };
-        let result: FixturePoint = decode_buf(&buf);
+        let result = unsafe { boltffi_class_test_fixture_static_make_point(7.0, 8.0) };
         assert_eq!(result.x, 7.0);
         assert_eq!(result.y, 8.0);
     }
 
     #[test]
     fn static_identity_status_all_variants() {
-        for status in [
+        [
             FixtureStatus::Pending,
             FixtureStatus::Active,
             FixtureStatus::Completed,
             FixtureStatus::Failed,
-        ] {
-            let encoded = encode(&status);
-            let buf = unsafe {
-                boltffi_class_test_fixture_static_identity_status(encoded.as_ptr(), encoded.len())
+        ]
+        .iter()
+        .for_each(|&status| {
+            let raw = unsafe {
+                boltffi_class_test_fixture_static_identity_status(status as i32)
             };
-            let result: FixtureStatus = decode_buf(&buf);
+            let result: FixtureStatus = unsafe { std::mem::transmute(raw) };
             assert_eq!(result, status);
-        }
+        });
     }
 
     #[test]

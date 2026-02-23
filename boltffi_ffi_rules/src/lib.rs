@@ -885,3 +885,120 @@ pub mod transport {
         }
     }
 }
+
+pub mod classification {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum PassableCategory {
+        Scalar,
+        Blittable,
+        WireEncoded,
+    }
+
+    pub fn classify_struct(is_repr_c: bool, field_types: &[FieldPrimitive]) -> PassableCategory {
+        if is_repr_c && !field_types.is_empty() && field_types.iter().all(|f| f.is_fixed_width) {
+            PassableCategory::Blittable
+        } else {
+            PassableCategory::WireEncoded
+        }
+    }
+
+    pub fn classify_enum(is_c_style: bool, has_integer_repr: bool) -> PassableCategory {
+        if is_c_style && has_integer_repr {
+            PassableCategory::Scalar
+        } else {
+            PassableCategory::WireEncoded
+        }
+    }
+
+    #[derive(Debug, Clone, Copy)]
+    pub struct FieldPrimitive {
+        pub is_fixed_width: bool,
+    }
+
+    impl FieldPrimitive {
+        pub fn fixed() -> Self {
+            Self {
+                is_fixed_width: true,
+            }
+        }
+
+        pub fn platform_sized() -> Self {
+            Self {
+                is_fixed_width: false,
+            }
+        }
+
+        pub fn from_type_name(name: &str) -> Option<Self> {
+            match name {
+                "i8" | "u8" | "i16" | "u16" | "i32" | "u32" | "i64" | "u64" | "f32" | "f64"
+                | "bool" => Some(Self::fixed()),
+                "isize" | "usize" => Some(Self::platform_sized()),
+                _ => None,
+            }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn c_style_enum_with_repr_is_scalar() {
+            assert_eq!(
+                classify_enum(true, true),
+                PassableCategory::Scalar
+            );
+        }
+
+        #[test]
+        fn data_enum_is_wire_encoded() {
+            assert_eq!(
+                classify_enum(false, true),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn c_style_enum_without_repr_is_wire_encoded() {
+            assert_eq!(
+                classify_enum(true, false),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn all_fixed_width_struct_is_blittable() {
+            let fields = vec![FieldPrimitive::fixed(), FieldPrimitive::fixed()];
+            assert_eq!(
+                classify_struct(true, &fields),
+                PassableCategory::Blittable
+            );
+        }
+
+        #[test]
+        fn struct_with_platform_sized_is_wire_encoded() {
+            let fields = vec![FieldPrimitive::fixed(), FieldPrimitive::platform_sized()];
+            assert_eq!(
+                classify_struct(true, &fields),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn struct_without_repr_c_is_wire_encoded() {
+            let fields = vec![FieldPrimitive::fixed()];
+            assert_eq!(
+                classify_struct(false, &fields),
+                PassableCategory::WireEncoded
+            );
+        }
+
+        #[test]
+        fn empty_struct_is_wire_encoded() {
+            assert_eq!(
+                classify_struct(true, &[]),
+                PassableCategory::WireEncoded
+            );
+        }
+    }
+}

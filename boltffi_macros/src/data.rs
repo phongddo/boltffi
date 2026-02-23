@@ -1,3 +1,4 @@
+use boltffi_ffi_rules::classification::{self, FieldPrimitive, PassableCategory};
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
 use syn::Fields;
@@ -7,6 +8,10 @@ use crate::wire_gen;
 
 fn is_c_style_enum(item_enum: &syn::ItemEnum) -> bool {
     item_enum.variants.iter().all(|v| v.fields.is_empty())
+}
+
+fn has_integer_repr(attrs: &[syn::Attribute]) -> bool {
+    extract_integer_repr(attrs).is_some()
 }
 
 fn extract_integer_repr(attrs: &[syn::Attribute]) -> Option<syn::Ident> {
@@ -27,6 +32,16 @@ fn extract_integer_repr(attrs: &[syn::Attribute]) -> Option<syn::Ident> {
                 })
             })
         })
+}
+
+fn type_to_field_primitive(ty: &syn::Type) -> Option<FieldPrimitive> {
+    match ty {
+        syn::Type::Path(path) => path
+            .path
+            .get_ident()
+            .and_then(|ident| FieldPrimitive::from_type_name(&ident.to_string())),
+        _ => None,
+    }
 }
 
 fn generate_passable_for_scalar_enum(
@@ -92,16 +107,42 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
         };
         let wire_impls = wire_gen::generate_wire_impls(&item_struct, &custom_types);
 
-        let field_types: Vec<&syn::Type> = match &item_struct.fields {
-            Fields::Named(named) => named.named.iter().map(|f| &f.ty).collect(),
-            Fields::Unnamed(unnamed) => unnamed.unnamed.iter().map(|f| &f.ty).collect(),
+        let has_repr_c = item_struct.attrs.iter().any(|a| {
+            a.path().is_ident("repr")
+                && a.parse_args::<syn::Ident>()
+                    .is_ok_and(|ident| ident == "C")
+        });
+        let field_primitives: Vec<FieldPrimitive> = match &item_struct.fields {
+            Fields::Named(named) => named
+                .named
+                .iter()
+                .filter_map(|f| type_to_field_primitive(&f.ty))
+                .collect(),
+            Fields::Unnamed(unnamed) => unnamed
+                .unnamed
+                .iter()
+                .filter_map(|f| type_to_field_primitive(&f.ty))
+                .collect(),
             Fields::Unit => vec![],
         };
-        let passable_impl = if wire_gen::is_struct_blittable(&field_types) {
-            generate_passable_for_blittable_struct(struct_name)
-        } else {
-            generate_passable_for_wire_encoded(struct_name)
+        let total_fields = match &item_struct.fields {
+            Fields::Named(named) => named.named.len(),
+            Fields::Unnamed(unnamed) => unnamed.unnamed.len(),
+            Fields::Unit => 0,
         };
+        let all_primitive = field_primitives.len() == total_fields;
+        let classify_fields: Vec<FieldPrimitive> = if all_primitive {
+            field_primitives
+        } else {
+            vec![]
+        };
+        let passable_impl =
+            match classification::classify_struct(has_repr_c, &classify_fields) {
+                PassableCategory::Blittable => {
+                    generate_passable_for_blittable_struct(struct_name)
+                }
+                _ => generate_passable_for_wire_encoded(struct_name),
+            };
 
         return TokenStream::from(quote! {
             #item_struct
@@ -136,12 +177,16 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
         let wire_impls = wire_gen::generate_enum_wire_impls(&item_enum, &custom_types);
 
         let enum_name = &item_enum.ident;
-        let passable_impl = if is_c_style_enum(&item_enum) {
-            let repr_type = extract_integer_repr(&item_enum.attrs)
-                .unwrap_or_else(|| syn::Ident::new("i32", enum_name.span()));
-            generate_passable_for_scalar_enum(enum_name, &repr_type)
-        } else {
-            generate_passable_for_wire_encoded(enum_name)
+        let passable_impl = match classification::classify_enum(
+            is_c_style_enum(&item_enum),
+            has_integer_repr(&item_enum.attrs),
+        ) {
+            PassableCategory::Scalar => {
+                let repr_type = extract_integer_repr(&item_enum.attrs)
+                    .unwrap_or_else(|| syn::Ident::new("i32", enum_name.span()));
+                generate_passable_for_scalar_enum(enum_name, &repr_type)
+            }
+            _ => generate_passable_for_wire_encoded(enum_name),
         };
 
         return TokenStream::from(quote! {

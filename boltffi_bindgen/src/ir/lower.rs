@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
+use boltffi_ffi_rules::classification::{self, PassableCategory};
 use boltffi_ffi_rules::naming;
 
 use crate::ir::abi::{
@@ -1762,10 +1763,24 @@ impl<'c> Lowerer<'c> {
     }
 
     fn is_blittable_record(&self, def: &RecordDef) -> bool {
-        def.fields.iter().all(|f| match &f.type_expr {
-            TypeExpr::Primitive(p) => !p.is_platform_sized(),
-            _ => false,
-        })
+        let field_primitives: Vec<_> = def
+            .fields
+            .iter()
+            .filter_map(|f| match &f.type_expr {
+                TypeExpr::Primitive(p) => Some(p.to_field_primitive()),
+                _ => None,
+            })
+            .collect();
+        let all_primitive = field_primitives.len() == def.fields.len();
+        let classify_fields = if all_primitive {
+            &field_primitives[..]
+        } else {
+            &[]
+        };
+        matches!(
+            classification::classify_struct(true, classify_fields),
+            PassableCategory::Blittable,
+        )
     }
 
     fn build_blittable_record_layout(&self, def: &RecordDef) -> RecordLayout {
