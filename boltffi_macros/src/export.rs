@@ -381,6 +381,45 @@ pub fn ffi_export_impl(item: TokenStream) -> TokenStream {
                 encode_body,
             );
         }
+        ReturnAbi::Passable { rust_type } => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    ::boltffi::__private::Passable::pack(#fn_name(#(#call_args),*))
+                }
+            } else {
+                quote! {
+                    ::boltffi::__private::Passable::pack(#fn_name(#(#call_args),*))
+                }
+            };
+
+            let return_type =
+                quote! { <#rust_type as ::boltffi::__private::Passable>::Out };
+
+            if has_params {
+                quote! {
+                    #input
+
+                    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                    #[unsafe(no_mangle)]
+                    #fn_vis unsafe extern "C" fn #export_ident(
+                        #(#ffi_params),*
+                    ) -> #return_type {
+                        #body
+                    }
+                }
+            } else {
+                quote! {
+                    #input
+
+                    #[allow(clippy::not_unsafe_ptr_arg_deref)]
+                    #[unsafe(no_mangle)]
+                    #fn_vis extern "C" fn #export_ident() -> #return_type {
+                        #body
+                    }
+                }
+            }
+        }
     };
 
     TokenStream::from(expanded)
@@ -494,7 +533,7 @@ fn generate_async_export(
                 }
             }
         }
-        _ => {
+        ReturnAbi::Encoded { .. } => {
             quote! {
                 #[cfg(target_arch = "wasm32")]
                 #[unsafe(no_mangle)]
@@ -511,6 +550,20 @@ fn generate_async_export(
                         None => ::boltffi::__private::FfiBuf::empty(),
                     };
                     out.write(buf);
+                }
+            }
+        }
+        ReturnAbi::Passable { rust_type } => {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                #fn_vis unsafe extern "C" fn #complete_ident(
+                    handle: ::boltffi::__private::RustFutureHandle,
+                ) -> <#rust_type as ::boltffi::__private::Passable>::Out {
+                    match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                        Some(result) => ::boltffi::__private::Passable::pack(result),
+                        None => Default::default(),
+                    }
                 }
             }
         }

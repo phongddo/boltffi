@@ -51,7 +51,6 @@ pub struct WireEncodedParam {
 pub enum WireEncodedParamKind {
     Vec,
     Option,
-    Record,
 }
 
 pub fn extract_closure_signature(ty: &Type) -> Option<(Vec<syn::Type>, Option<syn::Type>)> {

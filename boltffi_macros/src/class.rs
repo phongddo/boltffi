@@ -596,6 +596,21 @@ fn generate_method_export(
             );
             (body, quote! { -> ::boltffi::__private::FfiBuf<u8> }, true)
         }
+        ReturnAbi::Passable { rust_type } => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    ::boltffi::__private::Passable::pack(#call_expr)
+                }
+            } else {
+                quote! {
+                    ::boltffi::__private::Passable::pack(#call_expr)
+                }
+            };
+            let return_type =
+                quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
+            (body, return_type, false)
+        }
     };
 
     if is_wire_encoded {
@@ -731,6 +746,21 @@ fn generate_static_method_export(
             );
             (body, quote! { -> ::boltffi::__private::FfiBuf<u8> }, true)
         }
+        ReturnAbi::Passable { rust_type } => {
+            let body = if has_conversions {
+                quote! {
+                    #(#conversions)*
+                    ::boltffi::__private::Passable::pack(#call_expr)
+                }
+            } else {
+                quote! {
+                    ::boltffi::__private::Passable::pack(#call_expr)
+                }
+            };
+            let return_type =
+                quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out };
+            (body, return_type, false)
+        }
     };
 
     if is_wire_encoded {
@@ -863,22 +893,40 @@ fn generate_async_method_export(
         }
     };
 
-    let wasm_complete_fn = quote! {
-        #[cfg(target_arch = "wasm32")]
-        #[unsafe(no_mangle)]
-        pub unsafe extern "C" fn #complete_ident(
-            out: *mut ::boltffi::__private::FfiBuf<u8>,
-            handle: ::boltffi::__private::RustFutureHandle,
-            _out_status: *mut ::boltffi::__private::FfiStatus,
-        ) {
-            if out.is_null() {
-                return;
+    let wasm_complete_fn = match &return_abi {
+        ReturnAbi::Passable { rust_type } => {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #complete_ident(
+                    handle: ::boltffi::__private::RustFutureHandle,
+                ) -> <#rust_type as ::boltffi::__private::Passable>::Out {
+                    match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                        Some(result) => ::boltffi::__private::Passable::pack(result),
+                        None => Default::default(),
+                    }
+                }
             }
-            let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                Some(result) => ::boltffi::__private::FfiBuf::wire_encode(&result),
-                None => ::boltffi::__private::FfiBuf::empty(),
-            };
-            out.write(buf);
+        }
+        _ => {
+            quote! {
+                #[cfg(target_arch = "wasm32")]
+                #[unsafe(no_mangle)]
+                pub unsafe extern "C" fn #complete_ident(
+                    out: *mut ::boltffi::__private::FfiBuf<u8>,
+                    handle: ::boltffi::__private::RustFutureHandle,
+                    _out_status: *mut ::boltffi::__private::FfiStatus,
+                ) {
+                    if out.is_null() {
+                        return;
+                    }
+                    let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
+                        Some(result) => ::boltffi::__private::FfiBuf::wire_encode(&result),
+                        None => ::boltffi::__private::FfiBuf::empty(),
+                    };
+                    out.write(buf);
+                }
+            }
         }
     };
 

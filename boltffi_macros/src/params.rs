@@ -317,7 +317,6 @@ fn wire_empty_value_expression(kind: WireEncodedParamKind) -> proc_macro2::Token
     match kind {
         WireEncodedParamKind::Vec => quote! { Vec::new() },
         WireEncodedParamKind::Option => quote! { None },
-        WireEncodedParamKind::Record => quote! {},
     }
 }
 
@@ -337,97 +336,47 @@ fn wire_decode_conversion(
         let wire_value_ident = syn::Ident::new("__boltffi_wire_value", name.span());
         let from_wire = from_wire_expr_owned(rust_type, custom_types, &wire_value_ident);
 
-        return match wire_param.kind {
-            WireEncodedParamKind::Vec | WireEncodedParamKind::Option => {
-                let empty_value = wire_empty_value_expression(wire_param.kind);
-                quote! {
-                    let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
+        let empty_value = wire_empty_value_expression(wire_param.kind);
+        return quote! {
+            let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
+                #empty_value
+            } else {
+                let __bytes = #bytes_expr;
+                match ::boltffi::__private::wire::decode::<#wire_ty>(__bytes) {
+                    Ok(#wire_value_ident) => { #from_wire },
+                    Err(error) => {
+                        ::boltffi::__private::set_last_error(format!(
+                            "{}: wire decode failed: {} (buf_len={})",
+                            stringify!(#name),
+                            error,
+                            #len_name
+                        ));
                         #empty_value
-                    } else {
-                        let __bytes = #bytes_expr;
-                        match ::boltffi::__private::wire::decode::<#wire_ty>(__bytes) {
-                            Ok(#wire_value_ident) => { #from_wire },
-                            Err(error) => {
-                                ::boltffi::__private::set_last_error(format!(
-                                    "{}: wire decode failed: {} (buf_len={})",
-                                    stringify!(#name),
-                                    error,
-                                    #len_name
-                                ));
-                                #empty_value
-                            }
-                        }
-                    };
+                    }
                 }
-            }
-            WireEncodedParamKind::Record => quote! {
-                let #name: #rust_type = {
-                    assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                    let __bytes = #bytes_expr;
-                    let #wire_value_ident: #wire_ty = ::boltffi::__private::wire::decode(__bytes)
-                        .unwrap_or_else(|error| {
-                            ::boltffi::__private::set_last_error(format!(
-                                "{}: wire decode failed: {} (buf_len={})",
-                                stringify!(#name),
-                                error,
-                                #len_name
-                            ));
-                            panic!(
-                                "{}: wire decode failed: {} (buf_len={})",
-                                stringify!(#name),
-                                error,
-                                #len_name
-                            )
-                        });
-                    #from_wire
-                };
-            },
+            };
         };
     }
 
-    match wire_param.kind {
-        WireEncodedParamKind::Vec | WireEncodedParamKind::Option => {
-            let empty_value = wire_empty_value_expression(wire_param.kind);
-            quote! {
-                let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
-                    #empty_value
-                } else {
-                    let __bytes = #bytes_expr;
-                    match ::boltffi::__private::wire::decode::<#rust_type>(__bytes) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            ::boltffi::__private::set_last_error(format!(
-                                "{}: wire decode failed: {} (buf_len={})",
-                                stringify!(#name),
-                                error,
-                                #len_name
-                            ));
-                            #empty_value
-                        }
-                    }
-                };
-            }
-        }
-        WireEncodedParamKind::Record => quote! {
-            let #name: #rust_type = {
-                assert!(!#ptr_name.is_null(), concat!(stringify!(#name), ": null pointer"));
-                let __bytes = #bytes_expr;
-                ::boltffi::__private::wire::decode(__bytes).unwrap_or_else(|error| {
+    let empty_value = wire_empty_value_expression(wire_param.kind);
+    quote! {
+        let #name: #rust_type = if #ptr_name.is_null() || #len_name == 0 {
+            #empty_value
+        } else {
+            let __bytes = #bytes_expr;
+            match ::boltffi::__private::wire::decode::<#rust_type>(__bytes) {
+                Ok(value) => value,
+                Err(error) => {
                     ::boltffi::__private::set_last_error(format!(
                         "{}: wire decode failed: {} (buf_len={})",
                         stringify!(#name),
                         error,
                         #len_name
                     ));
-                    panic!(
-                        "{}: wire decode failed: {} (buf_len={})",
-                        stringify!(#name),
-                        error,
-                        #len_name
-                    )
-                })
-            };
-        },
+                    #empty_value
+                }
+            }
+        };
     }
 }
 
