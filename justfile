@@ -158,11 +158,12 @@ bench-wasm:
     wasm-bindgen --target experimental-nodejs-module --out-dir dist target/wasm32-unknown-unknown/release/bench_wasm_bindgen.wasm
     
     echo "=== Copying to benchmark runner ==="
+    mkdir -p ../wasm-bench/boltffi ../wasm-bench/wasmbindgen
     cp -r ../rust-boltffi/dist/wasm/pkg/* ../wasm-bench/boltffi/
     cp -r dist/* ../wasm-bench/wasmbindgen/
     
     echo "=== Running benchmarks ==="
-    cd ../wasm-bench && node bench.mjs
+    cd ../wasm-bench && npm ci --silent && node bench.mjs
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Clean

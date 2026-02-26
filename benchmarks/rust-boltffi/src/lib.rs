@@ -730,6 +730,19 @@ pub fn direction_to_degrees(dir: Direction) -> i32 {
     }
 }
 
+/// Generates a vector of cycling cardinal directions.
+#[export]
+pub fn generate_directions(count: i32) -> Vec<Direction> {
+    let variants = [Direction::North, Direction::East, Direction::South, Direction::West];
+    (0..count as usize).map(|i| variants[i % 4]).collect()
+}
+
+/// Counts how many directions in the vector are North.
+#[export]
+pub fn count_north(directions: Vec<Direction>) -> i32 {
+    directions.iter().filter(|d| **d == Direction::North).count() as i32
+}
+
 /// Returns the value if it is even, or None if odd.
 #[export]
 pub fn find_even(value: i32) -> Option<i32> {

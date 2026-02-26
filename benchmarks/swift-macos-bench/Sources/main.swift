@@ -252,6 +252,23 @@ benchmark("boltffi_data_enum_input") {
     _ = BenchBoltFFI.isStatusComplete(status: .completed(result: 100))
 }
 
+let boltffiDirections1k = BenchBoltFFI.generateDirections(count: 1000)
+let boltffiDirections10k = BenchBoltFFI.generateDirections(count: 10000)
+let uniffiDirections1k = BenchUniffi.generateDirections(count: 1000)
+let uniffiDirections10k = BenchUniffi.generateDirections(count: 10000)
+
+benchmark("boltffi_generate_directions_1k") { _ = BenchBoltFFI.generateDirections(count: 1000) }
+benchmark("uniffi_generate_directions_1k") { _ = BenchUniffi.generateDirections(count: 1000) }
+
+benchmark("boltffi_generate_directions_10k") { _ = BenchBoltFFI.generateDirections(count: 10000) }
+benchmark("uniffi_generate_directions_10k") { _ = BenchUniffi.generateDirections(count: 10000) }
+
+benchmark("boltffi_count_north_1k") { _ = BenchBoltFFI.countNorth(directions: boltffiDirections1k) }
+benchmark("uniffi_count_north_1k") { _ = BenchUniffi.countNorth(directions: uniffiDirections1k) }
+
+benchmark("boltffi_count_north_10k") { _ = BenchBoltFFI.countNorth(directions: boltffiDirections10k) }
+benchmark("uniffi_count_north_10k") { _ = BenchUniffi.countNorth(directions: uniffiDirections10k) }
+
 benchmark("boltffi_find_even") {
     for i: Int32 in 0 ..< 100 {
         _ = BenchBoltFFI.findEven(value: i)
