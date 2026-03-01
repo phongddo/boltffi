@@ -1,9 +1,14 @@
+use boltffi_ffi_rules::primitive::Primitive;
 pub use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 use proc_macro2::Span;
 use quote::quote;
 use syn::{ReturnType, Type};
 
-use crate::custom_types;
+use crate::custom_types::{self, CustomTypeRegistry};
+use crate::data_types;
+use crate::type_classification::{
+    NamedTypeTransport, classify_named_type_transport, supports_direct_vec_transport,
+};
 
 pub enum OptionReturnAbi {
     OutValue { inner: syn::Type },
@@ -66,22 +71,7 @@ fn is_string_like_type(ty: &Type) -> bool {
 }
 
 pub fn is_primitive_type(s: &str) -> bool {
-    matches!(
-        s,
-        "i8" | "i16"
-            | "i32"
-            | "i64"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-            | "f32"
-            | "f64"
-            | "bool"
-            | "usize"
-            | "isize"
-            | "()"
-    )
+    s == "()" || s.parse::<Primitive>().is_ok()
 }
 
 pub fn classify_return(output: &ReturnType) -> ReturnKind {
@@ -167,7 +157,10 @@ pub fn type_is_primitive(ty: &Type) -> bool {
     is_primitive_type(&type_str)
 }
 
-pub fn lower_return_abi(kind: ReturnKind) -> ReturnAbi {
+pub fn lower_return_abi(kind: ReturnKind, custom_types: &CustomTypeRegistry) -> ReturnAbi {
+    let data_types = data_types::registry_for_current_crate()
+        .ok()
+        .unwrap_or_default();
     match kind {
         ReturnKind::Unit => ReturnAbi::Unit,
         ReturnKind::Primitive(rust_type) => ReturnAbi::Scalar { rust_type },
@@ -176,16 +169,14 @@ pub fn lower_return_abi(kind: ReturnKind) -> ReturnAbi {
             strategy: EncodedReturnStrategy::Utf8String,
         },
         ReturnKind::Vec(inner) => {
-            let is_nested = extract_vec_inner(&inner).is_some()
-                || is_string_like_type(&inner)
-                || matches!(inner, syn::Type::Tuple(_));
+            let strategy = if supports_direct_vec_transport(&inner, custom_types, &data_types) {
+                EncodedReturnStrategy::DirectVec
+            } else {
+                EncodedReturnStrategy::WireEncoded
+            };
             ReturnAbi::Encoded {
                 rust_type: syn::parse_quote!(Vec<#inner>),
-                strategy: if is_nested {
-                    EncodedReturnStrategy::WireEncoded
-                } else {
-                    EncodedReturnStrategy::DirectVec
-                },
+                strategy,
             }
         }
         ReturnKind::Option(abi) => match abi {
@@ -221,13 +212,21 @@ pub fn lower_return_abi(kind: ReturnKind) -> ReturnAbi {
             rust_type: result_rust_type(syn::parse_quote!(()), err),
             strategy: EncodedReturnStrategy::WireEncoded,
         },
-        ReturnKind::WireEncoded(rust_type) => ReturnAbi::Passable { rust_type },
+        ReturnKind::WireEncoded(rust_type) => {
+            match classify_named_type_transport(&rust_type, custom_types, &data_types) {
+                NamedTypeTransport::Passable => ReturnAbi::Passable { rust_type },
+                NamedTypeTransport::WireEncoded => ReturnAbi::Encoded {
+                    rust_type,
+                    strategy: EncodedReturnStrategy::WireEncoded,
+                },
+            }
+        }
     }
 }
 
 impl ReturnAbi {
-    pub fn from_output(output: &ReturnType) -> Self {
-        lower_return_abi(classify_return(output))
+    pub fn from_output(output: &ReturnType, custom_types: &CustomTypeRegistry) -> Self {
+        lower_return_abi(classify_return(output), custom_types)
     }
 
     pub fn async_ffi_return_type(&self) -> proc_macro2::TokenStream {
@@ -318,7 +317,7 @@ pub fn encoded_return_body(
     }
 }
 
-fn encoded_return_buffer_expression(
+pub fn encoded_return_buffer_expression(
     rust_type: &syn::Type,
     strategy: EncodedReturnStrategy,
     result_ident: &syn::Ident,

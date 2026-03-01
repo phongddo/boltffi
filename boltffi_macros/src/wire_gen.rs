@@ -1,3 +1,4 @@
+use boltffi_ffi_rules::primitive::Primitive;
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{Fields, ItemEnum, ItemStruct, Type};
@@ -6,29 +7,10 @@ use crate::custom_types::{CustomTypeRegistry, contains_custom_types};
 
 pub fn is_primitive_type(ty: &Type) -> bool {
     match ty {
-        Type::Path(type_path) => {
-            if let Some(ident) = type_path.path.get_ident() {
-                let name = ident.to_string();
-                matches!(
-                    name.as_str(),
-                    "bool"
-                        | "i8"
-                        | "u8"
-                        | "i16"
-                        | "u16"
-                        | "i32"
-                        | "u32"
-                        | "i64"
-                        | "u64"
-                        | "f32"
-                        | "f64"
-                        | "isize"
-                        | "usize"
-                )
-            } else {
-                false
-            }
-        }
+        Type::Path(path) => path
+            .path
+            .get_ident()
+            .is_some_and(|ident| ident.to_string().parse::<Primitive>().is_ok()),
         _ => false,
     }
 }

@@ -4,6 +4,7 @@ use quote::{format_ident, quote};
 use syn::Fields;
 
 use crate::custom_types;
+use crate::data_types::{extract_integer_repr, has_repr_c};
 use crate::wire_gen;
 
 fn is_c_style_enum(item_enum: &syn::ItemEnum) -> bool {
@@ -12,26 +13,6 @@ fn is_c_style_enum(item_enum: &syn::ItemEnum) -> bool {
 
 fn has_integer_repr(attrs: &[syn::Attribute]) -> bool {
     extract_integer_repr(attrs).is_some()
-}
-
-fn extract_integer_repr(attrs: &[syn::Attribute]) -> Option<syn::Ident> {
-    attrs
-        .iter()
-        .filter(|a| a.path().is_ident("repr"))
-        .find_map(|attr| {
-            attr.parse_args_with(
-                syn::punctuated::Punctuated::<syn::Ident, syn::Token![,]>::parse_terminated,
-            )
-            .ok()
-            .and_then(|idents| {
-                idents.into_iter().find(|ident| {
-                    matches!(
-                        ident.to_string().as_str(),
-                        "i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" | "isize" | "usize"
-                    )
-                })
-            })
-        })
 }
 
 fn type_to_field_primitive(ty: &syn::Type) -> Option<FieldPrimitive> {
@@ -47,7 +28,16 @@ fn type_to_field_primitive(ty: &syn::Type) -> Option<FieldPrimitive> {
 fn generate_passable_for_scalar_enum(
     enum_name: &syn::Ident,
     repr_type: &syn::Ident,
+    variants: &syn::punctuated::Punctuated<syn::Variant, syn::Token![,]>,
 ) -> proc_macro2::TokenStream {
+    let match_arms: Vec<proc_macro2::TokenStream> = variants
+        .iter()
+        .map(|variant| {
+            let variant_name = &variant.ident;
+            quote! { value if value == (#enum_name::#variant_name as #repr_type) => #enum_name::#variant_name }
+        })
+        .collect();
+
     quote! {
         unsafe impl ::boltffi::__private::Passable for #enum_name {
             type In = #repr_type;
@@ -58,7 +48,10 @@ fn generate_passable_for_scalar_enum(
             }
 
             unsafe fn unpack(input: #repr_type) -> Self {
-                unsafe { ::core::mem::transmute(input) }
+                match input {
+                    #(#match_arms,)*
+                    _ => ::core::panic!("invalid enum discriminant"),
+                }
             }
         }
 
@@ -137,11 +130,7 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
         };
         let wire_impls = wire_gen::generate_wire_impls(&item_struct, &custom_types);
 
-        let has_repr_c = item_struct.attrs.iter().any(|a| {
-            a.path().is_ident("repr")
-                && a.parse_args::<syn::Ident>()
-                    .is_ok_and(|ident| ident == "C")
-        });
+        let struct_has_repr_c = has_repr_c(&item_struct.attrs);
         let field_primitives: Vec<FieldPrimitive> = match &item_struct.fields {
             Fields::Named(named) => named
                 .named
@@ -167,10 +156,8 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
             vec![]
         };
         let passable_impl =
-            match classification::classify_struct(has_repr_c, &classify_fields) {
-                PassableCategory::Blittable => {
-                    generate_passable_for_blittable_struct(struct_name)
-                }
+            match classification::classify_struct(struct_has_repr_c, &classify_fields) {
+                PassableCategory::Blittable => generate_passable_for_blittable_struct(struct_name),
                 _ => generate_passable_for_wire_encoded(struct_name),
             };
 
@@ -214,7 +201,7 @@ pub fn data_impl(item: TokenStream) -> TokenStream {
             PassableCategory::Scalar => {
                 let repr_type = extract_integer_repr(&item_enum.attrs)
                     .unwrap_or_else(|| syn::Ident::new("i32", enum_name.span()));
-                generate_passable_for_scalar_enum(enum_name, &repr_type)
+                generate_passable_for_scalar_enum(enum_name, &repr_type, &item_enum.variants)
             }
             _ => generate_passable_for_wire_encoded(enum_name),
         };
@@ -248,5 +235,15 @@ fn strip_boltffi_field_attrs(fields: &mut syn::Fields) {
 }
 
 pub fn derive_data_impl(_input: TokenStream) -> TokenStream {
-    TokenStream::new()
+    let derive_input = match syn::parse::<syn::DeriveInput>(_input) {
+        Ok(derive_input) => derive_input,
+        Err(error) => return error.to_compile_error().into(),
+    };
+
+    syn::Error::new_spanned(
+        derive_input.ident,
+        "#[derive(Data)] is not supported; use #[data] or #[error] instead",
+    )
+    .to_compile_error()
+    .into()
 }
