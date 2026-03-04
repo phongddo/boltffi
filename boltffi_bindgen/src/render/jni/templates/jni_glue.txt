@@ -7,11 +7,6 @@
 #include <stdatomic.h>
 #include "{{ module_name }}.h"
 
-static inline void boltffi_free_buf_raw(uint8_t* ptr, size_t len) {
-    FfiBuf_u8 buf = { ptr, len, len, 1 };
-    {{ prefix }}_free_buf(buf);
-}
-
 static inline bool boltffi_exception_pending(JNIEnv* env) {
     return (*env)->ExceptionCheck(env);
 }
@@ -52,18 +47,18 @@ static inline jbyteArray boltffi_buf_to_jbytearray(JNIEnv* env, FfiBuf_u8 buf) {
         return NULL;
     }
     if (buf.len > (size_t)INT32_MAX) {
-        boltffi_free_buf_raw(buf.ptr, buf.len);
+        {{ prefix }}_free_buf(buf);
         boltffi_throw_out_of_memory(env, "BoltFFI buffer too large for Java byte array");
         return NULL;
     }
     jsize len = (jsize)buf.len;
     jbyteArray arr = (*env)->NewByteArray(env, len);
     if (arr == NULL) {
-        boltffi_free_buf_raw(buf.ptr, buf.len);
+        {{ prefix }}_free_buf(buf);
         return NULL;
     }
     (*env)->SetByteArrayRegion(env, arr, 0, len, (const jbyte*)buf.ptr);
-    boltffi_free_buf_raw(buf.ptr, buf.len);
+    {{ prefix }}_free_buf(buf);
     if (boltffi_exception_pending(env)) {
         (*env)->DeleteLocalRef(env, arr);
         return NULL;
@@ -74,7 +69,7 @@ static inline jbyteArray boltffi_buf_to_jbytearray(JNIEnv* env, FfiBuf_u8 buf) {
 static inline jbyteArray boltffi_status_buf_to_jbytearray(JNIEnv* env, FfiStatus status, FfiBuf_u8 buf) {
     if (status.code != 0) {
         if (buf.ptr != NULL) {
-            boltffi_free_buf_raw(buf.ptr, buf.len);
+            {{ prefix }}_free_buf(buf);
         }
         return NULL;
     }
@@ -347,6 +342,7 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
             _result.ptr = _ptr;
             _result.len = (size_t)_len;
             _result.cap = (size_t)_len;
+            _result.align = 1;
         }
         (*env)->DeleteLocalRef(env, _jarr);
     }
@@ -548,7 +544,7 @@ JNIEXPORT jbyteArray JNICALL {{ stream.pop_batch_jni }}(JNIEnv *env, jclass cls,
     }
     FfiBuf_u8 _buf = {{ stream.pop_batch_ffi }}((SubscriptionHandle)subscription_handle, _max_count);
     if (_buf.len == 0) {
-        if (_buf.ptr != NULL) boltffi_free_buf_raw(_buf.ptr, _buf.len);
+        if (_buf.ptr != NULL) {{ prefix }}_free_buf(_buf);
         return (*env)->NewByteArray(env, 0);
     }
     return boltffi_buf_to_jbytearray(env, _buf);

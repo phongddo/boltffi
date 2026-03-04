@@ -45,16 +45,19 @@ macro_rules! impl_vec_direct {
     };
 }
 
-impl_passable_scalar!(i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bool, usize, isize);
-impl_vec_direct!(i8, i16, i32, i64, u16, u32, u64, f32, f64, bool, usize, isize);
+impl_passable_scalar!(
+    i8, i16, i32, i64, u8, u16, u32, u64, f32, f64, bool, usize, isize
+);
+impl_vec_direct!(
+    i8, i16, i32, i64, u16, u32, u64, f32, f64, bool, usize, isize
+);
 
 impl VecTransport<u8> for Seal {
     fn pack(vec: Vec<u8>) -> FfiBuf {
-        FfiBuf::wire_encode(&vec)
+        FfiBuf::from_vec(vec)
     }
     unsafe fn unpack(ptr: *const u8, byte_len: usize) -> Vec<u8> {
-        let bytes = unsafe { core::slice::from_raw_parts(ptr, byte_len) };
-        crate::wire::decode(bytes).expect("VecTransport<u8>::unpack: wire decode failed")
+        unsafe { core::slice::from_raw_parts(ptr, byte_len) }.to_vec()
     }
 }
 

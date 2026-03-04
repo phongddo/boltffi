@@ -25,7 +25,12 @@ impl FfiBuf {
         let cap = vec.capacity() * mem::size_of::<T>();
         let align = mem::align_of::<T>();
         let ptr = vec.as_mut_ptr() as *mut u8;
-        Self { ptr, len, cap, align }
+        Self {
+            ptr,
+            len,
+            cap,
+            align,
+        }
     }
 
     pub fn wire_encode<V: WireEncode>(value: &V) -> Self {
@@ -34,6 +39,14 @@ impl FfiBuf {
 
     pub fn len(&self) -> usize {
         self.len
+    }
+
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
+    pub fn align(&self) -> usize {
+        self.align
     }
 
     pub fn is_empty(&self) -> bool {
@@ -72,9 +85,8 @@ impl FfiBuf {
 impl Drop for FfiBuf {
     fn drop(&mut self) {
         if !self.ptr.is_null() && self.cap > 0 {
-            unsafe {
-                let layout = core::alloc::Layout::from_size_align_unchecked(self.cap, self.align);
-                std::alloc::dealloc(self.ptr, layout);
+            if let Ok(layout) = core::alloc::Layout::from_size_align(self.cap, self.align) {
+                unsafe { std::alloc::dealloc(self.ptr, layout) };
             }
         }
     }

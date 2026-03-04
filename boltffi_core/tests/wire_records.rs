@@ -6,8 +6,8 @@ extern crate self as boltffi;
 pub mod __private {
     pub use boltffi_core::{
         EventSubscription, FfiBuf, FfiSpan, FfiStatus, Passable, RustFutureContinuationCallback,
-        RustFutureHandle, StreamContinuationCallback, StreamPollResult, SubscriptionHandle,
-        WaitResult, WirePassable, rustfuture, wire,
+        RustFutureHandle, Seal, StreamContinuationCallback, StreamPollResult, SubscriptionHandle,
+        VecTransport, WaitResult, WirePassable, rustfuture, wire,
     };
 }
 

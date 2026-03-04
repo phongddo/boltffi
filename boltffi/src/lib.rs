@@ -16,7 +16,7 @@ pub mod __private {
     pub use boltffi_core::{
         CallbackForeignType, CallbackHandle, EventSubscription, FfiBuf, FfiSpan, FfiStatus,
         FromCallbackHandle, Passable, RustFutureContinuationCallback, RustFutureHandle, Seal,
-        StreamContinuationCallback, StreamPollResult, SubscriptionHandle, VecTransport, WaitResult, WirePassable,
-        rustfuture, set_last_error, wire,
+        StreamContinuationCallback, StreamPollResult, SubscriptionHandle, VecTransport, WaitResult,
+        WirePassable, rustfuture, set_last_error, wire,
     };
 }

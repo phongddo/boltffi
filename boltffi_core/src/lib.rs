@@ -9,13 +9,13 @@ pub mod async_callback;
 pub mod callback;
 pub mod custom_ffi;
 pub mod handle;
+pub mod passable;
 pub mod pending;
 pub mod ringbuffer;
 pub mod rustfuture;
 pub mod safety;
 pub mod status;
 pub mod subscription;
-pub mod passable;
 pub mod types;
 pub mod wasm;
 pub mod wire;
@@ -35,6 +35,7 @@ pub use callback::WasmCallbackOwner;
 pub use callback::{CallbackForeignType, CallbackHandle, FromCallbackHandle};
 pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
+pub use passable::{Passable, Seal, VecTransport, WirePassable};
 pub use pending::{CancellationToken, PendingHandle};
 pub use ringbuffer::SpscRingBuffer;
 pub use rustfuture::{
@@ -48,7 +49,6 @@ pub use subscription::{
     EventSubscription, StreamContinuationCallback, StreamPollResult, StreamProducer,
     SubscriptionHandle, WaitResult,
 };
-pub use passable::{Passable, Seal, VecTransport, WirePassable};
 
 pub use types::{FfiBuf, FfiError, FfiOption, FfiSlice, FfiSpan, FfiString};
 pub use wasm::WASM_ABI_VERSION;

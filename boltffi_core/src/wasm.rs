@@ -73,6 +73,18 @@ pub(crate) fn boltffi_wasm_free_impl(ptr: usize, size: usize) {
 }
 
 #[cfg(any(test, target_arch = "wasm32"))]
+pub(crate) fn boltffi_wasm_free_buf_impl(ptr: usize, size: usize, align: usize) {
+    if ptr == 0 || size == 0 || align == 0 {
+        return;
+    }
+    let layout = match Layout::from_size_align(size, align) {
+        Ok(layout) => layout,
+        Err(_) => return,
+    };
+    unsafe { dealloc(ptr as *mut u8, layout) };
+}
+
+#[cfg(any(test, target_arch = "wasm32"))]
 pub(crate) unsafe fn boltffi_wasm_free_string_return_impl(ptr: usize, len: usize) {
     if ptr == 0 || len == 0 {
         return;
@@ -105,14 +117,16 @@ fn boltffi_wasm_realloc_impl(ptr: usize, old_size: usize, new_size: usize) -> us
 }
 
 #[cfg(target_arch = "wasm32")]
-static mut RETURN_SLOT: [u32; 2] = [0, 0];
+static mut RETURN_SLOT: [u32; 4] = [0, 0, 0, 0];
 
 #[cfg(target_arch = "wasm32")]
 #[inline(always)]
-pub fn write_return_slot(ptr: u32, len: u32) {
+pub fn write_return_slot(ptr: u32, len: u32, cap: u32, align: u32) {
     unsafe {
         core::ptr::write_volatile(&raw mut RETURN_SLOT[0], ptr);
         core::ptr::write_volatile(&raw mut RETURN_SLOT[1], len);
+        core::ptr::write_volatile(&raw mut RETURN_SLOT[2], cap);
+        core::ptr::write_volatile(&raw mut RETURN_SLOT[3], align);
     }
 }
 
@@ -153,13 +167,18 @@ mod exports {
     pub unsafe extern "C" fn boltffi_wasm_free_string_return(ptr: u32, len: u32) {
         unsafe { super::boltffi_wasm_free_string_return_impl(ptr as usize, len as usize) };
     }
+
+    #[unsafe(no_mangle)]
+    pub extern "C" fn boltffi_wasm_free_buf(ptr: u32, size: u32, align: u32) {
+        super::boltffi_wasm_free_buf_impl(ptr as usize, size as usize, align as usize);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        WASM_ABI_VERSION, boltffi_wasm_alloc_impl, boltffi_wasm_free_impl,
-        boltffi_wasm_free_string_return_impl, boltffi_wasm_realloc_impl,
+        WASM_ABI_VERSION, boltffi_wasm_alloc_impl, boltffi_wasm_free_buf_impl,
+        boltffi_wasm_free_impl, boltffi_wasm_free_string_return_impl, boltffi_wasm_realloc_impl,
     };
 
     #[test]
@@ -225,6 +244,13 @@ mod tests {
     fn free_ignores_zero_inputs() {
         boltffi_wasm_free_impl(0, 32);
         boltffi_wasm_free_impl(1024, 0);
+    }
+
+    #[test]
+    fn free_buf_releases_with_explicit_alignment() {
+        let pointer = boltffi_wasm_alloc_impl(64);
+        assert_ne!(pointer, 0);
+        boltffi_wasm_free_buf_impl(pointer, 64, 8);
     }
 
     #[test]
