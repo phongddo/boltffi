@@ -201,7 +201,7 @@ impl<'a> CHeaderLowerer<'a> {
             parts.push(format!("void (*callback)(uint64_t{})", ret_params));
             parts.push("uint64_t callback_data".to_string());
         } else {
-            parts.push("FfiStatus *status".to_string());
+            parts.push("FfiStatus *_out_status".to_string());
         }
 
         parts.join(", ")
@@ -429,8 +429,9 @@ impl<'a> CHeaderLowerer<'a> {
 mod tests {
     use crate::ir;
     use crate::model::{
-        Class, Constructor, Enumeration, Function, Method, Module, Parameter, Primitive, Receiver,
-        Record, RecordField, Type, Variant,
+        CallbackTrait, Class, Constructor, Enumeration, Function, Method, Module, Parameter,
+        Primitive, Receiver, Record, RecordField, ReturnType, TraitMethod, TraitMethodParam, Type,
+        Variant,
     };
 
     use super::CHeaderLowerer;
@@ -534,5 +535,29 @@ mod tests {
         assert!(header.contains("boltffi_free_buf(FfiBuf_u8 buf);"));
         assert!(header.contains("boltffi_last_error_message(FfiString *out);"));
         assert!(header.contains("boltffi_clear_last_error(void);"));
+    }
+
+    #[test]
+    fn callback_method_status_param_does_not_collide_with_out_status() {
+        let mut module = Module::new("test").with_callback_trait(
+            CallbackTrait::new("ValueListener").with_method(
+                TraitMethod::new("on_value")
+                    .with_param(TraitMethodParam::new(
+                        "status",
+                        Type::Primitive(Primitive::I32),
+                    ))
+                    .with_return(ReturnType::Void),
+            ),
+        );
+        let header = generate_header(&mut module);
+        assert!(
+            header.contains("_out_status"),
+            "sync callback method should use _out_status to avoid collision with user param 'status'"
+        );
+        let status_count = header.matches("status").count();
+        assert!(
+            status_count >= 2,
+            "header should contain both user param 'status' and '_out_status'"
+        );
     }
 }

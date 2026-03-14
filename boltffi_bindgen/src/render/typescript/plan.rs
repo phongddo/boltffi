@@ -486,7 +486,7 @@ fn primitive_buffer_alloc_method(abi_type: &AbiType) -> &'static str {
         AbiType::F64 => "allocF64Array",
         AbiType::Void
         | AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => {

@@ -620,7 +620,7 @@ impl<'c> Lowerer<'c> {
             AbiType::F64 => PrimitiveType::F64,
             AbiType::Void
             | AbiType::Pointer(_)
-            | AbiType::InlineCallbackFn(_)
+            | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
             | AbiType::CallbackHandle
             | AbiType::Struct(_) => {
@@ -1102,11 +1102,15 @@ impl<'c> Lowerer<'c> {
                 ..
             } => {
                 let ud_name = ParamName::new(format!("{}_ud", param.name.as_str()));
-                let fn_params = self.inline_callback_fn_abi_params(callback_id);
+                let (fn_params, fn_return_type) =
+                    self.inline_callback_fn_abi_signature(callback_id);
                 vec![
                     AbiParam {
                         name: param.name.clone(),
-                        abi_type: AbiType::InlineCallbackFn(fn_params),
+                        abi_type: AbiType::InlineCallbackFn {
+                            params: fn_params,
+                            return_type: Box::new(fn_return_type),
+                        },
                         role: ParamRole::Input {
                             transport: param.transport.clone(),
                             mutability: param.mutability,
@@ -1127,7 +1131,10 @@ impl<'c> Lowerer<'c> {
         }
     }
 
-    fn inline_callback_fn_abi_params(&self, callback_id: &CallbackId) -> Vec<AbiType> {
+    fn inline_callback_fn_abi_signature(
+        &self,
+        callback_id: &CallbackId,
+    ) -> (Vec<AbiType>, AbiType) {
         let callback_def = self
             .contract
             .catalog
@@ -1151,7 +1158,26 @@ impl<'c> Lowerer<'c> {
             }
         }
 
-        abi_params
+        let return_type = callback_def
+            .methods
+            .first()
+            .and_then(|method| match &method.returns {
+                ReturnDef::Void => None,
+                ReturnDef::Value(ty) => {
+                    let transport = self.classify_type(ty);
+                    match &transport {
+                        Transport::Scalar(origin) => Some(AbiType::from(origin.primitive())),
+                        Transport::Composite(layout) => {
+                            Some(AbiType::Struct(layout.record_id.clone()))
+                        }
+                        _ => Some(AbiType::Pointer(PrimitiveType::U8)),
+                    }
+                }
+                ReturnDef::Result { .. } => Some(AbiType::Pointer(PrimitiveType::U8)),
+            })
+            .unwrap_or(AbiType::Void);
+
+        (abi_params, return_type)
     }
 
     fn callback_return_shape_and_error(
@@ -1935,8 +1961,8 @@ mod tests {
     use super::*;
     use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
     use crate::ir::definitions::{
-        CallbackKind, CallbackMethodDef, ClassDef, ConstructorDef, FieldDef, FunctionDef,
-        MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef,
+        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, FieldDef,
+        FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver, RecordDef, ReturnDef,
     };
     use crate::ir::ids::{
         CallbackId, ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId,
@@ -3153,5 +3179,120 @@ mod tests {
             Some(Transport::Handle { nullable: true, .. })
         ));
         assert!(matches!(abi.error, ErrorTransport::Encoded { .. }));
+    }
+
+    fn contract_with_closure(
+        callback_id: &str,
+        params: Vec<ParamDef>,
+        returns: ReturnDef,
+    ) -> FfiContract {
+        let mut contract = test_contract();
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new(callback_id),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new("call"),
+                params,
+                returns,
+                is_async: false,
+                doc: None,
+            }],
+            kind: CallbackKind::Closure,
+            doc: None,
+        });
+        contract
+    }
+
+    #[test]
+    fn closure_void_return_yields_void_abi_type() {
+        let contract = contract_with_closure(
+            "__Closure_I32",
+            vec![ParamDef {
+                name: ParamName::new("x"),
+                type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            ReturnDef::Void,
+        );
+        let lowerer = lowerer_for_contract(&contract);
+        let (params, ret) =
+            lowerer.inline_callback_fn_abi_signature(&CallbackId::new("__Closure_I32"));
+        assert_eq!(params, vec![AbiType::I32]);
+        assert_eq!(ret, AbiType::Void);
+    }
+
+    #[test]
+    fn closure_primitive_return_yields_primitive_abi_type() {
+        let contract = contract_with_closure(
+            "__Closure_I32ToI32",
+            vec![ParamDef {
+                name: ParamName::new("x"),
+                type_expr: TypeExpr::Primitive(PrimitiveType::I32),
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+        );
+        let lowerer = lowerer_for_contract(&contract);
+        let (params, ret) =
+            lowerer.inline_callback_fn_abi_signature(&CallbackId::new("__Closure_I32ToI32"));
+        assert_eq!(params, vec![AbiType::I32]);
+        assert_eq!(ret, AbiType::I32);
+    }
+
+    #[test]
+    fn closure_blittable_record_return_yields_struct_abi_type() {
+        let mut contract = contract_with_closure(
+            "__Closure_PointToPoint",
+            vec![ParamDef {
+                name: ParamName::new("p"),
+                type_expr: TypeExpr::Record(RecordId::new("Point")),
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            ReturnDef::Value(TypeExpr::Record(RecordId::new("Point"))),
+        );
+        contract.catalog.insert_record(RecordDef {
+            id: RecordId::new("Point"),
+            is_repr_c: true,
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("x"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("y"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            doc: None,
+            deprecated: None,
+        });
+        let lowerer = lowerer_for_contract(&contract);
+        let (_params, ret) =
+            lowerer.inline_callback_fn_abi_signature(&CallbackId::new("__Closure_PointToPoint"));
+        assert_eq!(ret, AbiType::Struct(RecordId::new("Point")));
+    }
+
+    #[test]
+    fn closure_string_return_yields_pointer_abi_type() {
+        let contract = contract_with_closure(
+            "__Closure_StringToString",
+            vec![ParamDef {
+                name: ParamName::new("s"),
+                type_expr: TypeExpr::String,
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            ReturnDef::Value(TypeExpr::String),
+        );
+        let lowerer = lowerer_for_contract(&contract);
+        let (_params, ret) =
+            lowerer.inline_callback_fn_abi_signature(&CallbackId::new("__Closure_StringToString"));
+        assert_eq!(ret, AbiType::Pointer(PrimitiveType::U8));
     }
 }

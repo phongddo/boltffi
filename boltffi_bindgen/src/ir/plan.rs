@@ -117,7 +117,10 @@ pub enum AbiType {
     F32,
     F64,
     Pointer(PointerType),
-    InlineCallbackFn(Vec<AbiType>),
+    InlineCallbackFn {
+        params: Vec<AbiType>,
+        return_type: Box<AbiType>,
+    },
     Handle(ClassId),
     CallbackHandle,
     Struct(RecordId),

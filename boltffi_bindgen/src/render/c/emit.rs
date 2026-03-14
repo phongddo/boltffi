@@ -36,16 +36,76 @@ pub fn abi_type_c(abi_type: &AbiType) -> String {
         AbiType::ISize => "intptr_t".to_string(),
         AbiType::USize => "uintptr_t".to_string(),
         AbiType::Pointer(element) => format!("{}*", primitive_c_type(*element)),
-        AbiType::InlineCallbackFn(params) => {
+        AbiType::InlineCallbackFn {
+            params,
+            return_type,
+        } => {
             let mut param_types = vec!["void*".to_string()];
             param_types.extend(params.iter().map(|p| match p {
                 AbiType::Pointer(element) => format!("const {}*", primitive_c_type(*element)),
                 other => abi_type_c(other),
             }));
-            format!("void (*)({})", param_types.join(", "))
+            let c_return = abi_type_c(return_type);
+            format!("{} (*)({})", c_return, param_types.join(", "))
         }
         AbiType::Handle(class_id) => format!("const struct {} *", class_id.as_str()),
         AbiType::CallbackHandle => "BoltFFICallbackHandle".to_string(),
         AbiType::Struct(record_id) => format!("___{}", record_id.as_str()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inline_callback_void_return_emits_void_fn_ptr() {
+        let ty = AbiType::InlineCallbackFn {
+            params: vec![AbiType::I32],
+            return_type: Box::new(AbiType::Void),
+        };
+        assert_eq!(abi_type_c(&ty), "void (*)(void*, int32_t)");
+    }
+
+    #[test]
+    fn inline_callback_primitive_return_emits_typed_fn_ptr() {
+        let ty = AbiType::InlineCallbackFn {
+            params: vec![AbiType::I32],
+            return_type: Box::new(AbiType::I32),
+        };
+        assert_eq!(abi_type_c(&ty), "int32_t (*)(void*, int32_t)");
+    }
+
+    #[test]
+    fn inline_callback_struct_return_emits_struct_fn_ptr() {
+        let ty = AbiType::InlineCallbackFn {
+            params: vec![AbiType::Pointer(PrimitiveType::U8), AbiType::USize],
+            return_type: Box::new(AbiType::Struct("Point".into())),
+        };
+        assert_eq!(
+            abi_type_c(&ty),
+            "___Point (*)(void*, const uint8_t*, uintptr_t)"
+        );
+    }
+
+    #[test]
+    fn inline_callback_pointer_return_emits_pointer_fn_ptr() {
+        let ty = AbiType::InlineCallbackFn {
+            params: vec![AbiType::Pointer(PrimitiveType::U8), AbiType::USize],
+            return_type: Box::new(AbiType::Pointer(PrimitiveType::U8)),
+        };
+        assert_eq!(
+            abi_type_c(&ty),
+            "uint8_t* (*)(void*, const uint8_t*, uintptr_t)"
+        );
+    }
+
+    #[test]
+    fn inline_callback_no_params_with_return() {
+        let ty = AbiType::InlineCallbackFn {
+            params: vec![],
+            return_type: Box::new(AbiType::Bool),
+        };
+        assert_eq!(abi_type_c(&ty), "bool (*)(void*)");
     }
 }

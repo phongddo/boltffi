@@ -2074,7 +2074,7 @@ impl<'a> KotlinLowerer<'a> {
             AbiType::F32 => "Float".to_string(),
             AbiType::F64 => "Double".to_string(),
             AbiType::Pointer(_)
-            | AbiType::InlineCallbackFn(_)
+            | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
             | AbiType::CallbackHandle => "Long".to_string(),
             AbiType::Struct(_) => "Long".to_string(),
@@ -2405,7 +2405,7 @@ impl<'a> KotlinLowerer<'a> {
             AbiType::F32 => "Float".to_string(),
             AbiType::F64 => "Double".to_string(),
             AbiType::Pointer(_)
-            | AbiType::InlineCallbackFn(_)
+            | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
             | AbiType::CallbackHandle => "Long".to_string(),
             AbiType::Struct(_) => "Long".to_string(),

@@ -1326,7 +1326,7 @@ fn ts_abi_type(abi_type: &AbiType) -> String {
         AbiType::ISize | AbiType::USize => "number".to_string(),
         AbiType::F32 | AbiType::F64 => "number".to_string(),
         AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => "number".to_string(),
@@ -1356,7 +1356,7 @@ fn scalar_async_decode_expr(abi_type: &AbiType) -> String {
         AbiType::F64 => "reader.readF64()".to_string(),
         AbiType::Void
         | AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => "reader.readI32()".to_string(),
@@ -1373,7 +1373,7 @@ fn abi_type_to_wasm(abi_type: &AbiType) -> String {
         AbiType::I64 | AbiType::U64 => "bigint".to_string(),
         AbiType::F32 | AbiType::F64 => "number".to_string(),
         AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => "number".to_string(),
@@ -1462,7 +1462,7 @@ fn direct_write_info(abi_type: &AbiType) -> DirectWriteInfo {
             byte_width: 8,
         },
         AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => DirectWriteInfo {
@@ -1495,7 +1495,7 @@ fn primitive_buffer_ts_type(abi_type: &AbiType) -> String {
         | AbiType::F64 => "number[]".to_string(),
         AbiType::Void
         | AbiType::Pointer(_)
-        | AbiType::InlineCallbackFn(_)
+        | AbiType::InlineCallbackFn { .. }
         | AbiType::Handle(_)
         | AbiType::CallbackHandle
         | AbiType::Struct(_) => "unknown[]".to_string(),

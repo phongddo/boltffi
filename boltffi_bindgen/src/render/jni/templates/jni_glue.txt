@@ -353,6 +353,61 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
         (*g_jvm)->DetachCurrentThread(g_jvm);
     }
     return _result;
+{%- elif trampoline.is_blittable_struct_return() %}
+    jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    {{ trampoline.c_return_type() }} _result = {0};
+    if (boltffi_consume_pending_exception(env)) {
+        if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return _result;
+    }
+    if (_jarr != NULL) {
+        jsize _len = (*env)->GetArrayLength(env, _jarr);
+        if ((size_t)_len == sizeof({{ trampoline.c_return_type() }})) {
+            (*env)->GetByteArrayRegion(env, _jarr, 0, _len, (jbyte*)&_result);
+        }
+        (*env)->DeleteLocalRef(env, _jarr);
+    }
+{%- for rp in trampoline.record_params %}
+    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+    if (attached) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+    return _result;
+{%- elif trampoline.is_raw_pointer_return() %}
+    jbyteArray _jarr = (jbyteArray)(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
+    uint8_t* _result = NULL;
+    if (boltffi_consume_pending_exception(env)) {
+        if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
+{%- for rp in trampoline.record_params %}
+        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+        if (attached) {
+            (*g_jvm)->DetachCurrentThread(g_jvm);
+        }
+        return _result;
+    }
+    if (_jarr != NULL) {
+        jsize _len = (*env)->GetArrayLength(env, _jarr);
+        _result = (uint8_t*)malloc((size_t)_len);
+        if (_result != NULL) {
+            (*env)->GetByteArrayRegion(env, _jarr, 0, _len, (jbyte*)_result);
+        }
+        (*env)->DeleteLocalRef(env, _jarr);
+    }
+{%- for rp in trampoline.record_params %}
+    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- endfor %}
+    if (attached) {
+        (*g_jvm)->DetachCurrentThread(g_jvm);
+    }
+    return _result;
 {%- elif trampoline.is_callback_handle_return() %}
     jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     if (boltffi_consume_pending_exception(env)) {

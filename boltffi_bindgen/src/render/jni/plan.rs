@@ -396,8 +396,16 @@ pub struct JniClosureTrampolineReturn {
     pub jni_call_method: String,
     pub jni_return_cast: String,
     pub jni_signature: String,
-    pub is_wire_encoded: bool,
-    pub callback_create_fn: Option<String>,
+    pub strategy: TrampolineReturnStrategy,
+}
+
+#[derive(Clone)]
+pub enum TrampolineReturnStrategy {
+    WireBuffer,
+    BlittableStruct { struct_size: usize },
+    RawPointer,
+    Direct,
+    CallbackHandle { create_fn: String },
 }
 
 impl JniClosureTrampolineReturn {
@@ -407,8 +415,7 @@ impl JniClosureTrampolineReturn {
             jni_call_method: "CallStaticObjectMethod".to_string(),
             jni_return_cast: String::new(),
             jni_signature: "[B".to_string(),
-            is_wire_encoded: true,
-            callback_create_fn: None,
+            strategy: TrampolineReturnStrategy::WireBuffer,
         }
     }
 }
@@ -449,21 +456,34 @@ impl JniClosureTrampoline {
     pub fn is_wire_encoded_return(&self) -> bool {
         self.return_info
             .as_ref()
-            .map(|r| r.is_wire_encoded)
-            .unwrap_or(false)
+            .is_some_and(|r| matches!(r.strategy, TrampolineReturnStrategy::WireBuffer))
+    }
+
+    pub fn is_blittable_struct_return(&self) -> bool {
+        self.return_info
+            .as_ref()
+            .is_some_and(|r| matches!(r.strategy, TrampolineReturnStrategy::BlittableStruct { .. }))
+    }
+
+    pub fn is_raw_pointer_return(&self) -> bool {
+        self.return_info
+            .as_ref()
+            .is_some_and(|r| matches!(r.strategy, TrampolineReturnStrategy::RawPointer))
     }
 
     pub fn is_callback_handle_return(&self) -> bool {
         self.return_info
             .as_ref()
-            .and_then(|r| r.callback_create_fn.as_ref())
-            .is_some()
+            .is_some_and(|r| matches!(r.strategy, TrampolineReturnStrategy::CallbackHandle { .. }))
     }
 
     pub fn callback_create_fn(&self) -> &str {
         self.return_info
             .as_ref()
-            .and_then(|r| r.callback_create_fn.as_deref())
+            .and_then(|r| match &r.strategy {
+                TrampolineReturnStrategy::CallbackHandle { create_fn } => Some(create_fn.as_str()),
+                _ => None,
+            })
             .unwrap_or("")
     }
 }

@@ -24,7 +24,7 @@ use super::plan::{
     JniClass, JniClosureRecordParam, JniClosureTrampoline, JniClosureTrampolineReturn, JniFunction,
     JniInvokerResult, JniModule, JniOptionInnerKind, JniOptionView, JniParam, JniParamKind,
     JniPrimitiveArrayElementsKind, JniResultVariant, JniResultView, JniReturnKind, JniStream,
-    JniWireCtor, JniWireFunction, JniWireMethod,
+    JniWireCtor, JniWireFunction, JniWireMethod, TrampolineReturnStrategy,
 };
 
 struct JniReturnMeta {
@@ -702,7 +702,7 @@ impl<'a> JniLowerer<'a> {
             AbiType::F32 => "jfloat".to_string(),
             AbiType::F64 => "jdouble".to_string(),
             AbiType::Pointer(_)
-            | AbiType::InlineCallbackFn(_)
+            | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
             | AbiType::CallbackHandle
             | AbiType::Struct(_)
@@ -1113,13 +1113,38 @@ impl<'a> JniLowerer<'a> {
                     jni_c_return_type: self.primitive_c_type(*p),
                     jni_result_cast: self.primitive_return_cast(*p),
                 },
+                TypeExpr::Enum(id)
+                    if self
+                        .contract
+                        .catalog
+                        .resolve_enum(id)
+                        .is_some_and(|e| !matches!(e.repr, EnumRepr::Data { .. })) =>
+                {
+                    let tag_type = self
+                        .contract
+                        .catalog
+                        .resolve_enum(id)
+                        .and_then(|e| match e.repr {
+                            EnumRepr::CStyle { tag_type, .. } => Some(tag_type),
+                            _ => None,
+                        })
+                        .unwrap_or(PrimitiveType::I32);
+                    JniReturnMeta {
+                        is_unit: false,
+                        is_direct: true,
+                        jni_return_type: self.primitive_return_jni_type(tag_type),
+                        jni_c_return_type: self.primitive_c_type(tag_type),
+                        jni_result_cast: self.primitive_return_cast(tag_type),
+                    }
+                }
                 TypeExpr::String
                 | TypeExpr::Record(_)
                 | TypeExpr::Enum(_)
                 | TypeExpr::Vec(_)
                 | TypeExpr::Option(_)
                 | TypeExpr::Bytes
-                | TypeExpr::Builtin(_) => JniReturnMeta {
+                | TypeExpr::Builtin(_)
+                | TypeExpr::Custom(_) => JniReturnMeta {
                     is_unit: false,
                     is_direct: false,
                     jni_return_type: "jbyteArray".to_string(),
@@ -1970,7 +1995,10 @@ impl<'a> JniLowerer<'a> {
             AbiType::Pointer(element) => {
                 format!("{}*", self.callback_primitive_c_type(*element))
             }
-            AbiType::InlineCallbackFn(params) => {
+            AbiType::InlineCallbackFn {
+                params,
+                return_type,
+            } => {
                 let param_types = std::iter::once("void*".to_string())
                     .chain(params.iter().map(|param| match param {
                         AbiType::Pointer(element) => {
@@ -1979,7 +2007,8 @@ impl<'a> JniLowerer<'a> {
                         other => self.callback_abi_type_c(other),
                     }))
                     .collect::<Vec<_>>();
-                format!("void (*)({})", param_types.join(", "))
+                let c_return = self.callback_abi_type_c(return_type);
+                format!("{} (*)({})", c_return, param_types.join(", "))
             }
             AbiType::Handle(class_id) => format!("const struct {} *", class_id.as_str()),
             AbiType::CallbackHandle => "BoltFFICallbackHandle".to_string(),
@@ -2002,7 +2031,7 @@ impl<'a> JniLowerer<'a> {
             AbiType::F64 => "double".to_string(),
             AbiType::Void
             | AbiType::Pointer(_)
-            | AbiType::InlineCallbackFn(_)
+            | AbiType::InlineCallbackFn { .. }
             | AbiType::Handle(_)
             | AbiType::CallbackHandle => "void".to_string(),
             AbiType::Struct(_) => "jlong".to_string(),
@@ -2205,13 +2234,32 @@ impl<'a> JniLowerer<'a> {
                     jni_call_method,
                     jni_return_cast,
                     jni_signature,
-                    is_wire_encoded: false,
-                    callback_create_fn: None,
+                    strategy: TrampolineReturnStrategy::Direct,
                 }
             }
-            TypeExpr::String
-            | TypeExpr::Record(_)
-            | TypeExpr::Enum(_)
+            TypeExpr::Record(id) => {
+                let abi_record = self.abi.records.iter().find(|r| r.id == *id);
+                match abi_record {
+                    Some(rec) if rec.is_blittable => JniClosureTrampolineReturn {
+                        c_type: format!("___{}", id.as_str()),
+                        jni_call_method: "CallStaticObjectMethod".to_string(),
+                        jni_return_cast: String::new(),
+                        jni_signature: "[B".to_string(),
+                        strategy: TrampolineReturnStrategy::BlittableStruct {
+                            struct_size: rec.size.unwrap_or(0),
+                        },
+                    },
+                    _ => JniClosureTrampolineReturn::wire_encoded(),
+                }
+            }
+            TypeExpr::String => JniClosureTrampolineReturn {
+                c_type: "uint8_t*".to_string(),
+                jni_call_method: "CallStaticObjectMethod".to_string(),
+                jni_return_cast: String::new(),
+                jni_signature: "[B".to_string(),
+                strategy: TrampolineReturnStrategy::RawPointer,
+            },
+            TypeExpr::Enum(_)
             | TypeExpr::Bytes
             | TypeExpr::Vec(_)
             | TypeExpr::Option(_)
@@ -2221,8 +2269,7 @@ impl<'a> JniLowerer<'a> {
                 jni_call_method: "CallStaticLongMethod".to_string(),
                 jni_return_cast: format!("(struct {}*)(intptr_t)", class_id.as_str()),
                 jni_signature: "J".to_string(),
-                is_wire_encoded: false,
-                callback_create_fn: None,
+                strategy: TrampolineReturnStrategy::Direct,
             },
             TypeExpr::Callback(id) => {
                 let snake = naming::to_snake_case(id.as_str());
@@ -2232,8 +2279,9 @@ impl<'a> JniLowerer<'a> {
                     jni_call_method: "CallStaticLongMethod".to_string(),
                     jni_return_cast: String::new(),
                     jni_signature: "J".to_string(),
-                    is_wire_encoded: false,
-                    callback_create_fn: Some(format!("{}_create_{}_handle", prefix, snake)),
+                    strategy: TrampolineReturnStrategy::CallbackHandle {
+                        create_fn: format!("{}_create_{}_handle", prefix, snake),
+                    },
                 }
             }
             _ => JniClosureTrampolineReturn::wire_encoded(),
@@ -2341,9 +2389,15 @@ struct LoweredCallbackParam {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ir::Lowerer as IrLowerer;
     use crate::ir::abi::AbiContract;
     use crate::ir::contract::{FfiContract, PackageInfo, TypeCatalog};
     use crate::ir::types::PrimitiveType;
+    use crate::ir::{
+        CStyleVariant, CallbackId, CallbackKind, CallbackMethodDef, CallbackTraitDef, EnumDef,
+        FieldDef, FieldName, MethodId, ParamDef, ParamPassing, RecordDef, RecordId, ReturnDef,
+        VariantName,
+    };
 
     fn test_lowerer() -> JniLowerer<'static> {
         static CONTRACT: std::sync::LazyLock<FfiContract> =
@@ -2356,7 +2410,7 @@ mod tests {
                 functions: vec![],
             });
         static ABI: std::sync::LazyLock<AbiContract> =
-            std::sync::LazyLock::new(|| crate::ir::Lowerer::new(&CONTRACT).to_abi_contract());
+            std::sync::LazyLock::new(|| IrLowerer::new(&CONTRACT).to_abi_contract());
 
         JniLowerer::new(
             &CONTRACT,
@@ -2431,17 +2485,17 @@ mod tests {
     fn closure_return_primitive_is_direct() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Primitive(PrimitiveType::I32));
-        assert!(!ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::Direct));
         assert_eq!(ret.c_type, "int32_t");
         assert_eq!(ret.jni_signature, "I");
     }
 
     #[test]
-    fn closure_return_string_is_wire_encoded() {
+    fn closure_return_string_is_raw_pointer() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::String);
-        assert!(ret.is_wire_encoded);
-        assert_eq!(ret.c_type, "FfiBuf_u8");
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::RawPointer));
+        assert_eq!(ret.c_type, "uint8_t*");
         assert_eq!(ret.jni_signature, "[B");
     }
 
@@ -2449,7 +2503,7 @@ mod tests {
     fn closure_return_record_is_wire_encoded() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Record("Point".into()));
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2457,7 +2511,7 @@ mod tests {
     fn closure_return_enum_is_wire_encoded() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Enum("Color".into()));
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2465,7 +2519,7 @@ mod tests {
     fn closure_return_bytes_is_wire_encoded() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Bytes);
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2475,7 +2529,7 @@ mod tests {
         let ret = lowerer.closure_return_info(&TypeExpr::Vec(Box::new(TypeExpr::Primitive(
             PrimitiveType::I32,
         ))));
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2485,7 +2539,7 @@ mod tests {
         let ret = lowerer.closure_return_info(&TypeExpr::Option(Box::new(TypeExpr::Primitive(
             PrimitiveType::I32,
         ))));
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2493,7 +2547,7 @@ mod tests {
     fn closure_return_builtin_is_wire_encoded() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Builtin("Duration".into()));
-        assert!(ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::WireBuffer));
         assert_eq!(ret.c_type, "FfiBuf_u8");
     }
 
@@ -2501,7 +2555,7 @@ mod tests {
     fn closure_return_handle_uses_long_with_pointer_cast() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Handle("Player".into()));
-        assert!(!ret.is_wire_encoded);
+        assert!(matches!(ret.strategy, TrampolineReturnStrategy::Direct));
         assert_eq!(ret.c_type, "struct Player*");
         assert_eq!(ret.jni_call_method, "CallStaticLongMethod");
         assert_eq!(ret.jni_return_cast, "(struct Player*)(intptr_t)");
@@ -2512,13 +2566,196 @@ mod tests {
     fn closure_return_callback_uses_create_handle() {
         let lowerer = test_lowerer();
         let ret = lowerer.closure_return_info(&TypeExpr::Callback("Listener".into()));
-        assert!(!ret.is_wire_encoded);
+        assert!(matches!(
+            ret.strategy,
+            TrampolineReturnStrategy::CallbackHandle { .. }
+        ));
         assert_eq!(ret.c_type, "BoltFFICallbackHandle");
         assert_eq!(ret.jni_call_method, "CallStaticLongMethod");
         assert_eq!(ret.jni_signature, "J");
-        assert_eq!(
-            ret.callback_create_fn.as_deref(),
-            Some("boltffi_create_listener_handle")
+        match &ret.strategy {
+            TrampolineReturnStrategy::CallbackHandle { create_fn } => {
+                assert_eq!(create_fn, "boltffi_create_listener_handle");
+            }
+            _ => panic!("expected CallbackHandle strategy"),
+        }
+    }
+
+    fn contract_with_blittable_point() -> FfiContract {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_record(RecordDef {
+            id: RecordId::new("Point"),
+            is_repr_c: true,
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("x"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("y"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F64),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            doc: None,
+            deprecated: None,
+        });
+        FfiContract {
+            package: PackageInfo {
+                name: "test".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
+        }
+    }
+
+    fn contract_with_c_style_enum(tag_type: PrimitiveType) -> FfiContract {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_enum(EnumDef {
+            id: "Status".into(),
+            repr: EnumRepr::CStyle {
+                tag_type,
+                variants: vec![
+                    CStyleVariant {
+                        name: VariantName::new("Active"),
+                        discriminant: 0,
+                        doc: None,
+                    },
+                    CStyleVariant {
+                        name: VariantName::new("Inactive"),
+                        discriminant: 1,
+                        doc: None,
+                    },
+                ],
+            },
+            is_error: false,
+            doc: None,
+            deprecated: None,
+        });
+        FfiContract {
+            package: PackageInfo {
+                name: "test".to_string(),
+                version: None,
+            },
+            catalog,
+            functions: vec![],
+        }
+    }
+
+    fn lowerer_from_contract(contract: &FfiContract) -> JniLowerer<'_> {
+        let abi = IrLowerer::new(contract).to_abi_contract();
+        let abi_leaked: &'static AbiContract = Box::leak(Box::new(abi));
+        JniLowerer::new(
+            contract,
+            abi_leaked,
+            "com.test".to_string(),
+            "Native".to_string(),
+        )
+    }
+
+    #[test]
+    fn closure_return_blittable_record_uses_struct_strategy() {
+        let mut contract = contract_with_blittable_point();
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("__Closure_PointToPoint"),
+            methods: vec![CallbackMethodDef {
+                id: MethodId::new("call"),
+                params: vec![ParamDef {
+                    name: "p".into(),
+                    type_expr: TypeExpr::Record(RecordId::new("Point")),
+                    passing: ParamPassing::Value,
+                    doc: None,
+                }],
+                returns: ReturnDef::Value(TypeExpr::Record(RecordId::new("Point"))),
+                is_async: false,
+                doc: None,
+            }],
+            kind: CallbackKind::Closure,
+            doc: None,
+        });
+        let lowerer = lowerer_from_contract(&contract);
+        let ret = lowerer.closure_return_info(&TypeExpr::Record(RecordId::new("Point")));
+        assert!(
+            matches!(
+                ret.strategy,
+                TrampolineReturnStrategy::BlittableStruct { .. }
+            ),
+            "blittable record should use BlittableStruct, got {:?}",
+            std::mem::discriminant(&ret.strategy)
         );
+        assert_eq!(ret.c_type, "___Point");
+    }
+
+    #[test]
+    fn inline_callback_fn_c_type_includes_struct_return() {
+        let abi_type = AbiType::InlineCallbackFn {
+            params: vec![AbiType::Pointer(PrimitiveType::U8), AbiType::USize],
+            return_type: Box::new(AbiType::Struct(RecordId::new("Point"))),
+        };
+        let lowerer = test_lowerer();
+        let c_type = lowerer.callback_abi_type_c(&abi_type);
+        assert_eq!(c_type, "___Point (*)(void*, const uint8_t*, uintptr_t)");
+    }
+
+    #[test]
+    fn inline_callback_fn_c_type_includes_pointer_return_for_string() {
+        let abi_type = AbiType::InlineCallbackFn {
+            params: vec![AbiType::Pointer(PrimitiveType::U8), AbiType::USize],
+            return_type: Box::new(AbiType::Pointer(PrimitiveType::U8)),
+        };
+        let lowerer = test_lowerer();
+        let c_type = lowerer.callback_abi_type_c(&abi_type);
+        assert_eq!(c_type, "uint8_t* (*)(void*, const uint8_t*, uintptr_t)");
+    }
+
+    #[test]
+    fn inline_callback_fn_c_type_void_return() {
+        let abi_type = AbiType::InlineCallbackFn {
+            params: vec![AbiType::I32],
+            return_type: Box::new(AbiType::Void),
+        };
+        let lowerer = test_lowerer();
+        let c_type = lowerer.callback_abi_type_c(&abi_type);
+        assert_eq!(c_type, "void (*)(void*, int32_t)");
+    }
+
+    #[test]
+    fn return_meta_c_style_enum_is_direct_not_wire_encoded() {
+        let contract = contract_with_c_style_enum(PrimitiveType::I32);
+        let lowerer = lowerer_from_contract(&contract);
+        let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Enum("Status".into())));
+        assert!(meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jint");
+        assert_eq!(meta.jni_c_return_type, "int32_t");
+    }
+
+    #[test]
+    fn return_meta_c_style_enum_u8_uses_jbyte() {
+        let contract = contract_with_c_style_enum(PrimitiveType::U8);
+        let lowerer = lowerer_from_contract(&contract);
+        let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Enum("Status".into())));
+        assert!(meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jbyte");
+        assert_eq!(meta.jni_c_return_type, "uint8_t");
+    }
+
+    #[test]
+    fn return_meta_custom_type_is_wire_encoded() {
+        let lowerer = test_lowerer();
+        let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Custom("Email".into())));
+        assert!(!meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jbyteArray");
+    }
+
+    #[test]
+    fn return_meta_data_enum_is_wire_encoded() {
+        let lowerer = test_lowerer();
+        let meta = lowerer.return_meta(&ReturnDef::Value(TypeExpr::Enum("Shape".into())));
+        assert!(!meta.is_direct);
+        assert_eq!(meta.jni_return_type, "jbyteArray");
     }
 }
