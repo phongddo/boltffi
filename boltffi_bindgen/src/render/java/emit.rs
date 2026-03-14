@@ -1,4 +1,5 @@
 use crate::ir::abi::AbiContract;
+use crate::ir::codec::EnumLayout;
 use crate::ir::contract::FfiContract;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::PrimitiveType;
@@ -6,7 +7,11 @@ use crate::ir::types::PrimitiveType;
 use super::JavaOptions;
 use super::lower::JavaLowerer;
 use super::names::NamingConvention;
-use super::templates::{FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate};
+use super::plan::JavaEnumKind;
+use super::templates::{
+    CStyleEnumTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate, FunctionsTemplate,
+    NativeTemplate, PreambleTemplate, RecordTemplate,
+};
 use askama::Template;
 
 pub struct JavaFile {
@@ -36,6 +41,36 @@ impl JavaEmitter {
         let class_name = module.class_name.clone();
 
         let mut files = Vec::new();
+
+        for enumeration in &module.enums {
+            let source = match enumeration.kind {
+                JavaEnumKind::CStyle => {
+                    let template = CStyleEnumTemplate {
+                        enumeration,
+                        package_name: &module.package_name,
+                    };
+                    template.render().expect("c-style enum template failed")
+                }
+                JavaEnumKind::SealedInterface => {
+                    let template = DataEnumSealedTemplate {
+                        enumeration,
+                        package_name: &module.package_name,
+                    };
+                    template.render().expect("sealed enum template failed")
+                }
+                JavaEnumKind::AbstractClass => {
+                    let template = DataEnumAbstractTemplate {
+                        enumeration,
+                        package_name: &module.package_name,
+                    };
+                    template.render().expect("abstract enum template failed")
+                }
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", enumeration.class_name),
+                source,
+            });
+        }
 
         for record in &module.records {
             let record_template = RecordTemplate {
@@ -133,6 +168,21 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
                 NamingConvention::class_name(id.as_str())
             )
         }
+        ReadOp::Enum { id, layout, .. } => match layout {
+            EnumLayout::CStyle { tag_type, .. } => {
+                format!(
+                    "{}.fromValue(reader.{}())",
+                    NamingConvention::class_name(id.as_str()),
+                    primitive_read_method(*tag_type),
+                )
+            }
+            EnumLayout::Data { .. } | EnumLayout::Recursive => {
+                format!(
+                    "{}.decode(reader)",
+                    NamingConvention::class_name(id.as_str())
+                )
+            }
+        },
         other => panic!("unsupported Java read op: {:?}", other),
     }
 }
@@ -157,6 +207,19 @@ pub fn emit_write_expr(seq: &WriteSeq, writer_name: &str) -> String {
         WriteOp::Record { value, .. } => {
             format!("{}.wireEncodeTo({})", render_value(value), writer_name)
         }
+        WriteOp::Enum { value, layout, .. } => match layout {
+            EnumLayout::CStyle { tag_type, .. } => {
+                format!(
+                    "{}.{}({}.value)",
+                    writer_name,
+                    primitive_write_method(*tag_type),
+                    render_value(value),
+                )
+            }
+            EnumLayout::Data { .. } | EnumLayout::Recursive => {
+                format!("{}.wireEncodeTo({})", render_value(value), writer_name)
+            }
+        },
         other => panic!("unsupported Java write op: {:?}", other),
     }
 }

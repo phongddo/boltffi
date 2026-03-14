@@ -1,4 +1,5 @@
 use boltffi_ffi_rules::naming;
+use heck::ToShoutySnakeCase;
 
 pub struct NamingConvention;
 
@@ -15,6 +16,10 @@ impl NamingConvention {
     pub fn field_name(name: &str) -> String {
         let converted = naming::snake_to_camel(name);
         Self::escape_keyword(&converted)
+    }
+
+    pub fn enum_constant_name(name: &str) -> String {
+        name.to_shouty_snake_case()
     }
 
     pub fn escape_keyword(name: &str) -> String {

@@ -12,6 +12,8 @@ public final class DemoTest {
         testPointRecords();
         testLineRecords();
         testPersonRecords();
+        testCStyleEnums();
+        testDataEnums();
         System.out.println("All tests passed!");
     }
 
@@ -111,6 +113,81 @@ public final class DemoTest {
         assert emojiPerson.name().equals("🎉 Party") : "makePerson(emoji)";
         Person echoedEmojiPerson = Demo.echoPerson(emojiPerson);
         assert echoedEmojiPerson.name().equals("🎉 Party") : "echoPerson(emoji)";
+        System.out.println("  PASS\n");
+    }
+
+    private static void testCStyleEnums() {
+        System.out.println("Testing C-style enums...");
+
+        assert Demo.echoStatus(Status.ACTIVE) == Status.ACTIVE : "echoStatus(Active)";
+        assert Demo.echoStatus(Status.INACTIVE) == Status.INACTIVE : "echoStatus(Inactive)";
+        assert Demo.echoStatus(Status.PENDING) == Status.PENDING : "echoStatus(Pending)";
+        assert Demo.statusToString(Status.ACTIVE).equals("active") : "statusToString(Active)";
+        assert Demo.statusToString(Status.INACTIVE).equals("inactive") : "statusToString(Inactive)";
+        assert Demo.isActive(Status.ACTIVE) : "isActive(Active)";
+        assert !Demo.isActive(Status.PENDING) : "isActive(Pending)";
+
+        assert Demo.echoDirection(Direction.NORTH) == Direction.NORTH : "echoDirection(North)";
+        assert Demo.oppositeDirection(Direction.NORTH) == Direction.SOUTH : "oppositeDirection(North)";
+        assert Demo.oppositeDirection(Direction.EAST) == Direction.WEST : "oppositeDirection(East)";
+
+        assert Demo.echoPriority(Priority.HIGH) == Priority.HIGH : "echoPriority(High)";
+        assert Demo.priorityLabel(Priority.LOW).equals("low") : "priorityLabel(Low)";
+        assert Demo.isHighPriority(Priority.CRITICAL) : "isHighPriority(Critical)";
+        assert !Demo.isHighPriority(Priority.LOW) : "isHighPriority(Low)";
+
+        assert Demo.echoLogLevel(LogLevel.INFO) == LogLevel.INFO : "echoLogLevel(Info)";
+        assert Demo.shouldLog(LogLevel.ERROR, LogLevel.WARN) : "shouldLog(Error >= Warn)";
+        assert !Demo.shouldLog(LogLevel.DEBUG, LogLevel.INFO) : "shouldLog(Debug < Info)";
+
+        System.out.println("  PASS\n");
+    }
+
+    private static void testDataEnums() {
+        System.out.println("Testing data enums...");
+
+        Shape circle = Demo.makeCircle(5.0);
+        assert circle instanceof Shape.Circle : "makeCircle returns Circle";
+        assert ((Shape.Circle) circle).radius == 5.0 : "makeCircle.radius";
+        assert Math.abs(Demo.shapeArea(circle) - Math.PI * 25.0) < 0.0001 : "shapeArea(circle)";
+
+        Shape rect = Demo.makeRectangle(3.0, 4.0);
+        assert rect instanceof Shape.Rectangle : "makeRectangle returns Rectangle";
+        assert Math.abs(Demo.shapeArea(rect) - 12.0) < 0.0001 : "shapeArea(rect)";
+
+        Shape echoedCircle = Demo.echoShape(circle);
+        assert echoedCircle instanceof Shape.Circle : "echoShape(circle) type";
+        assert ((Shape.Circle) echoedCircle).radius == 5.0 : "echoShape(circle).radius";
+
+        Shape echoedRect = Demo.echoShape(rect);
+        assert echoedRect instanceof Shape.Rectangle : "echoShape(rect) type";
+
+        Shape triangle = Demo.echoShape(new Shape.Triangle(
+            new Point(0.0, 0.0), new Point(3.0, 0.0), new Point(0.0, 4.0)
+        ));
+        assert triangle instanceof Shape.Triangle : "echoShape(triangle) type";
+        assert Math.abs(Demo.shapeArea(triangle) - 6.0) < 0.0001 : "shapeArea(triangle)";
+
+        Shape point = Demo.echoShape(Shape.Point.INSTANCE);
+        assert point instanceof Shape.Point : "echoShape(point) type";
+        assert Demo.shapeArea(point) == 0.0 : "shapeArea(point)";
+
+        Message text = Demo.echoMessage(new Message.Text("hello"));
+        assert text instanceof Message.Text : "echoMessage(Text) type";
+        assert ((Message.Text) text).body.equals("hello") : "echoMessage(Text).body";
+        assert Demo.messageSummary(new Message.Text("hi")).equals("text: hi") : "messageSummary(Text)";
+        assert Demo.messageSummary(Message.Ping.INSTANCE).equals("ping") : "messageSummary(Ping)";
+
+        Animal dog = Demo.echoAnimal(new Animal.Dog("Rex", "Labrador"));
+        assert dog instanceof Animal.Dog : "echoAnimal(Dog) type";
+        assert ((Animal.Dog) dog).name.equals("Rex") : "echoAnimal(Dog).name";
+        assert Demo.animalName(new Animal.Fish(5)).equals("5 fish") : "animalName(Fish)";
+
+        ApiResponse success = Demo.echoApiResponse(new ApiResponse.Success("ok"));
+        assert success instanceof ApiResponse.Success : "echoApiResponse(Success) type";
+        assert Demo.isSuccess(new ApiResponse.Success("data")) : "isSuccess(Success)";
+        assert !Demo.isSuccess(ApiResponse.Empty.INSTANCE) : "isSuccess(Empty)";
+
         System.out.println("  PASS\n");
     }
 }

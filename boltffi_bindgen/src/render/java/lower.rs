@@ -4,14 +4,18 @@ use super::JavaOptions;
 use super::mappings;
 use super::names::NamingConvention;
 use super::plan::{
-    JavaFunction, JavaModule, JavaParam, JavaParamKind, JavaRecord, JavaRecordField,
-    JavaRecordShape, JavaReturnStrategy, JavaWireWriter,
+    JavaEnum, JavaEnumField, JavaEnumKind, JavaEnumVariant, JavaFunction, JavaModule, JavaParam,
+    JavaRecord, JavaRecordField, JavaRecordShape, JavaReturnStrategy, JavaWireWriter,
 };
-use crate::ir::abi::{AbiCall, AbiContract, AbiParam, AbiRecord, CallId, ParamRole};
+use crate::ir::abi::{
+    AbiCall, AbiContract, AbiEnum, AbiEnumField, AbiEnumPayload, AbiEnumVariant, AbiParam,
+    AbiRecord, CallId, ParamRole,
+};
 use crate::ir::contract::FfiContract;
-use crate::ir::definitions::{FieldDef, FunctionDef, RecordDef, ReturnDef};
+use crate::ir::definitions::{EnumDef, EnumRepr, FieldDef, FunctionDef, RecordDef, ReturnDef};
 use crate::ir::ids::{FieldName, RecordId};
-use crate::ir::ops::{ReadOp, ReadSeq, WriteOp, WriteSeq};
+use crate::ir::ops::{FieldWriteOp, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
+use crate::ir::plan::{ScalarOrigin, Transport};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
 pub struct JavaLowerer<'a> {
@@ -20,7 +24,7 @@ pub struct JavaLowerer<'a> {
     package_name: String,
     module_name: String,
     options: JavaOptions,
-    supported_records: HashSet<String>,
+    supported_types: HashSet<String>,
 }
 
 impl<'a> JavaLowerer<'a> {
@@ -31,38 +35,82 @@ impl<'a> JavaLowerer<'a> {
         module_name: String,
         options: JavaOptions,
     ) -> Self {
-        let supported_records = Self::compute_supported_records(ffi);
+        let supported_types = Self::compute_supported_types(ffi, abi);
         Self {
             ffi,
             abi,
             package_name,
             module_name,
             options,
-            supported_records,
+            supported_types,
         }
     }
 
-    fn compute_supported_records(ffi: &FfiContract) -> HashSet<String> {
+    fn is_leaf_supported(ty: &TypeExpr, supported: &HashSet<String>) -> bool {
+        match ty {
+            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void => true,
+            TypeExpr::Record(id) => supported.contains(id.as_str()),
+            TypeExpr::Enum(id) => supported.contains(id.as_str()),
+            _ => false,
+        }
+    }
+
+    fn compute_supported_types(ffi: &FfiContract, abi: &AbiContract) -> HashSet<String> {
         let mut supported = HashSet::new();
         let mut changed = true;
+
         while changed {
             changed = false;
+
             for record in ffi.catalog.all_records() {
-                let id = record.id.as_str().to_string();
-                if supported.contains(&id) {
+                let id = record.id.as_str();
+                if supported.contains(id) {
                     continue;
                 }
-                let all_fields_ok = record.fields.iter().all(|f| match &f.type_expr {
-                    TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void => true,
-                    TypeExpr::Record(ref_id) => supported.contains(ref_id.as_str()),
-                    _ => false,
-                });
-                if all_fields_ok {
-                    supported.insert(id);
+                let all_ok = record
+                    .fields
+                    .iter()
+                    .all(|f| Self::is_leaf_supported(&f.type_expr, &supported));
+                if all_ok {
+                    supported.insert(id.to_string());
+                    changed = true;
+                }
+            }
+
+            for enumeration in ffi.catalog.all_enums() {
+                let id = enumeration.id.as_str();
+                if supported.contains(id) {
+                    continue;
+                }
+                let abi_enum = abi
+                    .enums
+                    .iter()
+                    .find(|ae| ae.id == enumeration.id)
+                    .expect("abi enum missing");
+
+                let all_ok = if abi_enum.is_c_style {
+                    true
+                } else {
+                    abi_enum
+                        .variants
+                        .iter()
+                        .all(|variant| match &variant.payload {
+                            AbiEnumPayload::Unit => true,
+                            AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => {
+                                fields
+                                    .iter()
+                                    .all(|f| Self::is_leaf_supported(&f.type_expr, &supported))
+                            }
+                        })
+                };
+
+                if all_ok {
+                    supported.insert(id.to_string());
                     changed = true;
                 }
             }
         }
+
         supported
     }
 
@@ -76,11 +124,19 @@ impl<'a> JavaLowerer<'a> {
 
         let prefix = boltffi_ffi_rules::naming::ffi_prefix().to_string();
 
+        let enums: Vec<JavaEnum> = self
+            .ffi
+            .catalog
+            .all_enums()
+            .filter(|e| self.supported_types.contains(e.id.as_str()))
+            .map(|e| self.lower_enum(e))
+            .collect();
+
         let records: Vec<JavaRecord> = self
             .ffi
             .catalog
             .all_records()
-            .filter(|r| self.supported_records.contains(r.id.as_str()))
+            .filter(|r| self.supported_types.contains(r.id.as_str()))
             .map(|r| self.lower_record(r))
             .collect();
 
@@ -99,6 +155,7 @@ impl<'a> JavaLowerer<'a> {
             java_version: self.options.min_java_version,
             prefix,
             records,
+            enums,
             functions,
         }
     }
@@ -117,11 +174,7 @@ impl<'a> JavaLowerer<'a> {
     }
 
     fn is_supported_type(&self, ty: &TypeExpr) -> bool {
-        match ty {
-            TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void => true,
-            TypeExpr::Record(id) => self.supported_records.contains(id.as_str()),
-            _ => false,
-        }
+        Self::is_leaf_supported(ty, &self.supported_types)
     }
 
     fn lower_record(&self, record: &RecordDef) -> JavaRecord {
@@ -171,7 +224,7 @@ impl<'a> JavaLowerer<'a> {
                 format!("Double.compare(this.{field}, other.{field}) == 0")
             }
             TypeExpr::Primitive(_) => format!("this.{field} == other.{field}"),
-            TypeExpr::String | TypeExpr::Record(_) => {
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
                 format!("Objects.equals(this.{field}, other.{field})")
             }
             _ => panic!("unsupported Java record field equality type: {:?}", ty),
@@ -197,7 +250,9 @@ impl<'a> JavaLowerer<'a> {
             | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({field})"),
             TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({field})"),
             TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({field})"),
-            TypeExpr::String | TypeExpr::Record(_) => format!("Objects.hashCode({field})"),
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+                format!("Objects.hashCode({field})")
+            }
             _ => panic!("unsupported Java record field hash type: {:?}", ty),
         }
     }
@@ -247,10 +302,10 @@ impl<'a> JavaLowerer<'a> {
         let params: Vec<JavaParam> = func
             .params
             .iter()
-            .map(|p| self.lower_param(p.name.as_str(), &p.type_expr, &wire_writers))
+            .map(|p| self.lower_param(p.name.as_str(), &p.type_expr, call, &wire_writers))
             .collect();
 
-        let strategy = self.return_strategy(&func.returns);
+        let strategy = self.return_strategy(&func.returns, call);
 
         JavaFunction {
             name: NamingConvention::method_name(func.id.as_str()),
@@ -262,38 +317,63 @@ impl<'a> JavaLowerer<'a> {
         }
     }
 
-    fn lower_param(&self, name: &str, ty: &TypeExpr, wire_writers: &[JavaWireWriter]) -> JavaParam {
+    fn lower_param(
+        &self,
+        name: &str,
+        ty: &TypeExpr,
+        call: &AbiCall,
+        wire_writers: &[JavaWireWriter],
+    ) -> JavaParam {
         let field_name = NamingConvention::field_name(name);
         let java_type = self.java_type(ty);
-        let (native_type, kind) = self.native_param_mapping(name, ty, wire_writers);
+        let abi_transport = call
+            .params
+            .iter()
+            .find(|p| p.name.as_str() == name)
+            .and_then(|p| p.transport());
+
+        let (native_type, native_expr) = match ty {
+            TypeExpr::String => (
+                "byte[]".to_string(),
+                format!(
+                    "{}.getBytes(java.nio.charset.StandardCharsets.UTF_8)",
+                    field_name
+                ),
+            ),
+            TypeExpr::Enum(_)
+                if matches!(
+                    abi_transport,
+                    Some(Transport::Scalar(ScalarOrigin::CStyleEnum { .. }))
+                ) =>
+            {
+                let tag_type = match abi_transport {
+                    Some(Transport::Scalar(ScalarOrigin::CStyleEnum { tag_type, .. })) => *tag_type,
+                    _ => unreachable!(),
+                };
+                (
+                    mappings::java_type(tag_type).to_string(),
+                    format!("{}.value", field_name),
+                )
+            }
+            TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+                let binding_name = wire_writers
+                    .iter()
+                    .find(|w| w.param_name == name)
+                    .map(|w| w.binding_name.as_str())
+                    .unwrap_or("");
+                (
+                    "ByteBuffer".to_string(),
+                    format!("{}.toBuffer()", binding_name),
+                )
+            }
+            _ => (java_type.clone(), field_name.clone()),
+        };
+
         JavaParam {
             name: field_name,
             java_type,
             native_type,
-            kind,
-        }
-    }
-
-    fn native_param_mapping(
-        &self,
-        name: &str,
-        ty: &TypeExpr,
-        wire_writers: &[JavaWireWriter],
-    ) -> (String, JavaParamKind) {
-        match ty {
-            TypeExpr::String => ("byte[]".to_string(), JavaParamKind::Utf8Bytes),
-            TypeExpr::Record(_) => {
-                let binding_name = wire_writers
-                    .iter()
-                    .find(|w| w.param_name == name)
-                    .map(|w| w.binding_name.clone())
-                    .unwrap_or_default();
-                (
-                    "ByteBuffer".to_string(),
-                    JavaParamKind::WireEncoded { binding_name },
-                )
-            }
-            other => (self.java_type(other), JavaParamKind::Direct),
+            native_expr,
         }
     }
 
@@ -335,7 +415,7 @@ impl<'a> JavaLowerer<'a> {
         }
     }
 
-    fn return_strategy(&self, returns: &ReturnDef) -> JavaReturnStrategy {
+    fn return_strategy(&self, returns: &ReturnDef, call: &AbiCall) -> JavaReturnStrategy {
         match returns {
             ReturnDef::Void | ReturnDef::Result { .. } => JavaReturnStrategy::Void,
             ReturnDef::Value(ty) => match ty {
@@ -350,6 +430,23 @@ impl<'a> JavaLowerer<'a> {
                         NamingConvention::class_name(id.as_str())
                     ),
                 },
+                TypeExpr::Enum(id) => {
+                    if let Some(Transport::Scalar(ScalarOrigin::CStyleEnum { tag_type, .. })) =
+                        call.returns.transport.as_ref()
+                    {
+                        JavaReturnStrategy::CStyleEnumDecode {
+                            class_name: NamingConvention::class_name(id.as_str()),
+                            native_type: mappings::java_type(*tag_type).to_string(),
+                        }
+                    } else {
+                        JavaReturnStrategy::WireDecode {
+                            decode_expr: format!(
+                                "{}.decode(reader)",
+                                NamingConvention::class_name(id.as_str())
+                            ),
+                        }
+                    }
+                }
                 _ => JavaReturnStrategy::Void,
             },
         }
@@ -368,7 +465,198 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
             TypeExpr::String => "String".to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
             _ => "Object".to_string(),
         }
+    }
+
+    fn lower_enum(&self, enumeration: &EnumDef) -> JavaEnum {
+        let abi_enum = self.abi_enum_for(enumeration);
+        let class_name = NamingConvention::class_name(enumeration.id.as_str());
+        let kind = if abi_enum.is_c_style {
+            JavaEnumKind::CStyle
+        } else if self.options.min_java_version.supports_sealed() {
+            JavaEnumKind::SealedInterface
+        } else {
+            JavaEnumKind::AbstractClass
+        };
+        let value_type = match &enumeration.repr {
+            EnumRepr::CStyle { tag_type, .. } | EnumRepr::Data { tag_type, .. } => {
+                mappings::java_type(*tag_type).to_string()
+            }
+        };
+        let variant_names: HashSet<String> = abi_enum
+            .variants
+            .iter()
+            .map(|v| NamingConvention::class_name(v.name.as_str()))
+            .collect();
+        let variants = abi_enum
+            .variants
+            .iter()
+            .map(|variant| self.lower_enum_variant(variant, kind, &variant_names))
+            .collect();
+        JavaEnum {
+            class_name,
+            kind,
+            value_type,
+            variants,
+        }
+    }
+
+    fn lower_enum_variant(
+        &self,
+        variant: &AbiEnumVariant,
+        kind: JavaEnumKind,
+        sibling_names: &HashSet<String>,
+    ) -> JavaEnumVariant {
+        let name = match kind {
+            JavaEnumKind::CStyle => NamingConvention::enum_constant_name(variant.name.as_str()),
+            _ => NamingConvention::class_name(variant.name.as_str()),
+        };
+        let fields = match &variant.payload {
+            AbiEnumPayload::Unit => Vec::new(),
+            AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
+                .iter()
+                .map(|field| self.lower_enum_field(field, sibling_names))
+                .collect(),
+        };
+        JavaEnumVariant {
+            name,
+            tag: variant.discriminant,
+            fields,
+        }
+    }
+
+    fn lower_enum_field(
+        &self,
+        field: &AbiEnumField,
+        sibling_names: &HashSet<String>,
+    ) -> JavaEnumField {
+        let field_name = NamingConvention::field_name(field.name.as_str());
+        let prefixed = Self::prefix_write_seq(&field.encode, "_v");
+        let mut java_type = self.java_type(&field.type_expr);
+        let mut decode_expr = super::emit::emit_reader_read(&field.decode);
+        let mut size_expr = super::emit::emit_size_expr_for_write_seq(&prefixed);
+        let mut encode_expr = super::emit::emit_write_expr(&prefixed, "wire");
+        if sibling_names.contains(&java_type) {
+            java_type = format!("{}.{}", self.package_name, java_type);
+        }
+        self.qualify_colliding_names(&mut decode_expr, sibling_names);
+        self.qualify_colliding_names(&mut size_expr, sibling_names);
+        self.qualify_colliding_names(&mut encode_expr, sibling_names);
+        JavaEnumField {
+            name: field_name,
+            java_type,
+            wire_decode_expr: decode_expr,
+            wire_size_expr: size_expr,
+            wire_encode_expr: encode_expr,
+        }
+    }
+
+    fn qualify_colliding_names(&self, expr: &mut String, sibling_names: &HashSet<String>) {
+        for name in sibling_names {
+            let pattern = format!("{}.decode(", name);
+            if expr.contains(&pattern) {
+                let qualified = format!("{}.{}.decode(", self.package_name, name);
+                *expr = expr.replace(&pattern, &qualified);
+            }
+            let pattern = format!("{}.wireEncodeTo(", name);
+            if expr.contains(&pattern) {
+                let qualified = format!("{}.{}.wireEncodeTo(", self.package_name, name);
+                *expr = expr.replace(&pattern, &qualified);
+            }
+            let pattern = format!("{}.wireEncodedSize(", name);
+            if expr.contains(&pattern) {
+                let qualified = format!("{}.{}.wireEncodedSize(", self.package_name, name);
+                *expr = expr.replace(&pattern, &qualified);
+            }
+        }
+    }
+
+    fn prefix_value(value: &ValueExpr, binding: &str) -> ValueExpr {
+        match value {
+            ValueExpr::Instance => ValueExpr::Var(binding.to_string()),
+            ValueExpr::Named(name) => ValueExpr::Field(
+                Box::new(ValueExpr::Var(binding.to_string())),
+                FieldName::new(name),
+            ),
+            ValueExpr::Var(_) => value.clone(),
+            ValueExpr::Field(parent, field) => {
+                ValueExpr::Field(Box::new(Self::prefix_value(parent, binding)), field.clone())
+            }
+        }
+    }
+
+    fn prefix_write_op(op: &WriteOp, binding: &str) -> WriteOp {
+        match op {
+            WriteOp::Primitive { primitive, value } => WriteOp::Primitive {
+                primitive: *primitive,
+                value: Self::prefix_value(value, binding),
+            },
+            WriteOp::String { value } => WriteOp::String {
+                value: Self::prefix_value(value, binding),
+            },
+            WriteOp::Bytes { value } => WriteOp::Bytes {
+                value: Self::prefix_value(value, binding),
+            },
+            WriteOp::Record { id, value, fields } => WriteOp::Record {
+                id: id.clone(),
+                value: Self::prefix_value(value, binding),
+                fields: fields
+                    .iter()
+                    .map(|f| FieldWriteOp {
+                        name: f.name.clone(),
+                        accessor: Self::prefix_value(&f.accessor, binding),
+                        seq: Self::prefix_write_seq(&f.seq, binding),
+                    })
+                    .collect(),
+            },
+            WriteOp::Enum { id, value, layout } => WriteOp::Enum {
+                id: id.clone(),
+                value: Self::prefix_value(value, binding),
+                layout: layout.clone(),
+            },
+            other => other.clone(),
+        }
+    }
+
+    fn prefix_size_expr(size: &SizeExpr, binding: &str) -> SizeExpr {
+        match size {
+            SizeExpr::Fixed(_) | SizeExpr::Runtime => size.clone(),
+            SizeExpr::StringLen(v) => SizeExpr::StringLen(Self::prefix_value(v, binding)),
+            SizeExpr::BytesLen(v) => SizeExpr::BytesLen(Self::prefix_value(v, binding)),
+            SizeExpr::ValueSize(v) => SizeExpr::ValueSize(Self::prefix_value(v, binding)),
+            SizeExpr::WireSize { value, record_id } => SizeExpr::WireSize {
+                value: Self::prefix_value(value, binding),
+                record_id: record_id.clone(),
+            },
+            SizeExpr::Sum(parts) => SizeExpr::Sum(
+                parts
+                    .iter()
+                    .map(|p| Self::prefix_size_expr(p, binding))
+                    .collect(),
+            ),
+            other => other.clone(),
+        }
+    }
+
+    fn prefix_write_seq(seq: &WriteSeq, binding: &str) -> WriteSeq {
+        WriteSeq {
+            size: Self::prefix_size_expr(&seq.size, binding),
+            ops: seq
+                .ops
+                .iter()
+                .map(|op| Self::prefix_write_op(op, binding))
+                .collect(),
+            shape: seq.shape,
+        }
+    }
+
+    fn abi_enum_for(&self, enumeration: &EnumDef) -> &AbiEnum {
+        self.abi
+            .enums
+            .iter()
+            .find(|abi_enum| abi_enum.id == enumeration.id)
+            .expect("abi enum missing")
     }
 }
