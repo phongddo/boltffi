@@ -416,6 +416,7 @@ fn java_type_for_iteration(ty: &TypeExpr) -> String {
     match ty {
         TypeExpr::Primitive(primitive) => mappings::java_boxed_type(*primitive).to_string(),
         TypeExpr::String => "String".to_string(),
+        TypeExpr::Bytes => "byte[]".to_string(),
         TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
         TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
         TypeExpr::Option(inner) => {
