@@ -1,5 +1,10 @@
 package com.boltffi.demo;
 
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import java.util.Optional;
+
 public final class DemoTest {
     public static void main(String[] args) {
         System.out.println("Testing Java bindings...\n");
@@ -19,6 +24,7 @@ public final class DemoTest {
         testBytesVecs();
         testPrimitiveVecs();
         testVecStrings();
+        testOptions();
         testRecordsWithVecs();
         System.out.println("All tests passed!");
     }
@@ -200,16 +206,16 @@ public final class DemoTest {
     private static void testCStyleEnumVecs() {
         System.out.println("Testing vec C-style enums...");
 
-        java.util.List<Status> statuses = Demo.echoVecStatus(
-            java.util.Arrays.asList(Status.ACTIVE, Status.PENDING, Status.INACTIVE)
+        List<Status> statuses = Demo.echoVecStatus(
+            Arrays.asList(Status.ACTIVE, Status.PENDING, Status.INACTIVE)
         );
         assert statuses.size() == 3 : "echoVecStatus size";
         assert statuses.get(0) == Status.ACTIVE : "echoVecStatus[0]";
         assert statuses.get(1) == Status.PENDING : "echoVecStatus[1]";
         assert statuses.get(2) == Status.INACTIVE : "echoVecStatus[2]";
 
-        java.util.List<LogLevel> levels = Demo.echoVecLogLevel(
-            java.util.Arrays.asList(LogLevel.TRACE, LogLevel.INFO, LogLevel.ERROR)
+        List<LogLevel> levels = Demo.echoVecLogLevel(
+            Arrays.asList(LogLevel.TRACE, LogLevel.INFO, LogLevel.ERROR)
         );
         assert levels.size() == 3 : "echoVecLogLevel size";
         assert levels.get(0) == LogLevel.TRACE : "echoVecLogLevel[0]";
@@ -222,7 +228,7 @@ public final class DemoTest {
     private static void testDataEnumVecs() {
         System.out.println("Testing vec data enums...");
 
-        java.util.List<Shape> shapes = Demo.echoVecShape(java.util.Arrays.asList(
+        List<Shape> shapes = Demo.echoVecShape(Arrays.asList(
             new Shape.Circle(2.0),
             new Shape.Rectangle(3.0, 4.0),
             Shape.Point.INSTANCE
@@ -334,15 +340,15 @@ public final class DemoTest {
     private static void testVecStrings() {
         System.out.println("Testing vec strings...");
 
-        java.util.List<String> strings = Demo.echoVecString(java.util.Arrays.asList("hello", "world"));
+        List<String> strings = Demo.echoVecString(Arrays.asList("hello", "world"));
         assert strings.size() == 2 : "echoVecString size";
         assert strings.get(0).equals("hello") : "echoVecString[0]";
         assert strings.get(1).equals("world") : "echoVecString[1]";
 
-        java.util.List<String> emptyStrings = Demo.echoVecString(java.util.Collections.emptyList());
+        List<String> emptyStrings = Demo.echoVecString(Collections.emptyList());
         assert emptyStrings.isEmpty() : "echoVecString empty";
 
-        int[] lengths = Demo.vecStringLengths(java.util.Arrays.asList("hi", "café"));
+        int[] lengths = Demo.vecStringLengths(Arrays.asList("hi", "café"));
         assert lengths.length == 2 : "vecStringLengths size";
         assert lengths[0] == 2 : "vecStringLengths[0]";
         assert lengths[1] == 5 : "vecStringLengths[1] (utf8)";
@@ -350,10 +356,92 @@ public final class DemoTest {
         System.out.println("  PASS\n");
     }
 
+    private static void testOptions() {
+        System.out.println("Testing options...");
+
+        Optional<Integer> optI32 = Demo.echoOptionalI32(Optional.of(7));
+        assert optI32.isPresent() && optI32.get() == 7 : "echoOptionalI32 some";
+        assert !Demo.echoOptionalI32(Optional.empty()).isPresent() : "echoOptionalI32 none";
+
+        assert Demo.unwrapOrDefaultI32(Optional.of(9), 4) == 9 : "unwrapOrDefaultI32 some";
+        assert Demo.unwrapOrDefaultI32(Optional.empty(), 4) == 4 : "unwrapOrDefaultI32 none";
+
+        assert Demo.makeSomeI32(12).orElse(-1) == 12 : "makeSomeI32";
+        assert !Demo.makeNoneI32().isPresent() : "makeNoneI32";
+
+        assert Demo.doubleIfSome(Optional.of(8)).orElse(-1) == 16 : "doubleIfSome some";
+        assert !Demo.doubleIfSome(Optional.empty()).isPresent() : "doubleIfSome none";
+
+        Optional<String> optString = Demo.echoOptionalString(Optional.of("hello"));
+        assert optString.isPresent() && optString.get().equals("hello") : "echoOptionalString some";
+        assert !Demo.echoOptionalString(Optional.empty()).isPresent() : "echoOptionalString none";
+        assert Demo.isSomeString(Optional.of("x")) : "isSomeString some";
+        assert !Demo.isSomeString(Optional.empty()) : "isSomeString none";
+
+        Optional<Point> optPoint = Demo.echoOptionalPoint(Optional.of(new Point(1.0, 2.0)));
+        assert optPoint.isPresent() : "echoOptionalPoint some";
+        assert optPoint.get().x() == 1.0 && optPoint.get().y() == 2.0 : "echoOptionalPoint value";
+        assert Demo.makeSomePoint(3.0, 4.0).isPresent() : "makeSomePoint";
+        assert !Demo.makeNonePoint().isPresent() : "makeNonePoint";
+
+        Optional<Status> optStatus = Demo.echoOptionalStatus(Optional.of(Status.ACTIVE));
+        assert optStatus.isPresent() && optStatus.get() == Status.ACTIVE : "echoOptionalStatus some";
+        assert !Demo.echoOptionalStatus(Optional.empty()).isPresent() : "echoOptionalStatus none";
+
+        Optional<int[]> optVec = Demo.echoOptionalVec(Optional.of(new int[]{1, 2, 3}));
+        assert optVec.isPresent() : "echoOptionalVec some";
+        assert optVec.get().length == 3 && optVec.get()[0] == 1 && optVec.get()[2] == 3 : "echoOptionalVec value";
+        assert !Demo.echoOptionalVec(Optional.empty()).isPresent() : "echoOptionalVec none";
+
+        Optional<Integer> optVecLen = Demo.optionalVecLength(Optional.of(new int[]{9, 8}));
+        assert optVecLen.isPresent() && optVecLen.get() == 2 : "optionalVecLength some";
+        assert !Demo.optionalVecLength(Optional.empty()).isPresent() : "optionalVecLength none";
+
+        UserProfile withEmail = Demo.makeUserProfile(
+            "Alice",
+            30,
+            Optional.of("alice@example.com"),
+            Optional.of(98.5)
+        );
+        assert withEmail.email().isPresent() : "makeUserProfile email present";
+        assert withEmail.score().isPresent() : "makeUserProfile score present";
+        assert Demo.userDisplayName(withEmail).equals("Alice <alice@example.com>") : "userDisplayName with email";
+
+        UserProfile noEmail = Demo.makeUserProfile(
+            "Bob",
+            22,
+            Optional.empty(),
+            Optional.empty()
+        );
+        assert !noEmail.email().isPresent() : "makeUserProfile email none";
+        assert !noEmail.score().isPresent() : "makeUserProfile score none";
+        assert Demo.userDisplayName(noEmail).equals("Bob") : "userDisplayName without email";
+
+        UserProfile echoedProfile = Demo.echoUserProfile(withEmail);
+        assert echoedProfile.email().isPresent() : "echoUserProfile email";
+        assert echoedProfile.email().get().equals("alice@example.com") : "echoUserProfile email value";
+
+        SearchResult withCursor = Demo.echoSearchResult(
+            new SearchResult("rust ffi", 12, Optional.of("cursor-1"), Optional.of(0.99))
+        );
+        assert withCursor.nextCursor().isPresent() : "echoSearchResult cursor present";
+        assert withCursor.maxScore().isPresent() : "echoSearchResult score present";
+        assert Demo.hasMoreResults(withCursor) : "hasMoreResults true";
+
+        SearchResult withoutCursor = Demo.echoSearchResult(
+            new SearchResult("rust ffi", 12, Optional.empty(), Optional.empty())
+        );
+        assert !withoutCursor.nextCursor().isPresent() : "echoSearchResult cursor none";
+        assert !withoutCursor.maxScore().isPresent() : "echoSearchResult score none";
+        assert !Demo.hasMoreResults(withoutCursor) : "hasMoreResults false";
+
+        System.out.println("  PASS\n");
+    }
+
     private static void testRecordsWithVecs() {
         System.out.println("Testing records with vecs...");
 
-        Polygon polygon = Demo.makePolygon(java.util.Arrays.asList(
+        Polygon polygon = Demo.makePolygon(Arrays.asList(
             new Point(0.0, 0.0), new Point(1.0, 0.0), new Point(0.0, 1.0)
         ));
         assert Demo.polygonVertexCount(polygon) == 3 : "polygonVertexCount";
@@ -366,7 +454,7 @@ public final class DemoTest {
         assert Math.abs(centroid.x() - 1.0 / 3.0) < 0.0001 : "polygonCentroid.x";
         assert Math.abs(centroid.y() - 1.0 / 3.0) < 0.0001 : "polygonCentroid.y";
 
-        Team team = Demo.makeTeam("devs", java.util.Arrays.asList("Alice", "Bob"));
+        Team team = Demo.makeTeam("devs", Arrays.asList("Alice", "Bob"));
         assert team.name().equals("devs") : "makeTeam.name";
         assert team.members().size() == 2 : "makeTeam.members.size";
 
@@ -374,7 +462,7 @@ public final class DemoTest {
         assert echoedTeam.members().get(0).equals("Alice") : "echoTeam.members[0]";
         assert Demo.teamSize(team) == 2 : "teamSize";
 
-        Classroom classroom = Demo.makeClassroom(java.util.Arrays.asList(
+        Classroom classroom = Demo.makeClassroom(Arrays.asList(
             new Person("Mia", 10),
             new Person("Leo", 11)
         ));

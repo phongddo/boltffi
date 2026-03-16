@@ -216,6 +216,13 @@ fn emit_reader_read_with_context(seq: &ReadSeq, context: &mut JavaEmitContext) -
                 )
             }
         },
+        ReadOp::Option { some, .. } => {
+            let inner = emit_reader_read_with_context(some, context);
+            format!(
+                "reader.readI8() == 0 ? java.util.Optional.empty() : java.util.Optional.ofNullable({})",
+                inner,
+            )
+        }
         ReadOp::Vec {
             element_type,
             element,
@@ -301,6 +308,16 @@ fn emit_write_expr_with_context(
         }
         WriteOp::Bytes { value } => {
             format!("{}.writeBytes({})", writer_name, render_value(value))
+        }
+        WriteOp::Option { value, some } => {
+            let option_expr = render_value(value);
+            let inner = emit_write_expr_with_context(some, writer_name, context);
+            let some_value_expr = format!("({}).get()", option_expr);
+            let remapped_inner = replace_identifier_occurrences(&inner, "v", &some_value_expr);
+            format!(
+                "if (({}).isPresent()) {{ {}.writeI8((byte)1); {}; }} else {{ {}.writeI8((byte)0); }}",
+                option_expr, writer_name, remapped_inner, writer_name,
+            )
         }
         WriteOp::Record { value, .. } => {
             format!("{}.wireEncodeTo({})", render_value(value), writer_name)
@@ -401,6 +418,9 @@ fn java_type_for_iteration(ty: &TypeExpr) -> String {
         TypeExpr::String => "String".to_string(),
         TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
         TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
+        TypeExpr::Option(inner) => {
+            format!("java.util.Optional<{}>", java_type_for_iteration(inner))
+        }
         TypeExpr::Vec(inner) => match inner.as_ref() {
             TypeExpr::Primitive(primitive) => {
                 mappings::java_primitive_array_type(*primitive).to_string()
@@ -426,10 +446,11 @@ fn primitive_array_write_method(primitive: PrimitiveType) -> &'static str {
 }
 
 fn emit_size_expr(size: &SizeExpr) -> String {
-    emit_non_vec_size_expr(size)
+    let mut context = JavaEmitContext::default();
+    emit_size_expr_with_context(size, &mut context)
 }
 
-fn emit_non_vec_size_expr(size: &SizeExpr) -> String {
+fn emit_size_expr_with_context(size: &SizeExpr, context: &mut JavaEmitContext) -> String {
     match size {
         SizeExpr::Fixed(value) => value.to_string(),
         SizeExpr::StringLen(value) => {
@@ -441,15 +462,25 @@ fn emit_non_vec_size_expr(size: &SizeExpr) -> String {
         SizeExpr::WireSize { value, .. } => {
             format!("{}.wireEncodedSize()", render_value(value))
         }
-        SizeExpr::VecSize { .. } => {
-            panic!(
-                "VecSize should be handled through emit_size_expr_for_write_seq, not emit_size_expr"
+        SizeExpr::OptionSize { value, inner } => {
+            let option_expr = render_value(value);
+            let inner_expr = emit_size_expr_with_context(inner, context);
+            let some_value_expr = format!("({}).get()", option_expr);
+            let remapped_inner = replace_identifier_occurrences(&inner_expr, "v", &some_value_expr);
+            format!(
+                "(1 + (({}).isPresent() ? ({}) : 0))",
+                option_expr, remapped_inner,
             )
         }
+        SizeExpr::VecSize {
+            value,
+            inner,
+            layout,
+        } => emit_vec_size_expr_with_context(&render_value(value), inner, layout, context),
         SizeExpr::Sum(parts) => {
             let rendered = parts
                 .iter()
-                .map(emit_non_vec_size_expr)
+                .map(|part| emit_size_expr_with_context(part, context))
                 .collect::<Vec<_>>()
                 .join(" + ");
             format!("({})", rendered)
@@ -458,55 +489,19 @@ fn emit_non_vec_size_expr(size: &SizeExpr) -> String {
     }
 }
 
-fn emit_vec_size_for_write_seq(size: &SizeExpr, element_type: &TypeExpr) -> String {
-    let mut context = JavaEmitContext::default();
-    emit_vec_size_for_write_seq_with_context(size, element_type, &mut context)
-}
-
-fn emit_vec_size_for_write_seq_with_context(
-    size: &SizeExpr,
-    element_type: &TypeExpr,
-    context: &mut JavaEmitContext,
-) -> String {
-    match size {
-        SizeExpr::VecSize {
-            value,
-            inner,
-            layout,
-        } => emit_vec_size_expr_with_context(
-            &render_value(value),
-            inner,
-            layout,
-            element_type,
-            context,
-        ),
-        _ => emit_non_vec_size_expr(size),
-    }
-}
-
 fn emit_vec_size_expr_with_context(
     value: &str,
     inner: &SizeExpr,
     layout: &VecLayout,
-    element_type: &TypeExpr,
     context: &mut JavaEmitContext,
 ) -> String {
-    let len_accessor = match element_type {
-        TypeExpr::Primitive(_) => "length",
-        _ => "size()",
-    };
     match layout {
         VecLayout::Blittable { element_size } => {
-            format!("(4 + {}.{} * {})", value, len_accessor, element_size)
+            format!("(4 + {} * {})", emit_vec_length_expr(value), element_size)
         }
-        VecLayout::Encoded => match element_type {
-            TypeExpr::Primitive(_) => {
-                let inner_expr = emit_non_vec_size_expr(inner);
-                format!("(4 + {}.length * {})", value, inner_expr)
-            }
-            _ => {
-                let inner_expr =
-                    emit_nested_item_size_expr_with_context(inner, element_type, context);
+        VecLayout::Encoded => {
+            let inner_expr = emit_size_expr_with_context(inner, context);
+            if inner_expr.contains("item") {
                 let lambda_var = context.next_size_lambda();
                 let remapped_inner =
                     replace_identifier_occurrences(&inner_expr, "item", &lambda_var);
@@ -514,33 +509,15 @@ fn emit_vec_size_expr_with_context(
                     "WireWriter.listWireSize({}, {} -> {})",
                     value, lambda_var, remapped_inner,
                 )
+            } else {
+                format!("(4 + {} * {})", emit_vec_length_expr(value), inner_expr)
             }
-        },
+        }
     }
 }
 
-fn emit_nested_item_size_expr_with_context(
-    size: &SizeExpr,
-    item_type: &TypeExpr,
-    context: &mut JavaEmitContext,
-) -> String {
-    match (size, item_type) {
-        (
-            SizeExpr::VecSize {
-                value,
-                inner,
-                layout,
-            },
-            TypeExpr::Vec(inner_type),
-        ) => emit_vec_size_expr_with_context(
-            &render_value(value),
-            inner,
-            layout,
-            inner_type,
-            context,
-        ),
-        _ => emit_non_vec_size_expr(size),
-    }
+fn emit_vec_length_expr(value: &str) -> String {
+    format!("WireWriter.vecLength({})", value)
 }
 
 fn replace_identifier_occurrences(expression: &str, identifier: &str, replacement: &str) -> String {
@@ -578,10 +555,5 @@ fn is_identifier_char(character: char) -> bool {
 }
 
 pub fn emit_size_expr_for_write_seq(seq: &WriteSeq) -> String {
-    match seq.ops.first() {
-        Some(WriteOp::Vec { element_type, .. }) => {
-            emit_vec_size_for_write_seq(&seq.size, element_type)
-        }
-        _ => emit_size_expr(&seq.size),
-    }
+    emit_size_expr(&seq.size)
 }
