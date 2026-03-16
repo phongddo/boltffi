@@ -538,10 +538,65 @@ final class WireWriter implements AutoCloseable {
         return 4 + (v.length() * 3);
     }
 
+    static int vecLength(List<?> v) {
+        return v.size();
+    }
+
+    static int vecLength(boolean[] v) {
+        return v.length;
+    }
+
+    static int vecLength(byte[] v) {
+        return v.length;
+    }
+
+    static int vecLength(short[] v) {
+        return v.length;
+    }
+
+    static int vecLength(int[] v) {
+        return v.length;
+    }
+
+    static int vecLength(long[] v) {
+        return v.length;
+    }
+
+    static int vecLength(float[] v) {
+        return v.length;
+    }
+
+    static int vecLength(double[] v) {
+        return v.length;
+    }
+
     static <T> int listWireSize(List<T> list, java.util.function.ToIntFunction<T> sizer) {
         int total = 4;
         for (T item : list) total += sizer.applyAsInt(item);
         return total;
+    }
+
+    static <T> boolean listEquals(
+        List<T> left,
+        List<T> right,
+        java.util.function.BiPredicate<T, T> itemEquals
+    ) {
+        if (left == right) return true;
+        if (left == null || right == null) return false;
+        if (left.size() != right.size()) return false;
+        for (int index = 0; index < left.size(); index++) {
+            if (!itemEquals.test(left.get(index), right.get(index))) return false;
+        }
+        return true;
+    }
+
+    static <T> int listHash(List<T> values, java.util.function.ToIntFunction<T> itemHash) {
+        if (values == null) return 0;
+        int result = 1;
+        for (T value : values) {
+            result = 31 * result + itemHash.applyAsInt(value);
+        }
+        return result;
     }
 
     @Override

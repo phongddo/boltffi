@@ -43,16 +43,16 @@ public abstract class {{ enumeration.class_name }} {
             if (this == obj) return true;
             if (!(obj instanceof {{ variant.name }})) return false;
             {{ variant.name }} other = ({{ variant.name }}) obj;
-{%- if variant.fields.len() == 1 %}
-            return java.util.Objects.equals(this.{{ variant.fields[0].name }}, other.{{ variant.fields[0].name }});
-{%- else %}
-            return {% for field in variant.fields %}java.util.Objects.equals(this.{{ field.name }}, other.{{ field.name }}){% if !loop.last %} && {% endif %}{% endfor %};
-{%- endif %}
+            return {% for field in variant.fields %}{{ field.equals_expr }}{% if !loop.last %} && {% endif %}{% endfor %};
         }
 
         @Override
         public int hashCode() {
-            return java.util.Objects.hash({% for field in variant.fields %}{{ field.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+            int result = 1;
+{%- for field in variant.fields %}
+            result = 31 * result + {{ field.hash_expr }};
+{%- endfor %}
+            return result;
         }
 
         @Override

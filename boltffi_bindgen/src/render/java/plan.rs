@@ -88,6 +88,8 @@ pub struct JavaEnumField {
     pub wire_decode_expr: String,
     pub wire_size_expr: String,
     pub wire_encode_expr: String,
+    pub equals_expr: String,
+    pub hash_expr: String,
 }
 
 #[derive(Debug, Clone)]

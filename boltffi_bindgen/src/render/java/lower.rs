@@ -54,6 +54,7 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Primitive(_) | TypeExpr::String | TypeExpr::Void => true,
             TypeExpr::Record(id) => supported.contains(id.as_str()),
             TypeExpr::Enum(id) => supported.contains(id.as_str()),
+            TypeExpr::Option(inner) => Self::is_leaf_supported(inner, supported),
             TypeExpr::Vec(inner) => Self::is_leaf_supported(inner, supported),
             _ => false,
         }
@@ -207,11 +208,22 @@ impl<'a> JavaLowerer<'a> {
             && !record
                 .fields
                 .iter()
-                .any(|field| Self::is_primitive_vec(&field.type_expr))
+                .any(|field| Self::contains_primitive_array_component(&field.type_expr))
     }
 
-    fn is_primitive_vec(ty: &TypeExpr) -> bool {
-        matches!(ty, TypeExpr::Vec(inner) if matches!(inner.as_ref(), TypeExpr::Primitive(_)))
+    fn contains_primitive_array_component(ty: &TypeExpr) -> bool {
+        match ty {
+            TypeExpr::Vec(inner) => {
+                matches!(inner.as_ref(), TypeExpr::Primitive(_))
+                    || Self::contains_primitive_array_component(inner)
+            }
+            TypeExpr::Option(inner) => Self::contains_primitive_array_component(inner),
+            TypeExpr::Result { ok, err } => {
+                Self::contains_primitive_array_component(ok)
+                    || Self::contains_primitive_array_component(err)
+            }
+            _ => false,
+        }
     }
 
     fn lower_blittable_layout(&self, record_id: &RecordId) -> Option<JavaBlittableLayout> {
@@ -265,7 +277,7 @@ impl<'a> JavaLowerer<'a> {
             name: NamingConvention::field_name(field.name.as_str()),
             java_type: self.java_type(&field.type_expr),
             wire_decode_expr: super::emit::emit_reader_read(&decode_seq),
-            wire_size_expr: super::emit::emit_size_expr_for_write_seq(&encode_seq),
+            wire_size_expr: super::emit::emit_size_expr(&encode_seq.size),
             wire_encode_expr: super::emit::emit_write_expr(&encode_seq, "wire"),
             equals_expr: self.record_field_equals_expr(&field.type_expr, field.name.as_str()),
             hash_expr: self.record_field_hash_expr(&field.type_expr, field.name.as_str()),
@@ -274,54 +286,112 @@ impl<'a> JavaLowerer<'a> {
 
     fn record_field_equals_expr(&self, ty: &TypeExpr, field_name: &str) -> String {
         let field = NamingConvention::field_name(field_name);
-        match ty {
-            TypeExpr::Primitive(PrimitiveType::F32) => {
-                format!("Float.compare(this.{field}, other.{field}) == 0")
-            }
-            TypeExpr::Primitive(PrimitiveType::F64) => {
-                format!("Double.compare(this.{field}, other.{field}) == 0")
-            }
-            TypeExpr::Primitive(_) => format!("this.{field} == other.{field}"),
-            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
-                format!("Objects.equals(this.{field}, other.{field})")
-            }
-            TypeExpr::Vec(inner) => match inner.as_ref() {
-                TypeExpr::Primitive(_) => {
-                    format!("java.util.Arrays.equals(this.{field}, other.{field})")
-                }
-                _ => format!("Objects.equals(this.{field}, other.{field})"),
-            },
-            _ => panic!("unsupported Java record field equality type: {:?}", ty),
-        }
+        let left = format!("this.{field}");
+        let right = format!("other.{field}");
+        self.value_equals_expr(ty, &left, &right)
     }
 
     fn record_field_hash_expr(&self, ty: &TypeExpr, field_name: &str) -> String {
         let field = NamingConvention::field_name(field_name);
+        self.value_hash_expr(ty, &field)
+    }
+
+    fn value_equals_expr(&self, ty: &TypeExpr, left: &str, right: &str) -> String {
+        self.value_equals_expr_with_depth(ty, left, right, 0)
+    }
+
+    fn value_equals_expr_with_depth(
+        &self,
+        ty: &TypeExpr,
+        left: &str,
+        right: &str,
+        depth: usize,
+    ) -> String {
         match ty {
-            TypeExpr::Primitive(PrimitiveType::Bool) => format!("Boolean.hashCode({field})"),
+            TypeExpr::Primitive(PrimitiveType::F32) => {
+                format!("Float.compare({left}, {right}) == 0")
+            }
+            TypeExpr::Primitive(PrimitiveType::F64) => {
+                format!("Double.compare({left}, {right}) == 0")
+            }
+            TypeExpr::Primitive(_) => format!("{left} == {right}"),
+            TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+                format!("java.util.Objects.equals({left}, {right})")
+            }
+            TypeExpr::Option(inner) => {
+                let left_is_null = format!("({left}) == null");
+                let right_is_null = format!("({right}) == null");
+                let left_present = format!("({left}).isPresent()");
+                let right_present = format!("({right}).isPresent()");
+                let left_value = format!("({left}).get()");
+                let right_value = format!("({right}).get()");
+                let inner_equals =
+                    self.value_equals_expr_with_depth(inner, &left_value, &right_value, depth);
+                format!(
+                    "({left_is_null} ? {right_is_null} : (!({right_is_null}) && {left_present} == {right_present} && (!({left_present}) || {inner_equals})))"
+                )
+            }
+            TypeExpr::Vec(inner) => match inner.as_ref() {
+                TypeExpr::Primitive(_) => format!("java.util.Arrays.equals({left}, {right})"),
+                _ => {
+                    let left_item = format!("leftItem{depth}");
+                    let right_item = format!("rightItem{depth}");
+                    let inner_equals = self.value_equals_expr_with_depth(
+                        inner,
+                        &left_item,
+                        &right_item,
+                        depth + 1,
+                    );
+                    format!(
+                        "WireWriter.listEquals({left}, {right}, ({left_item}, {right_item}) -> {inner_equals})"
+                    )
+                }
+            },
+            _ => panic!("unsupported Java equality type: {:?}", ty),
+        }
+    }
+
+    fn value_hash_expr(&self, ty: &TypeExpr, value: &str) -> String {
+        self.value_hash_expr_with_depth(ty, value, 0)
+    }
+
+    fn value_hash_expr_with_depth(&self, ty: &TypeExpr, value: &str, depth: usize) -> String {
+        match ty {
+            TypeExpr::Primitive(PrimitiveType::Bool) => format!("Boolean.hashCode({value})"),
             TypeExpr::Primitive(PrimitiveType::I8) | TypeExpr::Primitive(PrimitiveType::U8) => {
-                format!("Byte.hashCode({field})")
+                format!("Byte.hashCode({value})")
             }
             TypeExpr::Primitive(PrimitiveType::I16) | TypeExpr::Primitive(PrimitiveType::U16) => {
-                format!("Short.hashCode({field})")
+                format!("Short.hashCode({value})")
             }
             TypeExpr::Primitive(PrimitiveType::I32) | TypeExpr::Primitive(PrimitiveType::U32) => {
-                format!("Integer.hashCode({field})")
+                format!("Integer.hashCode({value})")
             }
             TypeExpr::Primitive(PrimitiveType::I64)
             | TypeExpr::Primitive(PrimitiveType::U64)
             | TypeExpr::Primitive(PrimitiveType::ISize)
-            | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({field})"),
-            TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({field})"),
-            TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({field})"),
+            | TypeExpr::Primitive(PrimitiveType::USize) => format!("Long.hashCode({value})"),
+            TypeExpr::Primitive(PrimitiveType::F32) => format!("Float.hashCode({value})"),
+            TypeExpr::Primitive(PrimitiveType::F64) => format!("Double.hashCode({value})"),
             TypeExpr::String | TypeExpr::Record(_) | TypeExpr::Enum(_) => {
-                format!("Objects.hashCode({field})")
+                format!("java.util.Objects.hashCode({value})")
+            }
+            TypeExpr::Option(inner) => {
+                let inner_value = format!("({value}).get()");
+                let inner_hash = self.value_hash_expr_with_depth(inner, &inner_value, depth);
+                format!(
+                    "(({value}) == null ? 0 : (({value}).isPresent() ? (31 + ({inner_hash})) : 0))"
+                )
             }
             TypeExpr::Vec(inner) => match inner.as_ref() {
-                TypeExpr::Primitive(_) => format!("java.util.Arrays.hashCode({field})"),
-                _ => format!("Objects.hashCode({field})"),
+                TypeExpr::Primitive(_) => format!("java.util.Arrays.hashCode({value})"),
+                _ => {
+                    let item = format!("item{depth}");
+                    let inner_hash = self.value_hash_expr_with_depth(inner, &item, depth + 1);
+                    format!("WireWriter.listHash({value}, {item} -> {inner_hash})")
+                }
             },
-            _ => panic!("unsupported Java record field hash type: {:?}", ty),
+            _ => panic!("unsupported Java hash type: {:?}", ty),
         }
     }
 
@@ -482,7 +552,7 @@ impl<'a> JavaLowerer<'a> {
                     (java_type.clone(), field_name.clone())
                 }
             }
-            TypeExpr::Record(_) | TypeExpr::Enum(_) => {
+            TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Option(_) => {
                 let binding_name = wire_writers
                     .iter()
                     .find(|w| w.param_name == name)
@@ -515,7 +585,7 @@ impl<'a> JavaLowerer<'a> {
                     JavaWireWriter {
                         binding_name,
                         param_name,
-                        size_expr: super::emit::emit_size_expr_for_write_seq(&encode_ops),
+                        size_expr: super::emit::emit_size_expr(&encode_ops.size),
                         encode_expr,
                     }
                 })
@@ -550,6 +620,15 @@ impl<'a> JavaLowerer<'a> {
                 TypeExpr::Primitive(_) => JavaReturnStrategy::Direct,
                 TypeExpr::String => JavaReturnStrategy::WireDecode {
                     decode_expr: "reader.readString()".to_string(),
+                },
+                TypeExpr::Option(_) => match &call.returns.decode_ops {
+                    Some(decode_seq) => JavaReturnStrategy::WireDecode {
+                        decode_expr: super::emit::emit_reader_read(decode_seq),
+                    },
+                    None => panic!(
+                        "unsupported direct Option return transport for Java backend: {:?}",
+                        ty
+                    ),
                 },
                 TypeExpr::Record(id) => JavaReturnStrategy::WireDecode {
                     decode_expr: format!(
@@ -636,6 +715,9 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::String => "String".to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Option(inner) => {
+                format!("java.util.Optional<{}>", self.java_boxed_type(inner))
+            }
             TypeExpr::Vec(inner) => self.java_vec_type(inner),
             _ => "Object".to_string(),
         }
@@ -654,6 +736,9 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::String => "String".to_string(),
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Option(inner) => {
+                format!("java.util.Optional<{}>", self.java_boxed_type(inner))
+            }
             TypeExpr::Vec(inner) => self.java_vec_type(inner),
             _ => "Object".to_string(),
         }
@@ -664,7 +749,9 @@ impl<'a> JavaLowerer<'a> {
         let class_name = NamingConvention::class_name(enumeration.id.as_str());
         let kind = if abi_enum.is_c_style {
             JavaEnumKind::CStyle
-        } else if self.options.min_java_version.supports_sealed() {
+        } else if self.options.min_java_version.supports_sealed()
+            && !Self::requires_manual_enum_value_semantics(abi_enum)
+        {
             JavaEnumKind::SealedInterface
         } else {
             JavaEnumKind::AbstractClass
@@ -690,6 +777,18 @@ impl<'a> JavaLowerer<'a> {
             value_type,
             variants,
         }
+    }
+
+    fn requires_manual_enum_value_semantics(enumeration: &AbiEnum) -> bool {
+        enumeration
+            .variants
+            .iter()
+            .any(|variant| match &variant.payload {
+                AbiEnumPayload::Unit => false,
+                AbiEnumPayload::Tuple(fields) | AbiEnumPayload::Struct(fields) => fields
+                    .iter()
+                    .any(|field| Self::contains_primitive_array_component(&field.type_expr)),
+            })
     }
 
     fn lower_enum_variant(
@@ -722,10 +821,16 @@ impl<'a> JavaLowerer<'a> {
         sibling_names: &HashSet<String>,
     ) -> JavaEnumField {
         let field_name = NamingConvention::field_name(field.name.as_str());
+        let equals_expr = self.value_equals_expr(
+            &field.type_expr,
+            &format!("this.{field_name}"),
+            &format!("other.{field_name}"),
+        );
+        let hash_expr = self.value_hash_expr(&field.type_expr, field_name.as_str());
         let prefixed = Self::prefix_write_seq(&field.encode, "_v");
         let mut java_type = self.java_type(&field.type_expr);
         let mut decode_expr = super::emit::emit_reader_read(&field.decode);
-        let mut size_expr = super::emit::emit_size_expr_for_write_seq(&prefixed);
+        let mut size_expr = super::emit::emit_size_expr(&prefixed.size);
         let mut encode_expr = super::emit::emit_write_expr(&prefixed, "wire");
         if sibling_names.contains(&java_type) {
             java_type = format!("{}.{}", self.package_name, java_type);
@@ -739,6 +844,8 @@ impl<'a> JavaLowerer<'a> {
             wire_decode_expr: decode_expr,
             wire_size_expr: size_expr,
             wire_encode_expr: encode_expr,
+            equals_expr,
+            hash_expr,
         }
     }
 
@@ -788,6 +895,10 @@ impl<'a> JavaLowerer<'a> {
             WriteOp::Bytes { value } => WriteOp::Bytes {
                 value: Self::prefix_value(value, binding),
             },
+            WriteOp::Option { value, some } => WriteOp::Option {
+                value: Self::prefix_value(value, binding),
+                some: Box::new(Self::prefix_write_seq(some, binding)),
+            },
             WriteOp::Record { id, value, fields } => WriteOp::Record {
                 id: id.clone(),
                 value: Self::prefix_value(value, binding),
@@ -805,6 +916,24 @@ impl<'a> JavaLowerer<'a> {
                 value: Self::prefix_value(value, binding),
                 layout: layout.clone(),
             },
+            WriteOp::Result { value, ok, err } => WriteOp::Result {
+                value: Self::prefix_value(value, binding),
+                ok: Box::new(Self::prefix_write_seq(ok, binding)),
+                err: Box::new(Self::prefix_write_seq(err, binding)),
+            },
+            WriteOp::Builtin { id, value } => WriteOp::Builtin {
+                id: id.clone(),
+                value: Self::prefix_value(value, binding),
+            },
+            WriteOp::Custom {
+                id,
+                value,
+                underlying,
+            } => WriteOp::Custom {
+                id: id.clone(),
+                value: Self::prefix_value(value, binding),
+                underlying: Box::new(Self::prefix_write_seq(underlying, binding)),
+            },
             WriteOp::Vec {
                 value,
                 element_type,
@@ -816,7 +945,6 @@ impl<'a> JavaLowerer<'a> {
                 element: element.clone(),
                 layout: layout.clone(),
             },
-            other => other.clone(),
         }
     }
 
@@ -826,9 +954,17 @@ impl<'a> JavaLowerer<'a> {
             SizeExpr::StringLen(v) => SizeExpr::StringLen(Self::prefix_value(v, binding)),
             SizeExpr::BytesLen(v) => SizeExpr::BytesLen(Self::prefix_value(v, binding)),
             SizeExpr::ValueSize(v) => SizeExpr::ValueSize(Self::prefix_value(v, binding)),
+            SizeExpr::BuiltinSize { id, value } => SizeExpr::BuiltinSize {
+                id: id.clone(),
+                value: Self::prefix_value(value, binding),
+            },
             SizeExpr::WireSize { value, record_id } => SizeExpr::WireSize {
                 value: Self::prefix_value(value, binding),
                 record_id: record_id.clone(),
+            },
+            SizeExpr::OptionSize { value, inner } => SizeExpr::OptionSize {
+                value: Self::prefix_value(value, binding),
+                inner: Box::new(Self::prefix_size_expr(inner, binding)),
             },
             SizeExpr::VecSize {
                 value,
@@ -836,8 +972,13 @@ impl<'a> JavaLowerer<'a> {
                 layout,
             } => SizeExpr::VecSize {
                 value: Self::prefix_value(value, binding),
-                inner: inner.clone(),
+                inner: Box::new(Self::prefix_size_expr(inner, binding)),
                 layout: layout.clone(),
+            },
+            SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
+                value: Self::prefix_value(value, binding),
+                ok: Box::new(Self::prefix_size_expr(ok, binding)),
+                err: Box::new(Self::prefix_size_expr(err, binding)),
             },
             SizeExpr::Sum(parts) => SizeExpr::Sum(
                 parts
@@ -845,7 +986,6 @@ impl<'a> JavaLowerer<'a> {
                     .map(|p| Self::prefix_size_expr(p, binding))
                     .collect(),
             ),
-            other => other.clone(),
         }
     }
 
