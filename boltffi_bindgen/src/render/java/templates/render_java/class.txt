@@ -93,7 +93,11 @@ public final class {{ class.class_name }} implements AutoCloseable {
 {%- elif method.strategy.is_c_style_enum() %}
         return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
 {%- elif method.strategy.is_handle() %}
-        return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+        long _handle = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- if method.strategy.handle_nullable() %}
+        if (_handle == 0L) return null;
+{%- endif %}
+        return new {{ method.strategy.handle_class() }}(_handle);
 {%- elif method.strategy.is_wire() %}
         byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
         if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
@@ -116,8 +120,14 @@ public final class {{ class.class_name }} implements AutoCloseable {
             Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- elif method.strategy.is_direct() %}
             return Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_c_style_enum() %}
+            return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
 {%- elif method.strategy.is_handle() %}
-            return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+            long _handle = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- if method.strategy.handle_nullable() %}
+            if (_handle == 0L) return null;
+{%- endif %}
+            return new {{ method.strategy.handle_class() }}(_handle);
 {%- elif method.strategy.is_wire() %}
             byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
             if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
@@ -143,7 +153,11 @@ public final class {{ class.class_name }} implements AutoCloseable {
 {%- elif method.strategy.is_c_style_enum() %}
         return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
 {%- elif method.strategy.is_handle() %}
-        return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+        long _handle = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- if method.strategy.handle_nullable() %}
+        if (_handle == 0L) return null;
+{%- endif %}
+        return new {{ method.strategy.handle_class() }}(_handle);
 {%- elif method.strategy.is_wire() %}
         byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
         if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
@@ -166,8 +180,14 @@ public final class {{ class.class_name }} implements AutoCloseable {
             Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- elif method.strategy.is_direct() %}
             return Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_c_style_enum() %}
+            return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
 {%- elif method.strategy.is_handle() %}
-            return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+            long _handle = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- if method.strategy.handle_nullable() %}
+            if (_handle == 0L) return null;
+{%- endif %}
+            return new {{ method.strategy.handle_class() }}(_handle);
 {%- elif method.strategy.is_wire() %}
             byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
             if (_buf == null) throw new RuntimeException("FFI call returned null buffer");

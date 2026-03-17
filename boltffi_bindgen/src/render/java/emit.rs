@@ -565,3 +565,195 @@ fn replace_identifier_occurrences(expression: &str, identifier: &str, replacemen
 fn is_identifier_char(character: char) -> bool {
     character.is_ascii_alphanumeric() || character == '_'
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ir::Lowerer as IrLowerer;
+    use crate::ir::contract::{FfiContract, PackageInfo};
+    use crate::ir::definitions::{
+        ClassDef, ConstructorDef, MethodDef, ParamDef, ParamPassing, Receiver, ReturnDef,
+    };
+    use crate::ir::ids::{ClassId, MethodId, ParamName};
+    use crate::ir::types::{PrimitiveType, TypeExpr};
+    use std::env;
+    use std::fs;
+    use std::process::Command;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn empty_contract() -> FfiContract {
+        FfiContract {
+            package: PackageInfo {
+                name: "test".to_string(),
+                version: None,
+            },
+            functions: vec![],
+            catalog: Default::default(),
+        }
+    }
+
+    fn class_def(id: &str, constructors: Vec<ConstructorDef>, methods: Vec<MethodDef>) -> ClassDef {
+        ClassDef {
+            id: ClassId::from(id),
+            constructors,
+            methods,
+            streams: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn default_ctor(params: Vec<ParamDef>) -> ConstructorDef {
+        ConstructorDef::Default {
+            params,
+            is_fallible: false,
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn param(name: &str, type_expr: TypeExpr) -> ParamDef {
+        ParamDef {
+            name: ParamName::from(name),
+            type_expr,
+            passing: ParamPassing::Value,
+            doc: None,
+        }
+    }
+
+    fn instance_method(name: &str, params: Vec<ParamDef>, returns: ReturnDef) -> MethodDef {
+        MethodDef {
+            id: MethodId::from(name),
+            receiver: Receiver::RefSelf,
+            params,
+            returns,
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    #[test]
+    fn emit_generates_class_file() {
+        let mut contract = empty_contract();
+        contract
+            .catalog
+            .insert_class(class_def("counter", vec![default_ctor(vec![])], vec![]));
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+
+        let output = JavaEmitter::emit(
+            &contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            JavaOptions::default(),
+        );
+
+        let class_file = output
+            .files
+            .iter()
+            .find(|file| file.file_name == "Counter.java");
+        assert!(class_file.is_some());
+        let class_source = class_file
+            .map(|file| file.source.as_str())
+            .expect("class file should exist");
+        assert!(class_source.contains("implements AutoCloseable"));
+    }
+
+    #[test]
+    fn emit_main_file_includes_class_native_declarations() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(class_def(
+            "counter",
+            vec![default_ctor(vec![])],
+            vec![instance_method(
+                "get",
+                vec![param("slot", TypeExpr::Primitive(PrimitiveType::I32))],
+                ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+            )],
+        ));
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+
+        let output = JavaEmitter::emit(
+            &contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            JavaOptions::default(),
+        );
+
+        let main_file = output
+            .files
+            .iter()
+            .find(|file| file.file_name == "Test.java")
+            .expect("main file should exist");
+
+        assert!(
+            main_file
+                .source
+                .contains("static native void boltffi_counter_free(long handle);")
+        );
+        assert!(
+            main_file
+                .source
+                .contains("static native long boltffi_counter_new();")
+        );
+        assert!(
+            main_file
+                .source
+                .contains("static native int boltffi_counter_get(long handle, int slot);")
+        );
+    }
+
+    #[test]
+    fn emit_generated_java_compiles_with_javac_when_available() {
+        if Command::new("javac").arg("-version").output().is_err() {
+            return;
+        }
+
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(class_def(
+            "counter",
+            vec![default_ctor(vec![])],
+            vec![instance_method(
+                "get",
+                vec![param("slot", TypeExpr::Primitive(PrimitiveType::I32))],
+                ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::I32)),
+            )],
+        ));
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let output = JavaEmitter::emit(
+            &contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            JavaOptions::default(),
+        );
+
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time should be monotonic")
+            .as_nanos();
+        let tmp_root = env::temp_dir().join(format!("boltffi-java-{}", nanos));
+        let package_dir = tmp_root.join(&output.package_path);
+        fs::create_dir_all(&package_dir).expect("should create package directory");
+
+        let source_paths: Vec<_> = output
+            .files
+            .iter()
+            .map(|file| {
+                let path = package_dir.join(&file.file_name);
+                fs::write(&path, &file.source).expect("should write generated source");
+                path
+            })
+            .collect();
+
+        let status = Command::new("javac")
+            .args(source_paths)
+            .status()
+            .expect("javac should execute");
+        assert!(status.success());
+
+        let _ = fs::remove_dir_all(tmp_root);
+    }
+}
