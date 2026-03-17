@@ -1196,6 +1196,8 @@ mod tests {
             is_repr_c: true,
             id: RecordId::new(id),
             fields,
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         }

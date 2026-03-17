@@ -3,8 +3,9 @@ use std::path::{Component, Path};
 
 use boltffi_bindgen::render::typescript::{TypeScriptEmitter, TypeScriptLowerer};
 use boltffi_bindgen::{
-    CHeaderLowerer, FactoryStyle, KotlinOptions, TypeConversion as BindgenTypeConversion,
-    TypeMapping as BindgenTypeMapping, TypeMappings, ir, render, scan_crate_with_pointer_width,
+    CHeaderLowerer, FactoryStyle, KotlinOptions, ScanFeatures,
+    TypeConversion as BindgenTypeConversion, TypeMapping as BindgenTypeMapping, TypeMappings, ir,
+    render, scan_crate_with_options,
 };
 
 use crate::config::{
@@ -90,16 +91,24 @@ fn convert_type_mappings(
         .collect()
 }
 
-fn scan_with_pointer_width(
-    crate_dir: &Path,
-    crate_name: &str,
-    pointer_width_bits: Option<u8>,
+fn scan_crate(
+    source_directory: &Path,
+    library_name: &str,
+    target_pointer_width: Option<u8>,
+    config: &Config,
 ) -> Result<boltffi_bindgen::Module> {
-    scan_crate_with_pointer_width(crate_dir, crate_name, pointer_width_bits).map_err(|error| {
-        CliError::CommandFailed {
-            command: format!("scan_crate: {}", error),
-            status: None,
-        }
+    let features = ScanFeatures {
+        record_methods: config.record_methods_enabled(),
+    };
+    scan_crate_with_options(
+        source_directory,
+        library_name,
+        target_pointer_width,
+        features,
+    )
+    .map_err(|error| CliError::CommandFailed {
+        command: format!("scan_crate: {}", error),
+        status: None,
     })
 }
 
@@ -192,7 +201,7 @@ fn generate_swift(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_with_pointer_width(&crate_dir, crate_name, Some(64))?;
+    let mut module = scan_crate(&crate_dir, crate_name, Some(64), config)?;
 
     let ffi_module_name = config
         .apple_swift_ffi_module_name()
@@ -247,7 +256,7 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_with_pointer_width(&crate_dir, crate_name, None)?;
+    let mut module = scan_crate(&crate_dir, crate_name, None, config)?;
 
     let factory_style = match config.android_kotlin_factory_style() {
         ConfigFactoryStyle::Constructors => FactoryStyle::Constructors,
@@ -351,7 +360,7 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
         JavaGenerationMode::Jvm => host_pointer_width_bits(),
         JavaGenerationMode::Android => None,
     };
-    let mut module = scan_with_pointer_width(&crate_dir, crate_name, java_pointer_width_bits)?;
+    let mut module = scan_crate(&crate_dir, crate_name, java_pointer_width_bits, config)?;
 
     let contract = ir::build_contract(&mut module);
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
@@ -421,7 +430,7 @@ fn generate_header(config: &Config, output: Option<PathBuf>) -> Result<()> {
     } else {
         None
     };
-    let mut module = scan_with_pointer_width(&crate_dir, crate_name, header_pointer_width_bits)?;
+    let mut module = scan_crate(&crate_dir, crate_name, header_pointer_width_bits, config)?;
 
     let contract = ir::build_contract(&mut module);
     let abi = ir::Lowerer::new(&contract).to_abi_contract();
@@ -460,7 +469,7 @@ fn generate_typescript(config: &Config, output: Option<PathBuf>) -> Result<()> {
         .unwrap_or_else(|_| PathBuf::from("."));
     let crate_name = config.library_name();
 
-    let mut module = scan_with_pointer_width(&crate_dir, crate_name, Some(32))?;
+    let mut module = scan_crate(&crate_dir, crate_name, Some(32), config)?;
 
     let contract = ir::build_contract(&mut module);
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();

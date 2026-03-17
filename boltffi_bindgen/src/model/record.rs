@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 
+use super::class::Constructor;
 use super::layout::{CLayout, Size, StructLayout};
+use super::method::Method;
 use super::types::{Deprecation, Type};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -9,6 +11,10 @@ pub struct Record {
     #[serde(default = "default_true")]
     pub is_repr_c: bool,
     pub fields: Vec<RecordField>,
+    #[serde(default)]
+    pub constructors: Vec<Constructor>,
+    #[serde(default)]
+    pub methods: Vec<Method>,
     pub doc: Option<String>,
     pub deprecated: Option<Deprecation>,
 }
@@ -23,6 +29,8 @@ impl Record {
             name: name.into(),
             is_repr_c: true,
             fields: Vec::new(),
+            constructors: Vec::new(),
+            methods: Vec::new(),
             doc: None,
             deprecated: None,
         }
@@ -36,6 +44,20 @@ impl Record {
     pub fn with_field(mut self, field: RecordField) -> Self {
         self.fields.push(field);
         self
+    }
+
+    pub fn with_constructor(mut self, constructor: Constructor) -> Self {
+        self.constructors.push(constructor);
+        self
+    }
+
+    pub fn with_method(mut self, method: Method) -> Self {
+        self.methods.push(method);
+        self
+    }
+
+    pub fn has_methods(&self) -> bool {
+        !self.constructors.is_empty() || !self.methods.is_empty()
     }
 
     pub fn with_doc(mut self, doc: impl Into<String>) -> Self {

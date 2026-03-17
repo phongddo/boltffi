@@ -2561,6 +2561,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -2592,6 +2594,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -2754,6 +2758,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -2800,6 +2806,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -3024,6 +3032,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -3107,6 +3117,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });
@@ -3269,6 +3281,8 @@ mod tests {
                     default: None,
                 },
             ],
+            constructors: vec![],
+            methods: vec![],
             doc: None,
             deprecated: None,
         });

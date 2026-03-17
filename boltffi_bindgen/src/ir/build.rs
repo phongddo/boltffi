@@ -86,6 +86,22 @@ impl<'m> ContractBuilder<'m> {
     }
 
     fn convert_record(&self, record: &model::Record) -> RecordDef {
+        let has_default_init = record.constructors.iter().any(|c| c.name == "new");
+        let constructors = record
+            .constructors
+            .iter()
+            .fold(
+                (Vec::new(), has_default_init),
+                |(mut converted, default_slot_taken), ctor| {
+                    let result = self.convert_constructor(ctor, default_slot_taken);
+                    let promoted =
+                        default_slot_taken || (ctor.name != "new" && ctor.inputs.is_empty());
+                    converted.push(result);
+                    (converted, promoted)
+                },
+            )
+            .0;
+
         RecordDef {
             id: RecordId::new(&record.name),
             is_repr_c: record.is_repr_c,
@@ -109,6 +125,12 @@ impl<'m> ContractBuilder<'m> {
                         default,
                     }
                 })
+                .collect(),
+            constructors,
+            methods: record
+                .methods
+                .iter()
+                .map(|m| self.convert_method(m))
                 .collect(),
             doc: record.doc.clone(),
             deprecated: record.deprecated.as_ref().map(convert_deprecation),

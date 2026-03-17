@@ -112,6 +112,10 @@ impl Module {
                 .classes
                 .iter()
                 .any(|c| c.methods.iter().any(|m| m.is_async))
+            || self
+                .records
+                .iter()
+                .any(|r| r.methods.iter().any(|m| m.is_async))
     }
 
     pub fn has_streams(&self) -> bool {
@@ -147,6 +151,22 @@ impl Module {
             .iter()
             .flat_map(|r| r.fields.iter().map(|f| &f.field_type))
             .for_each(|ty| collector.visit(ty));
+
+        self.records.iter().for_each(|r| {
+            r.constructors.iter().for_each(|ctor| {
+                ctor.inputs
+                    .iter()
+                    .map(|p| &p.param_type)
+                    .for_each(|ty| collector.visit(ty));
+            });
+            r.methods.iter().for_each(|m| {
+                m.inputs
+                    .iter()
+                    .map(|p| &p.param_type)
+                    .for_each(|ty| collector.visit(ty));
+                collector.visit_return_type(&m.returns);
+            });
+        });
 
         self.enums
             .iter()

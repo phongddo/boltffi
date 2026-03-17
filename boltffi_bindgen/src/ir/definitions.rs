@@ -17,11 +17,17 @@ pub struct RecordDef {
     pub id: RecordId,
     pub is_repr_c: bool,
     pub fields: Vec<FieldDef>,
+    pub constructors: Vec<ConstructorDef>,
+    pub methods: Vec<MethodDef>,
     pub doc: Option<String>,
     pub deprecated: Option<DeprecationInfo>,
 }
 
 impl RecordDef {
+    pub fn has_methods(&self) -> bool {
+        !self.constructors.is_empty() || !self.methods.is_empty()
+    }
+
     pub fn is_blittable(&self) -> bool {
         let field_primitives: Vec<FieldPrimitive> = self
             .fields
