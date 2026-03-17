@@ -1,6 +1,6 @@
 use askama::Template;
 
-use super::plan::{JavaEnum, JavaModule, JavaRecord};
+use super::plan::{JavaClass, JavaEnum, JavaModule, JavaRecord};
 
 #[derive(Template)]
 #[template(path = "render_java/preamble.txt", escape = "none")]
@@ -45,5 +45,12 @@ pub struct DataEnumSealedTemplate<'a> {
 #[template(path = "render_java/enum_abstract.txt", escape = "none")]
 pub struct DataEnumAbstractTemplate<'a> {
     pub enumeration: &'a JavaEnum,
+    pub package_name: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "render_java/class.txt", escape = "none")]
+pub struct ClassTemplate<'a> {
+    pub class: &'a JavaClass,
     pub package_name: &'a str,
 }

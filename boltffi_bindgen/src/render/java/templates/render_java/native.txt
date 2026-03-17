@@ -25,4 +25,17 @@ final class Native {
 {%- for func in module.functions %}
     static native {{ func.native_return_type() }} {{ func.ffi_name }}({% for param in func.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- endfor %}
+{%- for class in module.classes %}
+    static native void {{ class.ffi_free }}(long handle);
+{%- for ctor in class.constructors %}
+    static native long {{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
+{%- for method in class.methods %}
+{%- if method.is_static %}
+    static native {{ method.native_return_type() }} {{ method.ffi_name }}({% for param in method.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- else %}
+    static native {{ method.native_return_type() }} {{ method.ffi_name }}(long handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endif %}
+{%- endfor %}
+{%- endfor %}
 }

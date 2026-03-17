@@ -1,0 +1,184 @@
+package {{ package_name }};
+
+import java.util.concurrent.atomic.AtomicBoolean;
+
+public final class {{ class.class_name }} implements AutoCloseable {
+    private final long handle;
+    private final AtomicBoolean closed = new AtomicBoolean(false);
+
+    private {{ class.class_name }}(long handle) {
+        this.handle = handle;
+    }
+{%- for ctor in class.constructors %}{% if !ctor.is_factory() %}
+
+    public {{ class.class_name }}({% for param in ctor.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+        this({{ class.class_name }}.createHandle{{ loop.index0 }}({% for param in ctor.params %}{{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}));
+    }
+
+    private static long createHandle{{ loop.index0 }}({% for param in ctor.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- if ctor.wire_writers.is_empty() %}
+{%- if ctor.is_fallible %}
+        long _handle = Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        if (_handle == 0L) throw new RuntimeException("Constructor failed");
+        return _handle;
+{%- else %}
+        return Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endif %}
+{%- else %}
+        try (
+{%- for writer in ctor.wire_writers %}
+            WireWriter {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }}){% if !loop.last %};{% endif %}
+{%- endfor %}
+        ) {
+{%- for writer in ctor.wire_writers %}
+            {{ writer.encode_expr }};
+{%- endfor %}
+{%- if ctor.is_fallible %}
+            long _handle = Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            if (_handle == 0L) throw new RuntimeException("Constructor failed");
+            return _handle;
+{%- else %}
+            return Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endif %}
+        }
+{%- endif %}
+    }
+{%- endif %}{% endfor %}
+
+    @Override
+    public void close() {
+        if (!closed.compareAndSet(false, true)) return;
+        Native.{{ class.ffi_free }}(handle);
+    }
+{%- if class.has_factory_constructors() || class.has_static_methods() %}
+{%- for ctor in class.constructors %}{% if ctor.is_factory() %}
+
+    public static {{ class.class_name }} {{ ctor.name }}({% for param in ctor.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- if ctor.wire_writers.is_empty() %}
+{%- if ctor.is_fallible %}
+        long _handle = Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        if (_handle == 0L) throw new RuntimeException("Factory constructor failed");
+        return new {{ class.class_name }}(_handle);
+{%- else %}
+        return new {{ class.class_name }}(Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- endif %}
+{%- else %}
+        try (
+{%- for writer in ctor.wire_writers %}
+            WireWriter {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }}){% if !loop.last %};{% endif %}
+{%- endfor %}
+        ) {
+{%- for writer in ctor.wire_writers %}
+            {{ writer.encode_expr }};
+{%- endfor %}
+{%- if ctor.is_fallible %}
+            long _handle = Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            if (_handle == 0L) throw new RuntimeException("Factory constructor failed");
+            return new {{ class.class_name }}(_handle);
+{%- else %}
+            return new {{ class.class_name }}(Native.{{ ctor.ffi_name }}({% for param in ctor.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- endif %}
+        }
+{%- endif %}
+    }
+{%- endif %}{% endfor %}
+{%- for method in class.methods %}{% if method.is_static %}
+
+    public static {{ method.return_type }} {{ method.name }}({% for param in method.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- if method.wire_writers.is_empty() %}
+{%- if method.strategy.is_void() %}
+        Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_direct() %}
+        return Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_c_style_enum() %}
+        return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_handle() %}
+        return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_wire() %}
+        byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
+        WireReader reader = new WireReader(_buf);
+        return {{ method.strategy.decode_expr() }};
+{%- elif method.strategy.is_buffer() %}
+        byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        return {{ method.strategy.decode_expr() }};
+{%- endif %}
+{%- else %}
+        try (
+{%- for writer in method.wire_writers %}
+            WireWriter {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }}){% if !loop.last %};{% endif %}
+{%- endfor %}
+        ) {
+{%- for writer in method.wire_writers %}
+            {{ writer.encode_expr }};
+{%- endfor %}
+{%- if method.strategy.is_void() %}
+            Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_direct() %}
+            return Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_handle() %}
+            return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_wire() %}
+            byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
+            WireReader reader = new WireReader(_buf);
+            return {{ method.strategy.decode_expr() }};
+{%- elif method.strategy.is_buffer() %}
+            byte[] _buf = Native.{{ method.ffi_name }}({% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            return {{ method.strategy.decode_expr() }};
+{%- endif %}
+        }
+{%- endif %}
+    }
+{%- endif %}{% endfor %}
+{%- endif %}
+{%- for method in class.methods %}{% if !method.is_static %}
+
+    public {{ method.return_type }} {{ method.name }}({% for param in method.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %}) {
+{%- if method.wire_writers.is_empty() %}
+{%- if method.strategy.is_void() %}
+        Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_direct() %}
+        return Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_c_style_enum() %}
+        return {{ method.strategy.c_style_enum_class() }}.fromValue(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_handle() %}
+        return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_wire() %}
+        byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
+        WireReader reader = new WireReader(_buf);
+        return {{ method.strategy.decode_expr() }};
+{%- elif method.strategy.is_buffer() %}
+        byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+        return {{ method.strategy.decode_expr() }};
+{%- endif %}
+{%- else %}
+        try (
+{%- for writer in method.wire_writers %}
+            WireWriter {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }}){% if !loop.last %};{% endif %}
+{%- endfor %}
+        ) {
+{%- for writer in method.wire_writers %}
+            {{ writer.encode_expr }};
+{%- endfor %}
+{%- if method.strategy.is_void() %}
+            Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_direct() %}
+            return Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- elif method.strategy.is_handle() %}
+            return new {{ method.strategy.handle_class() }}(Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %}));
+{%- elif method.strategy.is_wire() %}
+            byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            if (_buf == null) throw new RuntimeException("FFI call returned null buffer");
+            WireReader reader = new WireReader(_buf);
+            return {{ method.strategy.decode_expr() }};
+{%- elif method.strategy.is_buffer() %}
+            byte[] _buf = Native.{{ method.ffi_name }}(handle{% if !method.params.is_empty() %}, {% endif %}{% for param in method.params %}{{ param.native_expr }}{% if !loop.last %}, {% endif %}{% endfor %});
+            return {{ method.strategy.decode_expr() }};
+{%- endif %}
+        }
+{%- endif %}
+    }
+{%- endif %}{% endfor %}
+}

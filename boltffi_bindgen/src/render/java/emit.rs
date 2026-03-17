@@ -10,8 +10,8 @@ use super::mappings;
 use super::names::NamingConvention;
 use super::plan::JavaEnumKind;
 use super::templates::{
-    CStyleEnumTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate, FunctionsTemplate,
-    NativeTemplate, PreambleTemplate, RecordTemplate,
+    CStyleEnumTemplate, ClassTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
+    FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate,
 };
 use askama::Template;
 
@@ -81,6 +81,17 @@ impl JavaEmitter {
             files.push(JavaFile {
                 file_name: format!("{}.java", record.class_name),
                 source: record_template.render().expect("record template failed"),
+            });
+        }
+
+        for class in &module.classes {
+            let class_template = ClassTemplate {
+                class,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", class.class_name),
+                source: class_template.render().expect("class template failed"),
             });
         }
 
