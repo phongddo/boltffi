@@ -113,7 +113,27 @@ impl<'c> Lowerer<'c> {
             ctor_calls.chain(method_calls)
         });
 
-        let calls = function_calls.chain(class_calls).collect();
+        let record_calls =
+            self.contract
+                .catalog
+                .all_records()
+                .filter(|record| record.has_methods())
+                .flat_map(|record| {
+                    let ctor_calls = record.constructors.iter().enumerate().map(|(index, ctor)| {
+                        self.abi_call_for_record_constructor(record, ctor, index)
+                    });
+                    let method_calls = record
+                        .methods
+                        .iter()
+                        .filter(|method| !method.is_async)
+                        .map(|method| self.abi_call_for_record_method(record, method));
+                    ctor_calls.chain(method_calls)
+                });
+
+        let calls = function_calls
+            .chain(class_calls)
+            .chain(record_calls)
+            .collect();
 
         let callbacks = self
             .contract
@@ -213,6 +233,55 @@ impl<'c> Lowerer<'c> {
         AbiCall {
             id: CallId::Constructor {
                 class_id: class.id.clone(),
+                index,
+            },
+            symbol,
+            mode: CallMode::Sync,
+            params,
+            returns,
+            error,
+        }
+    }
+
+    fn abi_call_for_record_method(&self, record: &RecordDef, method: &MethodDef) -> AbiCall {
+        let plan = self.lower_record_method(record, method);
+        let symbol = self.call_symbol(&plan);
+        let params = self.abi_params_from_plan(&plan.params);
+        let (returns, error) = self.return_shape_and_error(match &plan.kind {
+            CallPlanKind::Sync { returns } => returns,
+            CallPlanKind::Async { .. } => unreachable!("record methods are always sync"),
+        });
+
+        AbiCall {
+            id: CallId::RecordMethod {
+                record_id: record.id.clone(),
+                method_id: method.id.clone(),
+            },
+            symbol,
+            mode: CallMode::Sync,
+            params,
+            returns,
+            error,
+        }
+    }
+
+    fn abi_call_for_record_constructor(
+        &self,
+        record: &RecordDef,
+        ctor: &ConstructorDef,
+        index: usize,
+    ) -> AbiCall {
+        let plan = self.lower_record_constructor(record, ctor);
+        let symbol = self.call_symbol(&plan);
+        let params = self.abi_params_from_plan(&plan.params);
+        let (returns, error) = self.return_shape_and_error(match &plan.kind {
+            CallPlanKind::Sync { returns } => returns,
+            CallPlanKind::Async { .. } => panic!("record constructors cannot be async"),
+        });
+
+        AbiCall {
+            id: CallId::RecordConstructor {
+                record_id: record.id.clone(),
                 index,
             },
             symbol,
@@ -1446,6 +1515,69 @@ impl<'c> Lowerer<'c> {
         }
     }
 
+    fn lower_record_method(&self, record: &RecordDef, method: &MethodDef) -> CallPlan {
+        let mut params: Vec<ParamPlan> =
+            method.params.iter().map(|p| self.lower_param(p)).collect();
+
+        let is_mut_receiver = method.receiver == Receiver::RefMutSelf;
+
+        if method.receiver != Receiver::Static {
+            let mutability = if is_mut_receiver {
+                Mutability::Mutable
+            } else {
+                Mutability::Shared
+            };
+            params.insert(
+                0,
+                ParamPlan {
+                    name: ParamName::new("self"),
+                    transport: self.classify_record(&record.id),
+                    mutability,
+                },
+            );
+        }
+
+        let returns = if is_mut_receiver && matches!(method.returns, ReturnDef::Void) {
+            ReturnPlan::Value(self.classify_record(&record.id))
+        } else {
+            self.lower_return(&method.returns)
+        };
+        let kind = CallPlanKind::Sync { returns };
+
+        CallPlan {
+            target: CallTarget::GlobalSymbol(self.record_method_symbol(&record.id, &method.id)),
+            params,
+            kind,
+        }
+    }
+
+    fn lower_record_constructor(&self, record: &RecordDef, ctor: &ConstructorDef) -> CallPlan {
+        let params = ctor
+            .params()
+            .into_iter()
+            .map(|p| self.lower_param(p))
+            .collect();
+
+        let record_transport = self.classify_record(&record.id);
+
+        let returns = if ctor.is_fallible() {
+            ReturnPlan::Fallible {
+                ok: record_transport,
+                err_codec: CodecPlan::String,
+            }
+        } else {
+            ReturnPlan::Value(record_transport)
+        };
+
+        CallPlan {
+            target: CallTarget::GlobalSymbol(
+                self.record_constructor_symbol(&record.id, ctor.name()),
+            ),
+            params,
+            kind: CallPlanKind::Sync { returns },
+        }
+    }
+
     fn lower_callback(&self, callback: &CallbackTraitDef) -> Vec<CallPlan> {
         callback
             .methods
@@ -1893,6 +2025,25 @@ impl<'c> Lowerer<'c> {
         match name {
             Some(n) => naming::method_ffi_name(class_id.as_str(), n.as_str()),
             None => naming::class_ffi_new(class_id.as_str()),
+        }
+    }
+
+    fn record_method_symbol(
+        &self,
+        record_id: &RecordId,
+        method_id: &MethodId,
+    ) -> naming::Name<naming::GlobalSymbol> {
+        naming::method_ffi_name(record_id.as_str(), method_id.as_str())
+    }
+
+    fn record_constructor_symbol(
+        &self,
+        record_id: &RecordId,
+        name: Option<&MethodId>,
+    ) -> naming::Name<naming::GlobalSymbol> {
+        match name {
+            Some(n) => naming::method_ffi_name(record_id.as_str(), n.as_str()),
+            None => naming::class_ffi_new(record_id.as_str()),
         }
     }
 
@@ -3308,5 +3459,359 @@ mod tests {
         let (_params, ret) =
             lowerer.inline_callback_fn_abi_signature(&CallbackId::new("__Closure_StringToString"));
         assert_eq!(ret, AbiType::Pointer(PrimitiveType::U8));
+    }
+
+    fn blittable_point_record() -> RecordDef {
+        RecordDef {
+            id: RecordId::new("Point"),
+            is_repr_c: true,
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("x"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F32),
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("y"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::F32),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn wire_encoded_person_record() -> RecordDef {
+        RecordDef {
+            id: RecordId::new("Person"),
+            is_repr_c: true,
+            fields: vec![
+                FieldDef {
+                    name: FieldName::new("name"),
+                    type_expr: TypeExpr::String,
+                    doc: None,
+                    default: None,
+                },
+                FieldDef {
+                    name: FieldName::new("age"),
+                    type_expr: TypeExpr::Primitive(PrimitiveType::U32),
+                    doc: None,
+                    default: None,
+                },
+            ],
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    #[test]
+    fn lower_record_method_inserts_self_as_value() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("magnitude"),
+            receiver: Receiver::RefSelf,
+            params: vec![],
+            returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert_eq!(plan.params.len(), 1);
+        assert_eq!(plan.params[0].name.as_str(), "self");
+        assert!(matches!(
+            &plan.params[0].transport,
+            Transport::Composite(layout) if layout.record_id.as_str() == "Point"
+        ));
+    }
+
+    #[test]
+    fn lower_record_method_static_no_self() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("origin"),
+            receiver: Receiver::Static,
+            params: vec![],
+            returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert_eq!(plan.params.len(), 0);
+    }
+
+    #[test]
+    fn lower_record_method_wire_encoded_self() {
+        let mut contract = test_contract();
+        let record = wire_encoded_person_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("greet"),
+            receiver: Receiver::RefSelf,
+            params: vec![],
+            returns: ReturnDef::Value(TypeExpr::String),
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert_eq!(plan.params.len(), 1);
+        assert_eq!(plan.params[0].name.as_str(), "self");
+        assert!(matches!(
+            &plan.params[0].transport,
+            Transport::Span(SpanContent::Encoded(_))
+        ));
+    }
+
+    #[test]
+    fn lower_record_constructor_infallible() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let ctor = ConstructorDef::Default {
+            params: vec![],
+            is_fallible: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_constructor(&record, &ctor);
+
+        assert!(matches!(
+            plan.kind,
+            CallPlanKind::Sync {
+                returns: ReturnPlan::Value(Transport::Composite(_))
+            }
+        ));
+    }
+
+    #[test]
+    fn lower_record_constructor_fallible() {
+        let mut contract = test_contract();
+        let record = wire_encoded_person_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let ctor = ConstructorDef::NamedFactory {
+            name: MethodId::new("try_parse"),
+            is_fallible: true,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_constructor(&record, &ctor);
+
+        assert!(matches!(
+            plan.kind,
+            CallPlanKind::Sync {
+                returns: ReturnPlan::Fallible { .. }
+            }
+        ));
+        if let CallPlanKind::Sync {
+            returns: ReturnPlan::Fallible { ok, .. },
+        } = &plan.kind
+        {
+            assert!(matches!(ok, Transport::Span(SpanContent::Encoded(_))));
+        }
+    }
+
+    #[test]
+    fn to_abi_contract_includes_record_calls() {
+        let mut contract = test_contract();
+        let mut record = blittable_point_record();
+        record.constructors = vec![ConstructorDef::Default {
+            params: vec![],
+            is_fallible: false,
+            doc: None,
+            deprecated: None,
+        }];
+        record.methods = vec![MethodDef {
+            id: MethodId::new("magnitude"),
+            receiver: Receiver::RefSelf,
+            params: vec![],
+            returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        }];
+        contract.catalog.insert_record(record);
+
+        let lowerer = lowerer_for_contract(&contract);
+        let abi = lowerer.to_abi_contract();
+
+        let record_ctors: Vec<_> = abi
+            .calls
+            .iter()
+            .filter(|c| matches!(&c.id, CallId::RecordConstructor { .. }))
+            .collect();
+        let record_methods: Vec<_> = abi
+            .calls
+            .iter()
+            .filter(|c| matches!(&c.id, CallId::RecordMethod { .. }))
+            .collect();
+
+        assert_eq!(record_ctors.len(), 1);
+        assert_eq!(record_methods.len(), 1);
+
+        assert!(matches!(
+            &record_ctors[0].id,
+            CallId::RecordConstructor {
+                record_id,
+                index: 0,
+            } if record_id.as_str() == "Point"
+        ));
+        assert!(matches!(
+            &record_methods[0].id,
+            CallId::RecordMethod {
+                record_id,
+                method_id,
+            } if record_id.as_str() == "Point" && method_id.as_str() == "magnitude"
+        ));
+    }
+
+    #[test]
+    fn to_abi_contract_excludes_async_record_methods() {
+        let mut contract = test_contract();
+        let mut record = blittable_point_record();
+        record.methods = vec![
+            MethodDef {
+                id: MethodId::new("sync_method"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+                is_async: false,
+                doc: None,
+                deprecated: None,
+            },
+            MethodDef {
+                id: MethodId::new("async_method"),
+                receiver: Receiver::RefSelf,
+                params: vec![],
+                returns: ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+                is_async: true,
+                doc: None,
+                deprecated: None,
+            },
+        ];
+        contract.catalog.insert_record(record);
+
+        let lowerer = lowerer_for_contract(&contract);
+        let abi = lowerer.to_abi_contract();
+
+        let record_methods: Vec<_> = abi
+            .calls
+            .iter()
+            .filter(|c| matches!(&c.id, CallId::RecordMethod { .. }))
+            .collect();
+
+        assert_eq!(record_methods.len(), 1);
+        assert!(matches!(
+            &record_methods[0].id,
+            CallId::RecordMethod { method_id, .. } if method_id.as_str() == "sync_method"
+        ));
+    }
+
+    #[test]
+    fn lower_record_method_mut_self_has_mutable_param() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("normalize"),
+            receiver: Receiver::RefMutSelf,
+            params: vec![],
+            returns: ReturnDef::Void,
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert_eq!(plan.params.len(), 1);
+        assert_eq!(plan.params[0].mutability, Mutability::Mutable);
+    }
+
+    #[test]
+    fn lower_record_method_mut_self_returns_record_writeback() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("normalize"),
+            receiver: Receiver::RefMutSelf,
+            params: vec![],
+            returns: ReturnDef::Void,
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert!(matches!(
+            plan.kind,
+            CallPlanKind::Sync {
+                returns: ReturnPlan::Value(Transport::Composite(_))
+            }
+        ));
+    }
+
+    #[test]
+    fn lower_record_method_ref_self_stays_shared() {
+        let mut contract = test_contract();
+        let record = blittable_point_record();
+        contract.catalog.insert_record(record.clone());
+        let lowerer = lowerer_for_contract(&contract);
+
+        let method = MethodDef {
+            id: MethodId::new("magnitude"),
+            receiver: Receiver::RefSelf,
+            params: vec![],
+            returns: ReturnDef::Void,
+            is_async: false,
+            doc: None,
+            deprecated: None,
+        };
+
+        let plan = lowerer.lower_record_method(&record, &method);
+
+        assert_eq!(plan.params[0].mutability, Mutability::Shared);
+        assert!(matches!(
+            plan.kind,
+            CallPlanKind::Sync {
+                returns: ReturnPlan::Void
+            }
+        ));
     }
 }

@@ -100,6 +100,14 @@ pub enum CallId {
         class_id: ClassId,
         index: usize,
     },
+    RecordMethod {
+        record_id: RecordId,
+        method_id: MethodId,
+    },
+    RecordConstructor {
+        record_id: RecordId,
+        index: usize,
+    },
 }
 
 #[derive(Debug, Clone)]
