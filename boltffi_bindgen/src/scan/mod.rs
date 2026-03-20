@@ -1435,9 +1435,7 @@ impl SourceScanner {
         };
         let is_optional = match &sig.output {
             syn::ReturnType::Default => false,
-            syn::ReturnType::Type(_, ty) => {
-                return_type_is_option_self(ty.as_ref(), self_type_name)
-            }
+            syn::ReturnType::Type(_, ty) => return_type_is_option_self(ty.as_ref(), self_type_name),
         };
         let params = self.resolve_typed_params(&sig.inputs, Some(self_type_name))?;
 
@@ -3364,9 +3362,9 @@ mod tests {
     fn symbol_collision_between_method_and_function_is_detected() {
         let mut module = Module::new("test");
         module.functions.push(Function::new("point_distance"));
-        module.records.push(
-            Record::new("Point").with_method(Method::new("distance", Receiver::Ref)),
-        );
+        module
+            .records
+            .push(Record::new("Point").with_method(Method::new("distance", Receiver::Ref)));
 
         let result = validate_no_symbol_collisions(&module);
         assert!(result.is_err());
@@ -3376,7 +3374,11 @@ mod tests {
             "error should mention collision: {}",
             err
         );
-        assert!(err.contains("Point::distance()"), "error should mention the method: {}", err);
+        assert!(
+            err.contains("Point::distance()"),
+            "error should mention the method: {}",
+            err
+        );
         assert!(
             err.contains("fn point_distance()"),
             "error should mention the function: {}",
@@ -3388,9 +3390,9 @@ mod tests {
     fn no_collision_when_names_differ() {
         let mut module = Module::new("test");
         module.functions.push(Function::new("echo_point"));
-        module.records.push(
-            Record::new("Point").with_method(Method::new("distance", Receiver::Ref)),
-        );
+        module
+            .records
+            .push(Record::new("Point").with_method(Method::new("distance", Receiver::Ref)));
 
         assert!(validate_no_symbol_collisions(&module).is_ok());
     }

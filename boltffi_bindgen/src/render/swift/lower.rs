@@ -425,12 +425,10 @@ impl<'a> SwiftLowerer<'a> {
 
         let mut returns = self.swift_return_from_abi(&call.returns, &call.error, &method.returns);
 
-        let mutating_void = method.receiver == Receiver::RefMutSelf
-            && matches!(method.returns, ReturnDef::Void);
+        let mutating_void =
+            method.receiver == Receiver::RefMutSelf && matches!(method.returns, ReturnDef::Void);
 
-        if mutating_void
-            && let Some(Transport::Composite(layout)) = &call.returns.transport
-        {
+        if mutating_void && let Some(Transport::Composite(layout)) = &call.returns.transport {
             returns.set_composite_swift_type(self.swift_name_for_record(&layout.record_id));
         }
 
@@ -2929,9 +2927,9 @@ mod tests {
                     doc: None,
                 },
             ],
-            returns: ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Record(
-                RecordId::new("Point"),
-            )))),
+            returns: ReturnDef::Value(TypeExpr::Option(Box::new(TypeExpr::Record(RecordId::new(
+                "Point",
+            ))))),
             is_async: false,
             doc: None,
             deprecated: None,
