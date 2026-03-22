@@ -226,27 +226,46 @@
 
 {%- match stream.mode %}
 {%- when SwiftStreamMode::Async %}
-    public func {{ stream.name }}() -> AsyncStream<{{ stream.item_type }}> {
-        AsyncStream<{{ stream.item_type }}> { continuation in
+    public func {{ stream.name }}() -> _Concurrency.AsyncStream<{{ stream.item_type }}> {
+        _Concurrency.AsyncStream<{{ stream.item_type }}>(bufferingPolicy: .unbounded) { continuation in
             guard let subscription = {{ stream.subscribe }}(self.handle) else {
                 continuation.finish()
                 return
             }
             let context = WireStreamContextBase(
                 subscription: subscription, batchSize: 16,
-                popBatch: {{ stream.pop_batch }},
+                drainAvailableItems: { subscription, batchSize in
+{%- match stream.item_delivery %}
+{%- when SwiftStreamItemDelivery::WireEncoded { .. } %}
+                    boltffiDrainWireStreamBatch(
+                        subscription: subscription,
+                        batchSize: batchSize,
+                        popBatch: {{ stream.pop_batch }},
+                        freeBuf: {{ stream.free_buf }}
+                    ) { reader in
+                        let count = Int(reader.readU32())
+                        for _ in 0..<count {
+                            let item = {{ stream.item_delivery.reader_decode_expr().unwrap() }}
+                            _ = continuation.yield(item)
+                        }
+                    }
+{%- when SwiftStreamItemDelivery::Direct { c_element_type, .. } %}
+                    boltffiDrainDirectStreamBatch(
+                        subscription: subscription,
+                        batchSize: batchSize,
+                        popBatch: {{ stream.pop_batch }}
+                    ) { rawItems in
+                        for rawItem in rawItems {
+                            let item = {{ stream.item_delivery.direct_item_expr("rawItem").unwrap() }}
+                            _ = continuation.yield(item)
+                        }
+                    }
+{%- endmatch %}
+                },
                 poll: {{ stream.poll }},
                 unsubscribe: {{ stream.unsubscribe }},
                 freeFn: {{ stream.free }},
-                freeBuf: {{ stream.free_buf }},
                 atomicCas: {{ stream.atomic_cas }},
-                processItems: { reader in
-                    let count = Int(reader.readU32())
-                    for _ in 0..<count {
-                        let item = {{ stream.item_reader_decode_expr() }}
-                        _ = continuation.yield(item)
-                    }
-                },
                 finish: { continuation.finish() }
             )
             continuation.onTermination = { @Sendable _ in context.requestTermination() }
@@ -257,11 +276,39 @@
     public func {{ stream.name }}() -> {{ class_name }}{{ method_name_pascal }}Subscription {
         {{ class_name }}{{ method_name_pascal }}Subscription(
             handle: {{ stream.subscribe }}(self.handle),
-            popBatch: {{ stream.pop_batch }},
+            readBatch: { subscription, batchSize in
+{%- match stream.item_delivery %}
+{%- when SwiftStreamItemDelivery::WireEncoded { .. } %}
+                boltffiReadWireStreamBatch(
+                    subscription: subscription,
+                    batchSize: batchSize,
+                    popBatch: {{ stream.pop_batch }},
+                    freeBuf: {{ stream.free_buf }}
+                ) { reader in
+                    let count = Int(reader.readU32())
+                    var result: [{{ stream.item_type }}] = []
+                    result.reserveCapacity(count)
+                    for _ in 0..<count {
+                        let item = {{ stream.item_delivery.reader_decode_expr().unwrap() }}
+                        result.append(item)
+                    }
+                    return result
+                }
+{%- when SwiftStreamItemDelivery::Direct { c_element_type, .. } %}
+                return boltffiReadDirectStreamBatch(
+                    subscription: subscription,
+                    batchSize: batchSize,
+                    popBatch: {{ stream.pop_batch }}
+                ) { rawItems in
+                    rawItems.map { rawItem in
+                    {{ stream.item_delivery.direct_item_expr("rawItem").unwrap() }}
+                    }
+                }
+{%- endmatch %}
+            },
             wait: {{ stream.wait }},
             unsubscribe: {{ stream.unsubscribe }},
-            freeFn: {{ stream.free }},
-            freeBuf: {{ stream.free_buf }}
+            freeFn: {{ stream.free }}
         )
     }
 {%- when SwiftStreamMode::Callback { class_name, method_name_pascal } %}
@@ -273,10 +320,9 @@
         final class CallbackContext: @unchecked Sendable {
             let subscription: SubscriptionHandle
             let batchSize: UInt
-            let popBatch: (SubscriptionHandle, UInt) -> FfiBuf_u8
+            let drainAvailableItems: (SubscriptionHandle, UInt) -> Bool
             let unsubscribe: (SubscriptionHandle?) -> Void
             let freeFn: (SubscriptionHandle?) -> Void
-            let freeBuf: (FfiBuf_u8) -> Void
             let atomicCas: (UnsafeMutablePointer<UInt8>?, UInt8, UInt8) -> Bool
             let callback: ({{ stream.item_type }}) -> Void
             private var lifecycleTag: UInt8 = 0
@@ -284,17 +330,16 @@
 
             init(
                 subscription: SubscriptionHandle, batchSize: UInt,
-                popBatch: @escaping (SubscriptionHandle, UInt) -> FfiBuf_u8,
+                drainAvailableItems: @escaping (SubscriptionHandle, UInt) -> Bool,
                 poll: @escaping (SubscriptionHandle?, UInt64, StreamContinuationCallback?) -> Void,
                 unsubscribe: @escaping (SubscriptionHandle?) -> Void,
                 freeFn: @escaping (SubscriptionHandle?) -> Void,
-                freeBuf: @escaping (FfiBuf_u8) -> Void,
                 atomicCas: @escaping (UnsafeMutablePointer<UInt8>?, UInt8, UInt8) -> Bool,
                 callback: @escaping ({{ stream.item_type }}) -> Void
             ) {
                 self.subscription = subscription; self.batchSize = batchSize
-                self.popBatch = popBatch; self.unsubscribe = unsubscribe
-                self.freeFn = freeFn; self.freeBuf = freeBuf; self.atomicCas = atomicCas
+                self.drainAvailableItems = drainAvailableItems; self.unsubscribe = unsubscribe
+                self.freeFn = freeFn; self.atomicCas = atomicCas
                 self.callback = callback
             }
 
@@ -312,7 +357,7 @@
                 freeFn(subscription)
             }
 
-            private func schedulePoll() { Task { [self] in await Task.yield(); registerPoll() } }
+            private func schedulePoll() { _Concurrency.Task { [self] in await _Concurrency.Task.yield(); registerPoll() } }
 
             private func registerPoll() {
                 guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { attemptFinalize(); return }
@@ -327,17 +372,7 @@
                 guard (withUnsafeMutablePointer(to: &callbackTag) { atomicCas($0, 0, 1) }) else { attemptFinalize(); return }
                 defer { _ = withUnsafeMutablePointer(to: &callbackTag) { atomicCas($0, 1, 0) }; attemptFinalize() }
                 guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { return }
-                while true {
-                    let buf = popBatch(subscription, batchSize)
-                    guard buf.len > 0, let ptr = buf.ptr else { freeBuf(buf); break }
-                    var reader = WireReader(ptr: ptr, len: Int(buf.len))
-                    freeBuf(buf)
-                    let count = Int(reader.readU32())
-                    for _ in 0..<count {
-                        let item = {{ stream.item_reader_decode_expr() }}
-                        callback(item)
-                    }
-                }
+                while drainAvailableItems(subscription, batchSize) {}
                 if isClosed { requestTermination(); return }
                 guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { return }
                 schedulePoll()
@@ -346,11 +381,37 @@
 
         let context = CallbackContext(
             subscription: subscription, batchSize: 16,
-            popBatch: {{ stream.pop_batch }},
+            drainAvailableItems: { subscription, batchSize in
+{%- match stream.item_delivery %}
+{%- when SwiftStreamItemDelivery::WireEncoded { .. } %}
+                boltffiDrainWireStreamBatch(
+                    subscription: subscription,
+                    batchSize: batchSize,
+                    popBatch: {{ stream.pop_batch }},
+                    freeBuf: {{ stream.free_buf }}
+                ) { reader in
+                    let count = Int(reader.readU32())
+                    for _ in 0..<count {
+                        let item = {{ stream.item_delivery.reader_decode_expr().unwrap() }}
+                        callback(item)
+                    }
+                }
+{%- when SwiftStreamItemDelivery::Direct { c_element_type, .. } %}
+                boltffiDrainDirectStreamBatch(
+                    subscription: subscription,
+                    batchSize: batchSize,
+                    popBatch: {{ stream.pop_batch }}
+                ) { rawItems in
+                    for rawItem in rawItems {
+                        let item = {{ stream.item_delivery.direct_item_expr("rawItem").unwrap() }}
+                        callback(item)
+                    }
+                }
+{%- endmatch %}
+            },
             poll: {{ stream.poll }},
             unsubscribe: {{ stream.unsubscribe }},
             freeFn: {{ stream.free }},
-            freeBuf: {{ stream.free_buf }},
             atomicCas: {{ stream.atomic_cas }},
             callback: callback
         )
@@ -366,27 +427,24 @@
 
 public final class {{ class_name }}{{ method_name_pascal }}Subscription {
     private let handle: SubscriptionHandle?
-    private let popBatchFn: (SubscriptionHandle, UInt) -> FfiBuf_u8
+    private let readBatchFn: (SubscriptionHandle, UInt) -> [{{ stream.item_type }}]
     private let waitFn: (SubscriptionHandle, UInt32) -> Int32
     private let unsubscribeFn: (SubscriptionHandle?) -> Void
     private let freeFn: (SubscriptionHandle?) -> Void
-    private let freeBuf: (FfiBuf_u8) -> Void
     private var isUnsubscribed = false
 
     init(
         handle: SubscriptionHandle?,
-        popBatch: @escaping (SubscriptionHandle, UInt) -> FfiBuf_u8,
+        readBatch: @escaping (SubscriptionHandle, UInt) -> [{{ stream.item_type }}],
         wait: @escaping (SubscriptionHandle, UInt32) -> Int32,
         unsubscribe: @escaping (SubscriptionHandle?) -> Void,
-        freeFn: @escaping (SubscriptionHandle?) -> Void,
-        freeBuf: @escaping (FfiBuf_u8) -> Void
+        freeFn: @escaping (SubscriptionHandle?) -> Void
     ) {
         self.handle = handle
-        self.popBatchFn = popBatch
+        self.readBatchFn = readBatch
         self.waitFn = wait
         self.unsubscribeFn = unsubscribe
         self.freeFn = freeFn
-        self.freeBuf = freeBuf
     }
 
     deinit {
@@ -395,18 +453,7 @@ public final class {{ class_name }}{{ method_name_pascal }}Subscription {
 
     public func popBatch(maxCount: UInt = 16) -> [{{ stream.item_type }}] {
         guard let h = handle else { return [] }
-        let buf = popBatchFn(h, maxCount)
-        guard buf.len > 0, let ptr = buf.ptr else { freeBuf(buf); return [] }
-        var reader = WireReader(ptr: ptr, len: Int(buf.len))
-        freeBuf(buf)
-        let count = Int(reader.readU32())
-        var result: [{{ stream.item_type }}] = []
-        result.reserveCapacity(count)
-        for _ in 0..<count {
-            let item = {{ stream.item_reader_decode_expr() }}
-            result.append(item)
-        }
-        return result
+        return readBatchFn(h, maxCount)
     }
 
     public func wait(timeout: UInt32) -> Int32 {

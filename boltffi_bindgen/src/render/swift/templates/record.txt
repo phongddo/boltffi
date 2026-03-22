@@ -42,7 +42,7 @@ extension {{ class_name }} {
         let buf = {{ ctor.ffi_symbol() }}()
         defer { {{ prefix }}_free_buf(buf) }
         return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         let _raw = {{ ctor.ffi_symbol() }}()
@@ -53,7 +53,48 @@ extension {{ class_name }} {
         defer { {{ prefix }}_free_buf(buf) }
 {%- if ctor.is_fallible() %}
         return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
+        }
+{%- else %}
+        return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
+            {{ class_name }}.decode(from: &reader)
+        }
+{%- endif %}
+{%- endif %}
+    }
+{%- elif ctor.is_designated() %}
+
+{{ self::swift_doc_block(ctor.doc(), "    ") }}    public static func new({% for p in ctor.params() %}{{ p.signature() }}{% if !loop.last %}, {% endif %}{% endfor %}){% if ctor.is_fallible() %} throws{% endif %} -> {{ class_name }}{% if ctor.is_optional() %}?{% endif %} {
+{%- for param in ctor.params() %}
+{%- if let Some(wrapper) = param.wrapper_code() %}
+        {{ wrapper }}
+{%- endif %}
+{%- endfor %}
+{%- if ctor.is_optional() %}
+        let buf = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+
+        defer { {{ prefix }}_free_buf(buf) }
+        return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readOptional { reader in {{ class_name }}.decode(from: &reader) } }
+{%- elif is_blittable %}
+{%- if ctor.is_fallible() %}
+        let buf = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+
+        defer { {{ prefix }}_free_buf(buf) }
+        return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
+        }
+{%- else %}
+        let _raw = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+
+        return {{ class_name }}({% for field in fields %}{{ field.swift_name }}: _raw.{{ field.swift_name }}{% if !loop.last %}, {% endif %}{% endfor %})
+{%- endif %}
+{%- else %}
+        let buf = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+
+        defer { {{ prefix }}_free_buf(buf) }
+{%- if ctor.is_fallible() %}
+        return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
@@ -82,7 +123,7 @@ extension {{ class_name }} {
 
         defer { {{ prefix }}_free_buf(buf) }
         self = try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         let _raw = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
@@ -95,7 +136,7 @@ extension {{ class_name }} {
         defer { {{ prefix }}_free_buf(buf) }
 {%- if ctor.is_fallible() %}
         self = try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         self = boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in

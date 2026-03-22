@@ -15,7 +15,7 @@ private class {{ callback.wrapper_class }} {
 {%- if method.is_async %}
 
 private func _{{ callback.vtable_var }}_{{ method.swift_name }}(_ wrapper: {{ callback.wrapper_class }}, {% for param in method.params %}_ {{ param.label }}: {{ param.swift_type }}, {% endfor %}_ callback: {{ method.async_callback_c_type() }}, _ callbackData: UInt64) {
-    Task {
+    _Concurrency.Task {
 {%- if method.throws() %}
         do {
             {% if method.has_return() %}let result = {% endif %}try await wrapper.impl_.{{ method.swift_name }}({% for param in method.params %}{{ param.label }}: {{ param.label }}{% if !loop.last %}, {% endif %}{% endfor %})
@@ -117,7 +117,7 @@ private var {{ callback.vtable_var }}: {{ callback.vtable_type }} = {
                 outLen?.pointee = 0
             }
 {%- else %}
-            outPtr?.pointee = result
+            outPtr?.pointee = {{ method.direct_out_expr() }}
 {%- endif %}
 {%- endif %}
             statusPtr?.pointee = FfiStatus(code: 0)

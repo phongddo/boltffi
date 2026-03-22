@@ -27,7 +27,7 @@ extension {{ class_name }} {
         let buf = {{ ctor.ffi_symbol() }}()
         defer { {{ prefix }}_free_buf(buf) }
         return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         return {{ class_name }}(rawValue: {{ ctor.ffi_symbol() }}())!
@@ -52,7 +52,7 @@ extension {{ class_name }} {
 
         defer { {{ prefix }}_free_buf(buf) }
         self = try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         self = {{ class_name }}(rawValue: {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %})!

@@ -64,7 +64,7 @@ extension {{ class_name }} {
         return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in reader.readOptional { reader in {{ class_name }}.decode(from: &reader) } }
 {%- elif ctor.is_fallible() %}
         return try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         return boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
@@ -88,7 +88,7 @@ extension {{ class_name }} {
         self = value
 {%- elif ctor.is_fallible() %}
         self = try boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in
-            try {{ class_name }}.decodeResultOrThrow(from: &reader)
+            try reader.readResultOrThrow(ok: { reader in {{ class_name }}.decode(from: &reader) }, err: { reader in {{ ctor.throw_decode_expr().unwrap() }} })
         }
 {%- else %}
         self = boltffiDecodeOwnedBuf(buf.ptr, Int(buf.len)) { reader in

@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
+assertion_line: 1236
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class EventSource {
@@ -13,27 +14,32 @@ public final class EventSource {
         boltffi_event_source_free(handle)
     }
 
-    public func events() -> AsyncStream<String> {
-        AsyncStream<String> { continuation in
+    public func events() -> _Concurrency.AsyncStream<String> {
+        _Concurrency.AsyncStream<String>(bufferingPolicy: .unbounded) { continuation in
             guard let subscription = boltffi_event_source_events_subscribe(self.handle) else {
                 continuation.finish()
                 return
             }
             let context = WireStreamContextBase(
                 subscription: subscription, batchSize: 16,
-                popBatch: boltffi_event_source_events_pop_batch,
+                drainAvailableItems: { subscription, batchSize in
+                    boltffiDrainWireStreamBatch(
+                        subscription: subscription,
+                        batchSize: batchSize,
+                        popBatch: boltffi_event_source_events_pop_batch,
+                        freeBuf: boltffi_free_buf
+                    ) { reader in
+                        let count = Int(reader.readU32())
+                        for _ in 0..<count {
+                            let item = reader.readString()
+                            _ = continuation.yield(item)
+                        }
+                    }
+                },
                 poll: boltffi_event_source_events_poll,
                 unsubscribe: boltffi_event_source_events_unsubscribe,
                 freeFn: boltffi_event_source_events_free,
-                freeBuf: boltffi_free_buf,
                 atomicCas: boltffi_atomic_u8_cas,
-                processItems: { reader in
-                    let count = Int(reader.readU32())
-                    for _ in 0..<count {
-                        let item = reader.readString()
-                        _ = continuation.yield(item)
-                    }
-                },
                 finish: { continuation.finish() }
             )
             continuation.onTermination = { @Sendable _ in context.requestTermination() }

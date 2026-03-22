@@ -2,7 +2,8 @@ use askama::Template;
 
 use super::plan::{
     SwiftCallMode, SwiftCallback, SwiftClass, SwiftConstructor, SwiftEnum, SwiftField,
-    SwiftFunction, SwiftMethod, SwiftRecord, SwiftStreamMode, SwiftVariant,
+    SwiftFunction, SwiftMethod, SwiftRecord, SwiftStreamItemDelivery, SwiftStreamMode,
+    SwiftVariant,
 };
 use crate::ir::types::PrimitiveType;
 use crate::render::swift::emit;
@@ -1127,6 +1128,7 @@ mod tests {
                     }],
                     is_fallible: false,
                     is_optional: false,
+                    throw_decode_expr: None,
                     doc: Some("Creates a new data store with the given capacity.".to_string()),
                 },
                 SwiftConstructor::Factory {
@@ -1134,6 +1136,7 @@ mod tests {
                     ffi_symbol: "boltffi_data_store_with_defaults".to_string(),
                     is_fallible: false,
                     is_optional: false,
+                    throw_decode_expr: None,
                     doc: Some("Creates a data store with sensible default settings.".to_string()),
                 },
             ],
@@ -1175,6 +1178,7 @@ mod tests {
                 }],
                 is_fallible: false,
                 is_optional: false,
+                throw_decode_expr: None,
                 doc: None,
             }],
             methods: vec![SwiftMethod {
@@ -1215,7 +1219,9 @@ mod tests {
                 name: "events".to_string(),
                 mode: SwiftStreamMode::Async,
                 item_type: "String".to_string(),
-                item_decode: read_string(OffsetExpr::Fixed(0)),
+                item_delivery: SwiftStreamItemDelivery::WireEncoded {
+                    item_decode: read_string(OffsetExpr::Fixed(0)),
+                },
                 subscribe: "boltffi_event_source_events_subscribe".to_string(),
                 poll: "boltffi_event_source_events_poll".to_string(),
                 pop_batch: "boltffi_event_source_events_pop_batch".to_string(),
@@ -1286,6 +1292,7 @@ mod tests {
                 }],
                 is_fallible: true,
                 is_optional: false,
+                throw_decode_expr: None,
                 doc: None,
             }],
             methods: vec![],

@@ -173,6 +173,17 @@ final class FfiFutureState<T>: @unchecked Sendable {
         return body(&self)
     }
 
+    @inlinable mutating func readResultOrThrow<T>(
+        ok: (inout WireReader) -> T,
+        err: (inout WireReader) -> any Error
+    ) throws -> T {
+        if readU8() == 0 {
+            return ok(&self)
+        } else {
+            throw err(&self)
+        }
+    }
+
     @inlinable mutating func readArray<T>(_ body: (inout WireReader) -> T) -> [T] {
         let count = Int(readU32())
         guard count > 0 else { return [] }
@@ -334,35 +345,92 @@ private enum StreamPollResult: Int8 {
     case closed = 1
 }
 
+@inline(__always)
+private func boltffiDrainWireStreamBatch(
+    subscription: SubscriptionHandle,
+    batchSize: UInt,
+    popBatch: (SubscriptionHandle, UInt) -> FfiBuf_u8,
+    freeBuf: (FfiBuf_u8) -> Void,
+    processItems: (inout WireReader) -> Void
+) -> Bool {
+    let buf = popBatch(subscription, batchSize)
+    guard buf.len > 0, let ptr = buf.ptr else { freeBuf(buf); return false }
+    var reader = WireReader(ptr: ptr, len: Int(buf.len))
+    freeBuf(buf)
+    processItems(&reader)
+    return true
+}
+
+@inline(__always)
+private func boltffiDrainDirectStreamBatch<Element>(
+    subscription: SubscriptionHandle,
+    batchSize: UInt,
+    popBatch: (SubscriptionHandle?, UnsafeMutablePointer<Element>?, UInt) -> UInt,
+    processItems: (UnsafeBufferPointer<Element>) -> Void
+) -> Bool {
+    let rawItems = UnsafeMutablePointer<Element>.allocate(capacity: Int(batchSize))
+    defer { rawItems.deallocate() }
+    let count = popBatch(subscription, rawItems, batchSize)
+    guard count > 0 else { return false }
+    processItems(UnsafeBufferPointer(start: rawItems, count: Int(count)))
+    return true
+}
+
+@inline(__always)
+private func boltffiReadWireStreamBatch<Item>(
+    subscription: SubscriptionHandle,
+    batchSize: UInt,
+    popBatch: (SubscriptionHandle, UInt) -> FfiBuf_u8,
+    freeBuf: (FfiBuf_u8) -> Void,
+    decodeItems: (inout WireReader) -> [Item]
+) -> [Item] {
+    let buf = popBatch(subscription, batchSize)
+    guard buf.len > 0, let ptr = buf.ptr else { freeBuf(buf); return [] }
+    var reader = WireReader(ptr: ptr, len: Int(buf.len))
+    freeBuf(buf)
+    return decodeItems(&reader)
+}
+
+@inline(__always)
+private func boltffiReadDirectStreamBatch<Element, Item>(
+    subscription: SubscriptionHandle,
+    batchSize: UInt,
+    popBatch: (SubscriptionHandle?, UnsafeMutablePointer<Element>?, UInt) -> UInt,
+    mapItems: (UnsafeBufferPointer<Element>) -> [Item]
+) -> [Item] {
+    let rawItems = UnsafeMutablePointer<Element>.allocate(capacity: Int(batchSize))
+    defer { rawItems.deallocate() }
+    let count = popBatch(subscription, rawItems, batchSize)
+    guard count > 0 else { return [] }
+    return mapItems(UnsafeBufferPointer(start: rawItems, count: Int(count)))
+}
+
 final class WireStreamContextBase: @unchecked Sendable {
     let subscription: SubscriptionHandle
     let batchSize: UInt
-    let popBatch: (SubscriptionHandle, UInt) -> FfiBuf_u8
+    let drainAvailableItems: (SubscriptionHandle, UInt) -> Bool
     let poll: (SubscriptionHandle?, UInt64, StreamContinuationCallback?) -> Void
     let unsubscribe: (SubscriptionHandle?) -> Void
     let freeFn: (SubscriptionHandle?) -> Void
-    let freeBuf: (FfiBuf_u8) -> Void
     let atomicCas: (UnsafeMutablePointer<UInt8>?, UInt8, UInt8) -> Bool
-    let processItems: (inout WireReader) -> Void
     let finish: () -> Void
     private var lifecycleTag: UInt8 = 0
     private var callbackTag: UInt8 = 0
 
     init(
         subscription: SubscriptionHandle, batchSize: UInt,
-        popBatch: @escaping (SubscriptionHandle, UInt) -> FfiBuf_u8,
+        drainAvailableItems: @escaping (SubscriptionHandle, UInt) -> Bool,
         poll: @escaping (SubscriptionHandle?, UInt64, StreamContinuationCallback?) -> Void,
         unsubscribe: @escaping (SubscriptionHandle?) -> Void,
         freeFn: @escaping (SubscriptionHandle?) -> Void,
-        freeBuf: @escaping (FfiBuf_u8) -> Void,
         atomicCas: @escaping (UnsafeMutablePointer<UInt8>?, UInt8, UInt8) -> Bool,
-        processItems: @escaping (inout WireReader) -> Void,
         finish: @escaping () -> Void
     ) {
         self.subscription = subscription; self.batchSize = batchSize
-        self.popBatch = popBatch; self.poll = poll; self.unsubscribe = unsubscribe
-        self.freeFn = freeFn; self.freeBuf = freeBuf; self.atomicCas = atomicCas
-        self.processItems = processItems; self.finish = finish
+        self.drainAvailableItems = drainAvailableItems
+        self.poll = poll; self.unsubscribe = unsubscribe
+        self.freeFn = freeFn; self.atomicCas = atomicCas
+        self.finish = finish
     }
 
     func start() { registerPoll() }
@@ -379,7 +447,7 @@ final class WireStreamContextBase: @unchecked Sendable {
         freeFn(subscription); finish()
     }
 
-    private func schedulePoll() { Task { [self] in await Task.yield(); registerPoll() } }
+    private func schedulePoll() { _Concurrency.Task { [self] in await _Concurrency.Task.yield(); registerPoll() } }
 
     private func registerPoll() {
         guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { attemptFinalize(); return }
@@ -394,13 +462,7 @@ final class WireStreamContextBase: @unchecked Sendable {
         guard (withUnsafeMutablePointer(to: &callbackTag) { atomicCas($0, 0, 1) }) else { attemptFinalize(); return }
         defer { _ = withUnsafeMutablePointer(to: &callbackTag) { atomicCas($0, 1, 0) }; attemptFinalize() }
         guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { return }
-        while true {
-            let buf = popBatch(subscription, batchSize)
-            guard buf.len > 0, let ptr = buf.ptr else { freeBuf(buf); break }
-            var reader = WireReader(ptr: ptr, len: Int(buf.len))
-            freeBuf(buf)
-            processItems(&reader)
-        }
+        while drainAvailableItems(subscription, batchSize) {}
         if isClosed { requestTermination(); return }
         guard (withUnsafeMutablePointer(to: &lifecycleTag) { atomicCas($0, 0, 0) }) else { return }
         schedulePoll()

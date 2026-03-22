@@ -109,13 +109,38 @@ pub fn swift_type(type_expr: &TypeExpr) -> String {
             }
         }
         TypeExpr::Result { ok, err } => {
-            format!("Result<{}, {}>", swift_type(ok), swift_type(err))
+            format!(
+                "Result<{}, {}>",
+                swift_type(ok),
+                swift_result_error_type_from_type(err)
+            )
         }
         TypeExpr::Record(id) => pascal_case(id.as_str()),
         TypeExpr::Enum(id) => pascal_case(id.as_str()),
         TypeExpr::Custom(id) => pascal_case(id.as_str()),
         TypeExpr::Handle(id) => pascal_case(id.as_str()),
         TypeExpr::Callback(id) => pascal_case(id.as_str()),
+    }
+}
+
+fn swift_result_error_type_from_type(type_expr: &TypeExpr) -> String {
+    match type_expr {
+        TypeExpr::String => "FfiError".to_string(),
+        _ => swift_type(type_expr),
+    }
+}
+
+fn swift_result_failure_expr(err_seq: &ReadSeq, err_expr: String) -> String {
+    match err_seq.ops.first() {
+        Some(ReadOp::String { .. }) => format!("FfiError(message: {})", err_expr),
+        _ => err_expr,
+    }
+}
+
+fn swift_result_failure_binding(err_op: &WriteOp, binding_name: &str) -> String {
+    match err_op {
+        WriteOp::String { .. } => format!("{}.message", binding_name),
+        _ => binding_name.to_string(),
     }
 }
 
@@ -609,9 +634,15 @@ fn emit_write_data_op(op: &WriteOp) -> String {
             let v = render_value(value);
             let ok_data = emit_write_data(ok);
             let err_data = emit_write_data(err);
+            let err_value = swift_result_failure_binding(
+                err.ops.first().expect("result err op"),
+                "errVal",
+            );
             format!(
                 "switch {} {{ case .success(let okVal): data.appendU8(0); {}; case .failure(let errVal): data.appendU8(1); {} }}",
-                v, ok_data, err_data
+                v,
+                ok_data,
+                err_data.replace("errVal", &err_value)
             )
         }
         WriteOp::Custom { underlying, .. } => emit_write_data(underlying),
@@ -701,9 +732,15 @@ fn emit_write_bytes_op(op: &WriteOp) -> String {
             let v = render_value(value);
             let ok_bytes = emit_write_bytes(ok);
             let err_bytes = emit_write_bytes(err);
+            let err_value = swift_result_failure_binding(
+                err.ops.first().expect("result err op"),
+                "errVal",
+            );
             format!(
                 "switch {} {{ case .success(let okVal): bytes.appendU8(0); {}; case .failure(let errVal): bytes.appendU8(1); {} }}",
-                v, ok_bytes, err_bytes
+                v,
+                ok_bytes,
+                err_bytes.replace("errVal", &err_value)
             )
         }
         WriteOp::Custom { underlying, .. } => emit_write_bytes(underlying),
@@ -832,7 +869,7 @@ fn emit_reader_read_op(op: &ReadOp) -> String {
         },
         ReadOp::Result { ok, err, .. } => {
             let ok_read = emit_reader_read(ok);
-            let err_read = emit_reader_read(err);
+            let err_read = swift_result_failure_expr(err, emit_reader_read(err));
             format!(
                 "{{ let tag = reader.readU8(); if tag == 0 {{ return .success({}) }} else {{ return .failure({}) }} }}()",
                 ok_read, err_read
@@ -924,9 +961,15 @@ fn emit_writer_write_op(op: &WriteOp) -> String {
             let v = render_value(value);
             let ok_write = emit_writer_write(ok);
             let err_write = emit_writer_write(err);
+            let err_value = swift_result_failure_binding(
+                err.ops.first().expect("result err op"),
+                "errVal",
+            );
             format!(
                 "switch {} {{ case .success(let okVal): writer.writeU8(0); {}; case .failure(let errVal): writer.writeU8(1); {} }}",
-                v, ok_write, err_write
+                v,
+                ok_write,
+                err_write.replace("errVal", &err_value)
             )
         }
         WriteOp::Custom { underlying, .. } => emit_writer_write(underlying),

@@ -16,7 +16,7 @@ private class AsyncHandlerWrapper {
 
 
 private func _asyncHandlerVtable_onComplete(_ wrapper: AsyncHandlerWrapper, _ result: String, _ callback: (@convention(c) (UInt64, FfiStatus) -> Void)?, _ callbackData: UInt64) {
-    Task {
+    _Concurrency.Task {
         await wrapper.impl_.onComplete(result: result)
         callback?(callbackData, FfiStatus(code: 0))
     }

@@ -2,6 +2,7 @@ use crate::ir::ops::{
     OffsetExpr, ReadOp, ReadSeq, ValueExpr, WriteOp, WriteSeq, remap_root_in_seq,
 };
 use crate::render::swift::emit;
+use boltffi_ffi_rules::transport::{ScalarReturnStrategy, ValueReturnStrategy};
 
 #[derive(Debug, Clone)]
 pub struct CompositeFieldMapping {
@@ -471,7 +472,7 @@ pub struct SwiftStream {
     pub name: String,
     pub mode: SwiftStreamMode,
     pub item_type: String,
-    pub item_decode: ReadSeq,
+    pub item_delivery: SwiftStreamItemDelivery,
     pub subscribe: String,
     pub poll: String,
     pub pop_batch: String,
@@ -482,17 +483,37 @@ pub struct SwiftStream {
     pub atomic_cas: String,
 }
 
-impl SwiftStream {
-    pub fn item_decode_expr(&self) -> String {
-        emit::emit_read_value_at(&self.item_decode, "offset")
+#[derive(Debug, Clone)]
+pub enum SwiftStreamItemDelivery {
+    WireEncoded { item_decode: ReadSeq },
+    Direct {
+        c_element_type: String,
+        item_expr_template: String,
+    },
+}
+
+impl SwiftStreamItemDelivery {
+    pub fn reader_decode_expr(&self) -> Option<String> {
+        match self {
+            Self::WireEncoded { item_decode } => Some(emit::emit_reader_read(item_decode)),
+            Self::Direct { .. } => None,
+        }
     }
 
-    pub fn item_reader_decode_expr(&self) -> String {
-        emit::emit_reader_read(&self.item_decode)
+    pub fn direct_element_type(&self) -> Option<&str> {
+        match self {
+            Self::WireEncoded { .. } => None,
+            Self::Direct { c_element_type, .. } => Some(c_element_type),
+        }
     }
 
-    pub fn uses_offset(&self) -> bool {
-        uses_offset_in_read_seq(&self.item_decode)
+    pub fn direct_item_expr(&self, raw_item_name: &str) -> Option<String> {
+        match self {
+            Self::WireEncoded { .. } => None,
+            Self::Direct {
+                item_expr_template, ..
+            } => Some(item_expr_template.replace("$0", raw_item_name)),
+        }
     }
 }
 
@@ -549,6 +570,7 @@ pub enum SwiftConstructor {
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
+        throw_decode_expr: Option<String>,
         doc: Option<String>,
     },
     Factory {
@@ -556,6 +578,7 @@ pub enum SwiftConstructor {
         ffi_symbol: String,
         is_fallible: bool,
         is_optional: bool,
+        throw_decode_expr: Option<String>,
         doc: Option<String>,
     },
     Convenience {
@@ -564,6 +587,7 @@ pub enum SwiftConstructor {
         params: Vec<SwiftParam>,
         is_fallible: bool,
         is_optional: bool,
+        throw_decode_expr: Option<String>,
         doc: Option<String>,
     },
 }
@@ -609,6 +633,20 @@ impl SwiftConstructor {
             Self::Designated { is_optional, .. }
             | Self::Factory { is_optional, .. }
             | Self::Convenience { is_optional, .. } => *is_optional,
+        }
+    }
+
+    pub fn throw_decode_expr(&self) -> Option<&str> {
+        match self {
+            Self::Designated {
+                throw_decode_expr, ..
+            }
+            | Self::Factory {
+                throw_decode_expr, ..
+            }
+            | Self::Convenience {
+                throw_decode_expr, ..
+            } => throw_decode_expr.as_deref(),
         }
     }
 
@@ -875,6 +913,14 @@ impl SwiftCallbackMethod {
             _ => None,
         }
     }
+
+    pub fn direct_out_expr(&self) -> &str {
+        if self.returns.is_c_style_enum() {
+            "result.cValue"
+        } else {
+            "result"
+        }
+    }
 }
 
 fn throws_success_encode(encode: &WriteSeq) -> WriteSeq {
@@ -1132,26 +1178,43 @@ impl SwiftParam {
 
 impl SwiftClosureTrampoline {
     pub fn render(&self) -> String {
-        let c_params: String = self
-            .trampoline_params
-            .iter()
-            .map(|p| p.c_type.as_str())
+        let c_params = std::iter::once("UnsafeMutableRawPointer?".to_string())
+            .chain(
+                self.trampoline_params
+                    .iter()
+                    .map(|param| param.c_type.clone()),
+            )
             .collect::<Vec<_>>()
             .join(", ");
 
-        let param_names: String = self
-            .trampoline_params
-            .iter()
-            .map(|p| p.name.as_str())
+        let binding_names = std::iter::once("ud".to_string())
+            .chain(
+                self.trampoline_params
+                    .iter()
+                    .map(|param| param.name.clone()),
+            )
             .collect::<Vec<_>>()
             .join(", ");
 
-        let decode_args: String = self
+        let decode_args = self
             .trampoline_params
             .iter()
-            .map(|p| p.decode_expr.as_str())
+            .map(|param| param.decode_expr.as_str())
             .collect::<Vec<_>>()
             .join(", ");
+
+        let closure_call = if decode_args.is_empty() {
+            format!(
+                "Unmanaged<{box_class}>.fromOpaque(ud!).takeUnretainedValue().fn_()",
+                box_class = self.box_class,
+            )
+        } else {
+            format!(
+                "Unmanaged<{box_class}>.fromOpaque(ud!).takeUnretainedValue().fn_({decode_args})",
+                box_class = self.box_class,
+                decode_args = decode_args,
+            )
+        };
 
         format!(
             r#"typealias {type_alias} = {swift_type}
@@ -1159,8 +1222,8 @@ impl SwiftClosureTrampoline {
         let {box_var} = {box_class}({param_name})
         let {ptr_var} = Unmanaged.passRetained({box_var}).toOpaque()
         defer {{ Unmanaged<{box_class}>.fromOpaque({ptr_var}).release() }}
-        let {trampoline_var}: @convention(c) (UnsafeMutableRawPointer?, {c_params}) -> Void = {{ ud, {param_names} in
-            Unmanaged<{box_class}>.fromOpaque(ud!).takeUnretainedValue().fn_({decode_args})
+        let {trampoline_var}: @convention(c) ({c_params}) -> {c_return_type} = {{ {binding_names} in
+            {trampoline_body}
         }}"#,
             type_alias = self.type_alias,
             swift_type = self.swift_type,
@@ -1170,9 +1233,43 @@ impl SwiftClosureTrampoline {
             trampoline_var = self.trampoline_var,
             param_name = self.param_name,
             c_params = c_params,
-            param_names = param_names,
-            decode_args = decode_args,
+            c_return_type = self.c_return_type,
+            binding_names = binding_names,
+            trampoline_body = self.render_body(&closure_call),
         )
+    }
+
+    fn render_body(&self, closure_call: &str) -> String {
+        match self.value_return_strategy {
+            ValueReturnStrategy::Void => closure_call.to_string(),
+            ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue) => {
+                format!("return {}", closure_call)
+            }
+            ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag) => {
+                format!("return {}.rawValue", closure_call)
+            }
+            ValueReturnStrategy::CompositeValue => {
+                let composite_expr = self
+                    .returns
+                    .composite_pack_expr("result")
+                    .expect("composite closure returns should pack to a C struct");
+                format!("let result = {}\n            return {}", closure_call, composite_expr)
+            }
+            ValueReturnStrategy::DirectBuffer
+            | ValueReturnStrategy::EncodedBuffer
+            | ValueReturnStrategy::ObjectHandle
+            | ValueReturnStrategy::CallbackHandle => {
+                let encoded_expr = self
+                    .returns
+                    .encoded_result_expr()
+                    .expect("encoded closure returns should have encode ops");
+                format!(
+                    "let result = {closure_call}\n            {encoded_expr}\n            if encoded.count > 0 {{\n                guard let allocated = malloc(encoded.count)?.assumingMemoryBound(to: UInt8.self) else {{\n                    return FfiBuf_u8(ptr: nil, len: 0, cap: 0, align: 1)\n                }}\n                _ = encoded.withUnsafeBytes {{ bytes in\n                    memcpy(allocated, bytes.baseAddress!, bytes.count)\n                }}\n                return FfiBuf_u8(ptr: allocated, len: encoded.count, cap: encoded.count, align: 1)\n            }}\n            return FfiBuf_u8(ptr: nil, len: 0, cap: 0, align: 1)",
+                    closure_call = closure_call,
+                    encoded_expr = encoded_expr,
+                )
+            }
+        }
     }
 }
 
@@ -1222,6 +1319,9 @@ pub struct SwiftClosureTrampoline {
     pub trampoline_var: String,
     pub param_name: String,
     pub trampoline_params: Vec<SwiftClosureTrampolineParam>,
+    pub c_return_type: String,
+    pub value_return_strategy: ValueReturnStrategy,
+    pub returns: SwiftReturn,
 }
 
 #[derive(Debug, Clone)]
@@ -1407,6 +1507,37 @@ impl SwiftReturn {
                 class_name,
                 nullable,
             } => Some((class_name.as_str(), *nullable)),
+            _ => None,
+        }
+    }
+
+    pub fn composite_pack_expr(&self, value_var: &str) -> Option<String> {
+        match self {
+            SwiftReturn::FromComposite { c_type, fields, .. } => {
+                let field_values = fields
+                    .iter()
+                    .map(|field| format!("{}: {}.{}", field.c_name, value_var, field.swift_name))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Some(format!("{}({})", c_type, field_values))
+            }
+            SwiftReturn::Throws { ok, .. } => ok.composite_pack_expr(value_var),
+            _ => None,
+        }
+    }
+
+    pub fn encoded_result_expr(&self) -> Option<String> {
+        match self {
+            SwiftReturn::FromWireBuffer { encode, .. } => {
+                let rebased_encode =
+                    remap_root_in_seq(encode, ValueExpr::Var("result".to_string()));
+                let writer_body = emit::emit_writer_write(&rebased_encode);
+                Some(format!(
+                    "let encoded = ({{ var writer = WireWriter(); {}; return writer.finalize() }})()",
+                    writer_body
+                ))
+            }
+            SwiftReturn::Throws { ok, .. } => ok.encoded_result_expr(),
             _ => None,
         }
     }
