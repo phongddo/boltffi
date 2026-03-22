@@ -731,10 +731,12 @@ impl<'a> KotlinLowerer<'a> {
                 v
             })
             .collect::<Vec<_>>();
-        let constructors = enumeration.constructor_calls()
+        let constructors = enumeration
+            .constructor_calls()
             .map(|(call_id, ctor)| self.lower_constructor(ctor, self.find_abi_call(&call_id)))
             .collect::<Vec<_>>();
-        let methods = enumeration.method_calls()
+        let methods = enumeration
+            .method_calls()
             .map(|(call_id, method)| {
                 self.lower_value_type_method(method, &call_id, enumeration.id.as_str())
             })
@@ -893,10 +895,12 @@ impl<'a> KotlinLowerer<'a> {
             .iter()
             .map(|field| self.lower_record_field(record, field))
             .collect::<Vec<_>>();
-        let constructors = record.constructor_calls()
+        let constructors = record
+            .constructor_calls()
             .map(|(call_id, ctor)| self.lower_constructor(ctor, self.find_abi_call(&call_id)))
             .collect::<Vec<_>>();
-        let methods = record.method_calls()
+        let methods = record
+            .method_calls()
             .map(|(call_id, method)| {
                 self.lower_value_type_method(method, &call_id, record.id.as_str())
             })
@@ -1251,8 +1255,7 @@ impl<'a> KotlinLowerer<'a> {
         let call_ref = &call_without_self;
         let output_route = &call_ref.returns;
         let wire_writers = self.wire_writers_for_params(call_ref);
-        let native_args =
-            self.native_args_for_params(call_ref, &method.params, &wire_writers);
+        let native_args = self.native_args_for_params(call_ref, &method.params, &wire_writers);
         let signature_params = method
             .params
             .iter()
@@ -1262,8 +1265,8 @@ impl<'a> KotlinLowerer<'a> {
             })
             .collect::<Vec<_>>();
 
-        let mutating_void = method.receiver == Receiver::RefMutSelf
-            && matches!(method.returns, ReturnDef::Void);
+        let mutating_void =
+            method.receiver == Receiver::RefMutSelf && matches!(method.returns, ReturnDef::Void);
 
         let return_type = if mutating_void {
             Some(NamingConvention::class_name(type_name))
@@ -1279,18 +1282,12 @@ impl<'a> KotlinLowerer<'a> {
         let self_wire = self.build_self_wire_writer(call);
         let self_native_arg = self.build_self_native_arg(call);
 
-        let all_wire_writers: Vec<_> = self_wire
-            .into_iter()
-            .chain(wire_writers)
-            .collect();
+        let all_wire_writers: Vec<_> = self_wire.into_iter().chain(wire_writers).collect();
         let all_wire_writer_closes: Vec<String> = all_wire_writers
             .iter()
             .map(|w| w.binding_name.clone())
             .collect();
-        let all_native_args: Vec<_> = self_native_arg
-            .into_iter()
-            .chain(native_args)
-            .collect();
+        let all_native_args: Vec<_> = self_native_arg.into_iter().chain(native_args).collect();
 
         let rendered = WireMethodTemplate {
             method_name: &NamingConvention::method_name(method.id.as_str()),
@@ -1352,10 +1349,7 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn build_self_native_arg(
-        &self,
-        call: &AbiCall,
-    ) -> Vec<String> {
+    fn build_self_native_arg(&self, call: &AbiCall) -> Vec<String> {
         let self_param = call.params.iter().find(|p| p.name.as_str() == "self");
         let Some(param) = self_param else {
             return vec![];

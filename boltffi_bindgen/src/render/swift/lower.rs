@@ -298,13 +298,15 @@ impl<'a> SwiftLowerer<'a> {
                         })
                         .collect();
 
-                let constructors = def.constructor_calls()
+                let constructors = def
+                    .constructor_calls()
                     .filter_map(|(call_id, ctor)| {
                         let call = self.resolve_abi_call(&call_id)?;
                         Some(self.lower_value_type_constructor(ctor, call))
                     })
                     .collect();
-                let methods = def.method_calls()
+                let methods = def
+                    .method_calls()
                     .filter(|(_, m)| !m.is_async)
                     .filter_map(|(call_id, method)| {
                         let call = self.resolve_abi_call(&call_id)?;
@@ -326,7 +328,10 @@ impl<'a> SwiftLowerer<'a> {
     }
 
     fn resolve_abi_call(&self, call_id: &CallId) -> Option<&AbiCall> {
-        self.abi_index.calls.get(call_id).map(|i| &self.abi.calls[*i])
+        self.abi_index
+            .calls
+            .get(call_id)
+            .map(|i| &self.abi.calls[*i])
     }
 
     fn lower_value_type_constructor(
@@ -514,13 +519,15 @@ impl<'a> SwiftLowerer<'a> {
                 } else {
                     SwiftEnumStyle::Data
                 };
-                let constructors = def.constructor_calls()
+                let constructors = def
+                    .constructor_calls()
                     .filter_map(|(call_id, ctor)| {
                         let call = self.resolve_abi_call(&call_id)?;
                         Some(self.lower_value_type_constructor(ctor, call))
                     })
                     .collect();
-                let methods = def.method_calls()
+                let methods = def
+                    .method_calls()
                     .filter(|(_, m)| !m.is_async)
                     .filter_map(|(call_id, method)| {
                         let call = self.resolve_abi_call(&call_id)?;

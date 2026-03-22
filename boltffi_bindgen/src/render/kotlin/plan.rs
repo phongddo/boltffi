@@ -126,8 +126,6 @@ pub struct KotlinRecord {
     pub doc: Option<String>,
 }
 
-
-
 #[derive(Clone)]
 pub struct KotlinRecordField {
     pub name: String,

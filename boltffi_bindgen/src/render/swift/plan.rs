@@ -283,8 +283,6 @@ pub struct SwiftNativeConversion {
     pub encode_wrapper: String,
 }
 
-
-
 impl SwiftField {
     pub fn wire_decode_inline(&self) -> String {
         emit::emit_read_inline(&self.decode, "pos")
@@ -348,8 +346,6 @@ pub struct SwiftEnum {
     pub methods: Vec<SwiftMethod>,
     pub doc: Option<String>,
 }
-
-
 
 #[derive(Debug, Clone, Copy)]
 pub enum SwiftEnumStyle {

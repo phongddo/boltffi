@@ -1,8 +1,9 @@
 use askama::Template;
 
 use super::plan::{
-    KotlinConstructor, KotlinMethod, KotlinModule, KotlinStreamMode,
+    KotlinConstructor, KotlinMethod,
     KotlinMethodImpl::{AsyncMethod, SyncMethod},
+    KotlinModule, KotlinStreamMode,
 };
 
 pub fn kdoc_block(doc: &Option<String>, indent: &str) -> String {

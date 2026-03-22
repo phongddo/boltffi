@@ -346,7 +346,9 @@ impl<'a> JniLowerer<'a> {
             .map(|call| {
                 let param_defs = self.contract.catalog.params_for_value_call(&call.id);
                 let abi_inputs = self.input_abi_params(call);
-                let has_self = abi_inputs.first().is_some_and(|p| p.name.as_str() == "self");
+                let has_self = abi_inputs
+                    .first()
+                    .is_some_and(|p| p.name.as_str() == "self");
                 let self_jni: Vec<JniParam> = if has_self {
                     vec![self.lower_value_self_param(abi_inputs[0])]
                 } else {
@@ -363,11 +365,8 @@ impl<'a> JniLowerer<'a> {
                 let return_meta = self.value_type_return_meta(call);
                 let return_composite_c_type = self.composite_return_c_type(&call.returns);
                 let ffi_name = call.symbol.as_str().to_string();
-                let jni_name = format!(
-                    "Java_{}_Native_{}",
-                    jni_prefix,
-                    ffi_name.replace('_', "_1")
-                );
+                let jni_name =
+                    format!("Java_{}_Native_{}", jni_prefix, ffi_name.replace('_', "_1"));
                 JniWireFunction {
                     ffi_name,
                     jni_name,

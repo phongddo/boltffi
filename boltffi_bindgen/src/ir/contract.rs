@@ -117,7 +117,10 @@ impl TypeCatalog {
             CallId::RecordConstructor { record_id, index } => {
                 self.resolve_record(record_id).unwrap().constructors[*index].params()
             }
-            CallId::RecordMethod { record_id, method_id } => self
+            CallId::RecordMethod {
+                record_id,
+                method_id,
+            } => self
                 .resolve_record(record_id)
                 .unwrap()
                 .methods

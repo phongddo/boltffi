@@ -31,13 +31,25 @@ impl RecordDef {
 
     pub fn constructor_calls(&self) -> impl Iterator<Item = (CallId, &ConstructorDef)> {
         self.constructors.iter().enumerate().map(|(i, ctor)| {
-            (CallId::RecordConstructor { record_id: self.id.clone(), index: i }, ctor)
+            (
+                CallId::RecordConstructor {
+                    record_id: self.id.clone(),
+                    index: i,
+                },
+                ctor,
+            )
         })
     }
 
     pub fn method_calls(&self) -> impl Iterator<Item = (CallId, &MethodDef)> {
         self.methods.iter().map(|m| {
-            (CallId::RecordMethod { record_id: self.id.clone(), method_id: m.id.clone() }, m)
+            (
+                CallId::RecordMethod {
+                    record_id: self.id.clone(),
+                    method_id: m.id.clone(),
+                },
+                m,
+            )
         })
     }
 
@@ -102,13 +114,25 @@ impl EnumDef {
 
     pub fn constructor_calls(&self) -> impl Iterator<Item = (CallId, &ConstructorDef)> {
         self.constructors.iter().enumerate().map(|(i, ctor)| {
-            (CallId::EnumConstructor { enum_id: self.id.clone(), index: i }, ctor)
+            (
+                CallId::EnumConstructor {
+                    enum_id: self.id.clone(),
+                    index: i,
+                },
+                ctor,
+            )
         })
     }
 
     pub fn method_calls(&self) -> impl Iterator<Item = (CallId, &MethodDef)> {
         self.methods.iter().map(|m| {
-            (CallId::EnumMethod { enum_id: self.id.clone(), method_id: m.id.clone() }, m)
+            (
+                CallId::EnumMethod {
+                    enum_id: self.id.clone(),
+                    method_id: m.id.clone(),
+                },
+                m,
+            )
         })
     }
 
