@@ -43,6 +43,8 @@ pub struct JavaModule {
     pub prefix: String,
     pub records: Vec<JavaRecord>,
     pub enums: Vec<JavaEnum>,
+    pub closures: Vec<JavaClosureInterface>,
+    pub callbacks: Vec<JavaCallbackTrait>,
     pub functions: Vec<JavaFunction>,
     pub classes: Vec<JavaClass>,
 }
@@ -71,6 +73,14 @@ impl JavaModule {
 
     pub fn has_data_enums(&self) -> bool {
         self.enums.iter().any(|e| !e.is_c_style() && !e.is_error())
+    }
+
+    pub fn has_closures(&self) -> bool {
+        !self.closures.is_empty()
+    }
+
+    pub fn has_callbacks(&self) -> bool {
+        !self.callbacks.is_empty()
     }
 }
 
@@ -436,6 +446,75 @@ impl JavaClassMethod {
 
     pub fn native_return_type(&self) -> &str {
         &self.return_plan.native_return_type
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaClosureInterface {
+    pub interface_name: String,
+    pub callback_id: String,
+    pub params: Vec<JavaClosureParam>,
+    pub return_type: Option<String>,
+    pub jni_return_type: Option<String>,
+    pub return_to_jni_expr: String,
+}
+
+impl JavaClosureInterface {
+    pub fn is_void_return(&self) -> bool {
+        self.return_type.is_none()
+    }
+
+    pub fn boxed_return_type(&self) -> &str {
+        self.return_type
+            .as_deref()
+            .map(box_java_type)
+            .unwrap_or("Void")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaClosureParam {
+    pub name: String,
+    pub java_type: String,
+    pub jni_type: String,
+    pub jni_decode_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackTrait {
+    pub interface_name: String,
+    pub callback_id: String,
+    pub methods: Vec<JavaCallbackMethod>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackMethod {
+    pub name: String,
+    pub ffi_name: String,
+    pub params: Vec<JavaCallbackParam>,
+    pub return_info: Option<JavaCallbackReturn>,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackParam {
+    pub name: String,
+    pub java_type: String,
+    pub jni_type: String,
+    pub decode_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackReturn {
+    pub java_type: String,
+    pub jni_type: String,
+    pub default_value: String,
+    pub to_jni_expr: String,
+    pub wrap_prefix: String,
+}
+
+impl JavaCallbackReturn {
+    pub fn has_wrap(&self) -> bool {
+        !self.wrap_prefix.is_empty()
     }
 }
 

@@ -54,6 +54,16 @@ public final class {{ record.class_name }} {
 {%- endfor %}
     }
 
+    byte[] wireEncodeToBytes() {
+        try (WireWriter wire = new WireWriter(wireEncodedSize())) {
+            wireEncodeTo(wire);
+            java.nio.ByteBuffer buf = wire.toBuffer();
+            byte[] bytes = new byte[buf.remaining()];
+            buf.get(bytes);
+            return bytes;
+        }
+    }
+
 {% if let Some(layout) = record.blittable_layout %}
     static final int STRUCT_SIZE = {{ layout.struct_size }};
 {%- for field in layout.fields %}

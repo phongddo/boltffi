@@ -42,6 +42,18 @@ pub fn jni_type(primitive: PrimitiveType) -> &'static str {
     }
 }
 
+pub fn java_default_value(primitive: PrimitiveType) -> &'static str {
+    match primitive {
+        PrimitiveType::Bool => "false",
+        PrimitiveType::F32 => "0f",
+        PrimitiveType::F64 => "0.0",
+        PrimitiveType::I64 | PrimitiveType::U64 | PrimitiveType::ISize | PrimitiveType::USize => {
+            "0L"
+        }
+        _ => "0",
+    }
+}
+
 pub fn java_primitive_array_type(primitive: PrimitiveType) -> &'static str {
     match primitive {
         PrimitiveType::Bool => "boolean[]",

@@ -421,6 +421,25 @@ final class WireReader {
         for (int i = 0; i < count; i++) result.add(decoder.apply(i));
         return result;
     }
+
+    static WireReader fromBuffer(ByteBuffer buffer) {
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return new WireReader(bytes);
+    }
+
+    static String stringFromBuffer(ByteBuffer buffer) {
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    static byte[] wireEncodeIntArray(int[] values) {
+        ByteBuffer buf = ByteBuffer.allocate(4 + values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(values.length);
+        for (int v : values) buf.putInt(v);
+        return buf.array();
+    }
 }
 {% if module.needs_wire_writer() %}
 final class WireWriter implements AutoCloseable {

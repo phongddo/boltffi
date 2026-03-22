@@ -1,0 +1,11 @@
+package {{ package_name }};
+
+@FunctionalInterface
+public interface {{ closure.interface_name }} {
+{%- match closure.return_type %}
+{%- when Some with (ret) %}
+    {{ ret }} invoke({% for param in closure.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- when None %}
+    void invoke({% for param in closure.params %}{{ param.java_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endmatch %}
+}

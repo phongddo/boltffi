@@ -9,22 +9,23 @@ use super::JavaOptions;
 use super::mappings;
 use super::names::NamingConvention;
 use super::plan::{
-    JavaAsyncCall, JavaAsyncMode, JavaBlittableField, JavaBlittableLayout, JavaClass,
-    JavaClassMethod, JavaConstructor, JavaConstructorKind, JavaEnum, JavaEnumField, JavaEnumKind,
-    JavaEnumVariant, JavaFunction, JavaModule, JavaParam, JavaRecord, JavaRecordField,
-    JavaRecordShape, JavaReturnPlan, JavaReturnRender, JavaWireWriter,
+    JavaAsyncCall, JavaAsyncMode, JavaBlittableField, JavaBlittableLayout, JavaCallbackMethod,
+    JavaCallbackParam, JavaCallbackReturn, JavaCallbackTrait, JavaClass, JavaClassMethod,
+    JavaClosureInterface, JavaClosureParam, JavaConstructor, JavaConstructorKind, JavaEnum,
+    JavaEnumField, JavaEnumKind, JavaEnumVariant, JavaFunction, JavaModule, JavaParam, JavaRecord,
+    JavaRecordField, JavaRecordShape, JavaReturnPlan, JavaReturnRender, JavaWireWriter,
 };
 use crate::ir::abi::{
-    AbiCall, AbiContract, AbiEnum, AbiEnumField, AbiEnumPayload, AbiEnumVariant, AbiParam,
-    AbiRecord, CallId, CallMode, ParamRole,
+    AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
+    AbiEnumPayload, AbiEnumVariant, AbiParam, AbiRecord, CallId, CallMode, ParamRole,
 };
 use crate::ir::codec::EnumTagStrategy;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
-    ClassDef, ConstructorDef, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, Receiver,
-    RecordDef, ReturnDef,
+    CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, EnumDef, EnumRepr,
+    FieldDef, FunctionDef, MethodDef, Receiver, RecordDef, ReturnDef,
 };
-use crate::ir::ids::{FieldName, RecordId};
+use crate::ir::ids::{CallbackId, FieldName, RecordId};
 use crate::ir::ops::{
     FieldReadOp, FieldWriteOp, OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq,
 };
@@ -66,6 +67,8 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Enum(id) => supported.contains(id.as_str()),
             TypeExpr::Option(inner) => Self::is_leaf_supported(inner, supported),
             TypeExpr::Vec(inner) => Self::is_leaf_supported(inner, supported),
+            TypeExpr::Callback(_) => true,
+            TypeExpr::Handle(_) => true,
             _ => false,
         }
     }
@@ -163,6 +166,23 @@ impl<'a> JavaLowerer<'a> {
             .map(|f| self.lower_function(f))
             .collect();
 
+        let closures: Vec<JavaClosureInterface> = self
+            .ffi
+            .catalog
+            .all_callbacks()
+            .filter(|cb| matches!(cb.kind, CallbackKind::Closure))
+            .map(|cb| self.lower_closure(cb))
+            .collect();
+
+        let callbacks: Vec<JavaCallbackTrait> = self
+            .ffi
+            .catalog
+            .all_callbacks()
+            .filter(|cb| matches!(cb.kind, CallbackKind::Trait))
+            .filter(|cb| !cb.methods.is_empty())
+            .map(|cb| self.lower_callback_trait(cb))
+            .collect();
+
         let classes: Vec<JavaClass> = self
             .ffi
             .catalog
@@ -179,6 +199,8 @@ impl<'a> JavaLowerer<'a> {
             prefix,
             records,
             enums,
+            closures,
+            callbacks,
             functions,
             classes,
         }
@@ -590,6 +612,14 @@ impl<'a> JavaLowerer<'a> {
                     (java_type.clone(), field_name.clone())
                 }
             }
+            TypeExpr::Callback(callback_id) => {
+                let bridge_name = self.callback_bridge_name(callback_id);
+                (
+                    "long".to_string(),
+                    format!("{}.create({})", bridge_name, field_name),
+                )
+            }
+            TypeExpr::Handle(_) => ("long".to_string(), format!("{}.handle", field_name)),
             TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Option(_) => {
                 let binding_name = wire_writers
                     .iter()
@@ -1177,6 +1207,7 @@ impl<'a> JavaLowerer<'a> {
             TypeExpr::Record(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Enum(id) => NamingConvention::class_name(id.as_str()),
             TypeExpr::Handle(id) => NamingConvention::class_name(id.as_str()),
+            TypeExpr::Callback(id) => self.callback_java_type(id),
             TypeExpr::Option(inner) => {
                 format!("java.util.Optional<{}>", self.java_boxed_type(inner))
             }
@@ -1500,6 +1531,372 @@ impl<'a> JavaLowerer<'a> {
             .iter()
             .find(|abi_enum| abi_enum.id == enumeration.id)
             .expect("abi enum missing")
+    }
+
+    fn lower_closure(&self, callback: &CallbackTraitDef) -> JavaClosureInterface {
+        let method = callback
+            .methods
+            .first()
+            .expect("closure must have a method");
+        let signature_id = callback
+            .id
+            .as_str()
+            .strip_prefix("__Closure_")
+            .unwrap_or(callback.id.as_str());
+        let interface_name = format!("Closure{}", signature_id);
+        let params = method
+            .params
+            .iter()
+            .enumerate()
+            .map(|(index, param)| {
+                let java_type = self.java_type(&param.type_expr);
+                let jni_type = self.closure_jni_type(&param.type_expr);
+                let name = format!("p{}", index);
+                let jni_decode_expr = self.closure_param_decode(&param.type_expr, &name);
+                JavaClosureParam {
+                    name,
+                    java_type,
+                    jni_type,
+                    jni_decode_expr,
+                }
+            })
+            .collect();
+        let return_ty = match &method.returns {
+            ReturnDef::Void => None,
+            ReturnDef::Value(ty) => Some(ty),
+            ReturnDef::Result { ok, .. } => Some(ok),
+        };
+        let return_type = return_ty.map(|ty| self.java_type(ty));
+        let (jni_return_type, return_to_jni_expr) = match return_ty {
+            None => (None, String::new()),
+            Some(ty) => self.closure_return_jni_info(ty),
+        };
+        JavaClosureInterface {
+            interface_name,
+            callback_id: callback.id.as_str().to_string(),
+            params,
+            return_type,
+            jni_return_type,
+            return_to_jni_expr,
+        }
+    }
+
+    fn closure_return_jni_info(&self, ty: &TypeExpr) -> (Option<String>, String) {
+        match ty {
+            TypeExpr::Primitive(p) => (Some(mappings::java_type(*p).to_string()), String::new()),
+            TypeExpr::String => (
+                Some("byte[]".to_string()),
+                ".getBytes(java.nio.charset.StandardCharsets.UTF_8)".to_string(),
+            ),
+            TypeExpr::Record(_) => (
+                Some("byte[]".to_string()),
+                ".wireEncodeToBytes()".to_string(),
+            ),
+            TypeExpr::Enum(id) => {
+                let enum_def = self.ffi.catalog.resolve_enum(id);
+                let is_c_style = enum_def
+                    .map(|e| matches!(e.repr, EnumRepr::CStyle { .. }))
+                    .unwrap_or(false);
+                if is_c_style {
+                    let tag_type = enum_def
+                        .and_then(|e| match &e.repr {
+                            EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
+                            _ => None,
+                        })
+                        .unwrap_or(PrimitiveType::I32);
+                    (
+                        Some(mappings::java_type(tag_type).to_string()),
+                        ".value".to_string(),
+                    )
+                } else {
+                    (Some("byte[]".to_string()), ".encode()".to_string())
+                }
+            }
+            _ => (Some("long".to_string()), String::new()),
+        }
+    }
+
+    fn closure_param_decode(&self, ty: &TypeExpr, name: &str) -> String {
+        match ty {
+            TypeExpr::Primitive(_) => name.to_string(),
+            TypeExpr::String => format!("WireReader.stringFromBuffer({})", name),
+            TypeExpr::Record(id) => format!(
+                "{}.decode(WireReader.fromBuffer({}))",
+                NamingConvention::class_name(id.as_str()),
+                name
+            ),
+            TypeExpr::Enum(id) => format!(
+                "{}.fromValue({})",
+                NamingConvention::class_name(id.as_str()),
+                name
+            ),
+            _ => name.to_string(),
+        }
+    }
+
+    fn closure_jni_type(&self, ty: &TypeExpr) -> String {
+        match ty {
+            TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
+            TypeExpr::String | TypeExpr::Record(_) => "java.nio.ByteBuffer".to_string(),
+            TypeExpr::Enum(id) => {
+                let enum_def = self.ffi.catalog.resolve_enum(id);
+                match enum_def.and_then(|e| match &e.repr {
+                    EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
+                    _ => None,
+                }) {
+                    Some(tag) => mappings::java_type(tag).to_string(),
+                    None => "java.nio.ByteBuffer".to_string(),
+                }
+            }
+            _ => "long".to_string(),
+        }
+    }
+
+    fn lower_callback_trait(&self, callback: &CallbackTraitDef) -> JavaCallbackTrait {
+        let interface_name = NamingConvention::class_name(callback.id.as_str());
+        let abi_callback = self.abi_callback_for(&callback.id);
+        let methods = callback
+            .methods
+            .iter()
+            .filter(|method| !method.is_async)
+            .filter_map(|method| {
+                let abi_method = abi_callback
+                    .as_ref()
+                    .and_then(|ac| ac.methods.iter().find(|m| m.id == method.id));
+                abi_method.map(|abi_method| self.lower_callback_method(method, abi_method))
+            })
+            .collect();
+        JavaCallbackTrait {
+            interface_name,
+            callback_id: callback.id.as_str().to_string(),
+            methods,
+        }
+    }
+
+    fn lower_callback_method(
+        &self,
+        method: &CallbackMethodDef,
+        abi_method: &AbiCallbackMethod,
+    ) -> JavaCallbackMethod {
+        let params = method
+            .params
+            .iter()
+            .map(|param| {
+                let java_type = self.java_type(&param.type_expr);
+                let abi_param = abi_method
+                    .params
+                    .iter()
+                    .find(|p| p.name.as_str() == param.name.as_str());
+                let jni_type = abi_param
+                    .map(|p| self.callback_param_jni_type(&param.type_expr, p))
+                    .unwrap_or_else(|| java_type.clone());
+                let decode_expr =
+                    self.callback_param_decode_expr(&param.type_expr, param.name.as_str());
+                JavaCallbackParam {
+                    name: NamingConvention::field_name(param.name.as_str()),
+                    java_type,
+                    jni_type,
+                    decode_expr,
+                }
+            })
+            .collect();
+        let return_info = match &method.returns {
+            ReturnDef::Void => None,
+            ReturnDef::Value(ty) => Some(self.callback_return_info(ty)),
+            ReturnDef::Result { ok, .. } => Some(self.callback_return_info(ok)),
+        };
+        JavaCallbackMethod {
+            name: NamingConvention::method_name(method.id.as_str()),
+            ffi_name: boltffi_ffi_rules::naming::vtable_field_name(method.id.as_str())
+                .into_string(),
+            params,
+            return_info,
+        }
+    }
+
+    fn callback_param_jni_type(&self, ty: &TypeExpr, _abi_param: &AbiParam) -> String {
+        match ty {
+            TypeExpr::Primitive(p) => mappings::java_type(*p).to_string(),
+            TypeExpr::String => "java.nio.ByteBuffer".to_string(),
+            TypeExpr::Enum(id) => {
+                let enum_def = self.ffi.catalog.resolve_enum(id);
+                match enum_def.and_then(|e| match &e.repr {
+                    EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
+                    _ => None,
+                }) {
+                    Some(tag) => mappings::java_type(tag).to_string(),
+                    None => "java.nio.ByteBuffer".to_string(),
+                }
+            }
+            TypeExpr::Record(_) => "java.nio.ByteBuffer".to_string(),
+            TypeExpr::Vec(_) => "java.nio.ByteBuffer".to_string(),
+            _ => "long".to_string(),
+        }
+    }
+
+    fn callback_param_decode_expr(&self, ty: &TypeExpr, name: &str) -> String {
+        let field_name = NamingConvention::field_name(name);
+        match ty {
+            TypeExpr::Primitive(_) => field_name,
+            TypeExpr::String => format!("WireReader.stringFromBuffer({})", field_name),
+            TypeExpr::Record(id) => format!(
+                "{}.decode(WireReader.fromBuffer({}))",
+                NamingConvention::class_name(id.as_str()),
+                field_name
+            ),
+            TypeExpr::Enum(id) => {
+                let enum_def = self.ffi.catalog.resolve_enum(id);
+                let is_c_style = enum_def
+                    .map(|e| matches!(e.repr, EnumRepr::CStyle { .. }))
+                    .unwrap_or(false);
+                if is_c_style {
+                    format!(
+                        "{}.fromValue({})",
+                        NamingConvention::class_name(id.as_str()),
+                        field_name
+                    )
+                } else {
+                    format!(
+                        "{}.decode(new WireReader({}))",
+                        NamingConvention::class_name(id.as_str()),
+                        field_name
+                    )
+                }
+            }
+            TypeExpr::Vec(inner) => match inner.as_ref() {
+                TypeExpr::Primitive(p) => {
+                    let read_method = match p {
+                        PrimitiveType::Bool => "readBooleanArray",
+                        PrimitiveType::I8 | PrimitiveType::U8 => "readByteArray",
+                        PrimitiveType::I16 | PrimitiveType::U16 => "readShortArray",
+                        PrimitiveType::I32 | PrimitiveType::U32 => "readIntArray",
+                        PrimitiveType::I64
+                        | PrimitiveType::U64
+                        | PrimitiveType::ISize
+                        | PrimitiveType::USize => "readLongArray",
+                        PrimitiveType::F32 => "readFloatArray",
+                        PrimitiveType::F64 => "readDoubleArray",
+                    };
+                    format!("WireReader.fromBuffer({}).{}()", field_name, read_method)
+                }
+                _ => format!("WireReader.fromBuffer({}).readList(i -> null)", field_name),
+            },
+            _ => field_name,
+        }
+    }
+
+    fn callback_return_info(&self, ty: &TypeExpr) -> JavaCallbackReturn {
+        let no_wrap = String::new();
+        match ty {
+            TypeExpr::Primitive(p) => JavaCallbackReturn {
+                java_type: mappings::java_type(*p).to_string(),
+                jni_type: mappings::java_type(*p).to_string(),
+                default_value: mappings::java_default_value(*p).to_string(),
+                to_jni_expr: String::new(),
+                wrap_prefix: no_wrap,
+            },
+            TypeExpr::String => JavaCallbackReturn {
+                java_type: "String".to_string(),
+                jni_type: "byte[]".to_string(),
+                default_value: "new byte[0]".to_string(),
+                to_jni_expr: ".getBytes(java.nio.charset.StandardCharsets.UTF_8)".to_string(),
+                wrap_prefix: no_wrap,
+            },
+            TypeExpr::Record(id) => JavaCallbackReturn {
+                java_type: NamingConvention::class_name(id.as_str()),
+                jni_type: "byte[]".to_string(),
+                default_value: "new byte[0]".to_string(),
+                to_jni_expr: ".wireEncodeToBytes()".to_string(),
+                wrap_prefix: no_wrap,
+            },
+            TypeExpr::Enum(id) => {
+                let enum_def = self.ffi.catalog.resolve_enum(id);
+                let tag_type = enum_def.and_then(|e| match &e.repr {
+                    EnumRepr::CStyle { tag_type, .. } => Some(*tag_type),
+                    _ => None,
+                });
+                match tag_type {
+                    Some(tag) => JavaCallbackReturn {
+                        java_type: NamingConvention::class_name(id.as_str()),
+                        jni_type: mappings::java_type(tag).to_string(),
+                        default_value: mappings::java_default_value(tag).to_string(),
+                        to_jni_expr: ".value".to_string(),
+                        wrap_prefix: no_wrap,
+                    },
+                    None => JavaCallbackReturn {
+                        java_type: NamingConvention::class_name(id.as_str()),
+                        jni_type: "byte[]".to_string(),
+                        default_value: "new byte[0]".to_string(),
+                        to_jni_expr: ".wireEncodeToBytes()".to_string(),
+                        wrap_prefix: no_wrap,
+                    },
+                }
+            }
+            TypeExpr::Vec(_inner) => {
+                let java_type = self.java_type(ty);
+                JavaCallbackReturn {
+                    java_type,
+                    jni_type: "byte[]".to_string(),
+                    default_value: "new byte[0]".to_string(),
+                    to_jni_expr: ")".to_string(),
+                    wrap_prefix: "WireReader.wireEncodeIntArray(".to_string(),
+                }
+            }
+            TypeExpr::Handle(id) => JavaCallbackReturn {
+                java_type: NamingConvention::class_name(id.as_str()),
+                jni_type: "long".to_string(),
+                default_value: "0L".to_string(),
+                to_jni_expr: ".handle".to_string(),
+                wrap_prefix: no_wrap,
+            },
+            _ => JavaCallbackReturn {
+                java_type: "Object".to_string(),
+                jni_type: "Object".to_string(),
+                default_value: "null".to_string(),
+                to_jni_expr: String::new(),
+                wrap_prefix: no_wrap,
+            },
+        }
+    }
+
+    fn callback_java_type(&self, callback_id: &CallbackId) -> String {
+        let callback = self.ffi.catalog.resolve_callback(callback_id);
+        match callback {
+            Some(cb) if matches!(cb.kind, CallbackKind::Closure) => {
+                let signature_id = callback_id
+                    .as_str()
+                    .strip_prefix("__Closure_")
+                    .unwrap_or(callback_id.as_str());
+                format!("Closure{}", signature_id)
+            }
+            Some(_) => NamingConvention::class_name(callback_id.as_str()),
+            None => "Object".to_string(),
+        }
+    }
+
+    fn callback_bridge_name(&self, callback_id: &CallbackId) -> String {
+        let callback = self.ffi.catalog.resolve_callback(callback_id);
+        match callback {
+            Some(cb) if matches!(cb.kind, CallbackKind::Closure) => {
+                let signature_id = callback_id
+                    .as_str()
+                    .strip_prefix("__Closure_")
+                    .unwrap_or(callback_id.as_str());
+                format!("Closure{}Callbacks", signature_id)
+            }
+            Some(_) => format!(
+                "{}Callbacks",
+                NamingConvention::class_name(callback_id.as_str())
+            ),
+            None => "Object".to_string(),
+        }
+    }
+
+    fn abi_callback_for(&self, callback_id: &CallbackId) -> Option<&AbiCallbackInvocation> {
+        self.abi
+            .callbacks
+            .iter()
+            .find(|cb| cb.callback_id == *callback_id)
     }
 }
 
@@ -2566,7 +2963,7 @@ mod tests {
     }
 
     #[test]
-    fn unsupported_types_filter_functions() {
+    fn callback_params_are_supported() {
         let mut contract = empty_contract();
         contract.functions.push(function(
             "with_callback",
@@ -2581,8 +2978,7 @@ mod tests {
             .push(function("simple", vec![], ReturnDef::Void));
 
         let module = lower(&contract);
-        assert_eq!(module.functions.len(), 1);
-        assert_eq!(module.functions[0].name, "simple");
+        assert_eq!(module.functions.len(), 2);
     }
 
     #[test]

@@ -10,7 +10,8 @@ use super::mappings;
 use super::names::NamingConvention;
 use super::plan::JavaEnumKind;
 use super::templates::{
-    CStyleEnumTemplate, ClassTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
+    CStyleEnumTemplate, CallbackCallbacksTemplate, CallbackTraitTemplate, ClassTemplate,
+    ClosureCallbacksTemplate, ClosureTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
     ErrorEnumTemplate, FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate,
 };
 use askama::Template;
@@ -100,6 +101,65 @@ impl JavaEmitter {
             files.push(JavaFile {
                 file_name: format!("{}.java", class.class_name),
                 source: class_template.render().expect("class template failed"),
+            });
+        }
+
+        for closure in &module.closures {
+            let template = ClosureTemplate {
+                closure,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", closure.interface_name),
+                source: template
+                    .render()
+                    .expect("closure interface template failed"),
+            });
+
+            let signature_id = closure
+                .callback_id
+                .strip_prefix("__Closure_")
+                .unwrap_or(&closure.callback_id);
+            let callbacks_class_name = format!("Closure{}Callbacks", signature_id);
+            let callbacks_template = ClosureCallbacksTemplate {
+                callbacks_class_name: &callbacks_class_name,
+                interface_name: &closure.interface_name,
+                params: &closure.params,
+                return_type: &closure.return_type,
+                jni_return_type: &closure.jni_return_type,
+                return_to_jni_expr: &closure.return_to_jni_expr,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", callbacks_class_name),
+                source: callbacks_template
+                    .render()
+                    .expect("closure callbacks template failed"),
+            });
+        }
+
+        for callback in &module.callbacks {
+            let template = CallbackTraitTemplate {
+                callback,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", callback.interface_name),
+                source: template.render().expect("callback trait template failed"),
+            });
+
+            let callbacks_class_name = format!("{}Callbacks", callback.interface_name);
+            let callbacks_template = CallbackCallbacksTemplate {
+                callbacks_class_name: &callbacks_class_name,
+                interface_name: &callback.interface_name,
+                methods: &callback.methods,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", callbacks_class_name),
+                source: callbacks_template
+                    .render()
+                    .expect("callback callbacks template failed"),
             });
         }
 

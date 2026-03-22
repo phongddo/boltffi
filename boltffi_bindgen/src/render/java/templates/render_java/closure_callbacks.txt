@@ -1,0 +1,33 @@
+package {{ package_name }};
+
+final class {{ callbacks_class_name }} {
+    private static final java.util.concurrent.ConcurrentHashMap<Long, {{ interface_name }}> HANDLE_MAP = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.atomic.AtomicLong COUNTER = new java.util.concurrent.atomic.AtomicLong(1L);
+
+    private {{ callbacks_class_name }}() {}
+
+    private static long insert({{ interface_name }} impl_) {
+        long handle = COUNTER.getAndAdd(2L);
+        HANDLE_MAP.put(handle, impl_);
+        return handle;
+    }
+
+    public static void free(long handle) {
+        HANDLE_MAP.remove(handle);
+    }
+
+    public static long clone(long handle) {
+        {{ interface_name }} obj = HANDLE_MAP.get(handle);
+        return obj != null ? insert(obj) : 0L;
+    }
+
+    public static {% match jni_return_type %}{% when Some with (ret) %}{{ ret }}{% when None %}void{% endmatch %} call(long handle{% for param in params %}, {{ param.jni_type }} {{ param.name }}{% endfor %}) {
+        {{ interface_name }} impl_ = HANDLE_MAP.get(handle);
+        if (impl_ == null) throw new RuntimeException("invalid closure handle");
+        {% match jni_return_type %}{% when Some with (_ret) %}return impl_.invoke({% for param in params %}{{ param.jni_decode_expr }}{% if !loop.last %}, {% endif %}{% endfor %}){{ return_to_jni_expr }};{% when None %}impl_.invoke({% for param in params %}{{ param.jni_decode_expr }}{% if !loop.last %}, {% endif %}{% endfor %});{% endmatch %}
+    }
+
+    static long create({{ interface_name }} impl_) {
+        return insert(impl_);
+    }
+}
