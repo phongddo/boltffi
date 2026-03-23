@@ -1,0 +1,20 @@
+import Demo
+import XCTest
+
+final class PrimitivesOptionsTests: XCTestCase {
+    func testPrimitiveOptionFns() {
+        XCTAssertEqual(echoOptionalI32(v: 7), 7)
+        XCTAssertNil(echoOptionalI32(v: nil))
+        XCTAssertEqual(echoOptionalF64(v: 4.5), Optional(4.5))
+        XCTAssertNil(echoOptionalF64(v: nil))
+        XCTAssertEqual(echoOptionalBool(v: true), true)
+        XCTAssertNil(echoOptionalBool(v: nil))
+        XCTAssertEqual(unwrapOrDefaultI32(v: 9, fallback: 4), 9)
+        XCTAssertEqual(unwrapOrDefaultI32(v: nil, fallback: 4), 4)
+        XCTAssertEqual(makeSomeI32(v: 12), 12)
+        XCTAssertNil(makeNoneI32())
+        XCTAssertEqual(doubleIfSome(v: 8), 16)
+        XCTAssertNil(doubleIfSome(v: nil))
+    }
+}
+

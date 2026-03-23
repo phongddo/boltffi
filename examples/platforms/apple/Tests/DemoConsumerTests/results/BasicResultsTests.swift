@@ -1,0 +1,18 @@
+import Demo
+import XCTest
+
+final class BasicResultsTests: XCTestCase {
+    func testBasicResultFns() throws {
+        XCTAssertEqual(try safeDivide(a: 10, b: 2), 5)
+        assertThrowsMessageContains("division by zero", try safeDivide(a: 1, b: 0))
+        XCTAssertEqual(try safeSqrt(x: 9.0), 3.0, accuracy: 1e-9)
+        assertThrowsMessageContains("negative input", try safeSqrt(x: -1.0))
+        XCTAssertEqual(try parsePoint(s: "1.5, 2.5"), Point(x: 1.5, y: 2.5))
+        assertThrowsMessageContains("expected format", try parsePoint(s: "wat"))
+        XCTAssertEqual(try alwaysOk(v: 21), 42)
+        assertThrowsMessageContains("boom", try alwaysErr(msg: "boom"))
+        XCTAssertEqual(resultToString(v: .success(7)), "ok: 7")
+        XCTAssertEqual(resultToString(v: .failure(FfiError(message: "bad"))), "err: bad")
+    }
+}
+

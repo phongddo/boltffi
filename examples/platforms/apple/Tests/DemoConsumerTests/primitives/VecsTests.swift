@@ -1,0 +1,26 @@
+import Demo
+import Foundation
+import XCTest
+
+final class VecsTests: XCTestCase {
+    func testVecFns() {
+        XCTAssertEqual(echoVecI32(v: [1, 2, 3]), [1, 2, 3])
+        XCTAssertEqual(echoVecI8(v: [-1, 0, 7]), [-1, 0, 7])
+        XCTAssertEqual(echoVecU8(v: Data([0, 1, 2, 3])), Data([0, 1, 2, 3]))
+        XCTAssertEqual(echoVecI16(v: [-3, 0, 9]), [-3, 0, 9])
+        XCTAssertEqual(echoVecU16(v: [0, 10, 20]), [0, 10, 20])
+        XCTAssertEqual(echoVecU32(v: [0, 10, 20]), [0, 10, 20])
+        XCTAssertEqual(echoVecI64(v: [-5, 0, 8]), [-5, 0, 8])
+        XCTAssertEqual(echoVecU64(v: [0, 1, 2]), [0, 1, 2])
+        XCTAssertEqual(echoVecIsize(v: [-2, 0, 5]), [-2, 0, 5])
+        XCTAssertEqual(echoVecUsize(v: [0, 2, 4]), [0, 2, 4])
+        XCTAssertEqual(echoVecF32(v: [1.25, -2.5]), [1.25, -2.5])
+        XCTAssertEqual(echoVecF64(v: [1.5, 2.5]), [1.5, 2.5])
+        XCTAssertEqual(echoVecBool(v: [true, false, true]), [true, false, true])
+        XCTAssertEqual(echoVecString(v: ["hello", "world"]), ["hello", "world"])
+        XCTAssertEqual(vecStringLengths(v: ["hi", "café"]), [2, 5])
+        XCTAssertEqual(sumVecI32(v: [10, 20, 30]), 60)
+        XCTAssertEqual(makeRange(start: 0, end: 5), [0, 1, 2, 3, 4])
+        XCTAssertEqual(reverseVecI32(v: [1, 2, 3]), [3, 2, 1])
+    }
+}
