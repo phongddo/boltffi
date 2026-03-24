@@ -8,9 +8,12 @@ import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Function;
 import java.util.function.IntFunction;
-{%- if module.has_async() %}
+{%- if module.uses_completable_future() %}
 import java.util.concurrent.CompletableFuture;
+{%- endif %}
+{%- if module.has_async() %}
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
@@ -421,6 +424,29 @@ final class WireReader {
         for (int i = 0; i < count; i++) result.add(decoder.apply(i));
         return result;
     }
+
+    static WireReader fromBuffer(ByteBuffer buffer) {
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return new WireReader(bytes);
+    }
+
+    static <T> T decodeBuffer(ByteBuffer buffer, Function<WireReader, T> decoder) {
+        return decoder.apply(fromBuffer(buffer));
+    }
+
+    static String stringFromBuffer(ByteBuffer buffer) {
+        byte[] bytes = new byte[buffer.remaining()];
+        buffer.get(bytes);
+        return new String(bytes, StandardCharsets.UTF_8);
+    }
+
+    static byte[] wireEncodeIntArray(int[] values) {
+        ByteBuffer buf = ByteBuffer.allocate(4 + values.length * 4).order(ByteOrder.LITTLE_ENDIAN);
+        buf.putInt(values.length);
+        for (int v : values) buf.putInt(v);
+        return buf.array();
+    }
 }
 {% if module.needs_wire_writer() %}
 final class WireWriter implements AutoCloseable {
@@ -442,6 +468,13 @@ final class WireWriter implements AutoCloseable {
         ByteBuffer view = buf.duplicate().order(ByteOrder.LITTLE_ENDIAN);
         view.flip();
         return view.slice().order(ByteOrder.LITTLE_ENDIAN);
+    }
+
+    byte[] toByteArray() {
+        ByteBuffer view = toBuffer();
+        byte[] bytes = new byte[view.remaining()];
+        view.get(bytes);
+        return bytes;
     }
 
     private void ensureCapacity(int needed) {
@@ -644,6 +677,37 @@ final class WireWriter implements AutoCloseable {
     }
 }
 {% endif %}
+final class BoltFFIResult<Ok, Err> {
+    private final Ok okValue;
+    private final Err errValue;
+    private final boolean ok;
+
+    private BoltFFIResult(Ok okValue, Err errValue, boolean ok) {
+        this.okValue = okValue;
+        this.errValue = errValue;
+        this.ok = ok;
+    }
+
+    static <Ok, Err> BoltFFIResult<Ok, Err> ok(Ok value) {
+        return new BoltFFIResult<>(value, null, true);
+    }
+
+    static <Ok, Err> BoltFFIResult<Ok, Err> err(Err value) {
+        return new BoltFFIResult<>(null, value, false);
+    }
+
+    boolean isOk() {
+        return ok;
+    }
+
+    Ok okValue() {
+        return okValue;
+    }
+
+    Err errValue() {
+        return errValue;
+    }
+}
 {%- if module.has_async() %}
 final class BoltFFIContinuationSignal {
     enum DeliveryState { WAITING, PENDING_DELIVERY, READY_DELIVERY, CANCELLED }

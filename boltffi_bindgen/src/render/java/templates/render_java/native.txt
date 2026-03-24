@@ -73,4 +73,8 @@ final class Native {
 {%- endif %}
 {%- endfor %}
 {%- endfor %}
+{%- for invoker in module.async_callback_invokers %}
+    static native void {{ invoker.success_name() }}(long callbackPtr, long callbackData{% if invoker.has_result() %}, {{ invoker.result_jni_type() }} result{% endif %});
+    static native void {{ invoker.failure_name() }}(long callbackPtr, long callbackData);
+{%- endfor %}
 }

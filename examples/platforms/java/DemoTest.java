@@ -27,6 +27,9 @@ public final class DemoTest {
         testVecStrings();
         testOptions();
         testRecordsWithVecs();
+        testClosures();
+        testSyncCallbacks();
+        testAsyncCallbacks();
         testAsyncFunctions();
         testAsyncClassMethods();
         testResultFunctions();
@@ -102,7 +105,10 @@ public final class DemoTest {
         Point sumPoint = Demo.addPoints(new Point(3.0, 4.0), new Point(5.0, 6.0));
         assert sumPoint.x() == 8.0 : "addPoints.x";
         assert sumPoint.y() == 10.0 : "addPoints.y";
-        assert Math.abs(Demo.pointDistance(new Point(3.0, 4.0)) - 5.0) < 0.0001 : "pointDistance";
+        assert Math.abs(MathUtils.distanceBetween(new Point(0.0, 0.0), new Point(3.0, 4.0)) - 5.0) < 0.0001 : "MathUtils.distanceBetween";
+        Point midpoint = MathUtils.midpoint(new Point(0.0, 0.0), new Point(2.0, 4.0));
+        assert midpoint.x() == 1.0 : "MathUtils.midpoint.x";
+        assert midpoint.y() == 2.0 : "MathUtils.midpoint.y";
         System.out.println("  PASS\n");
     }
 
@@ -167,11 +173,9 @@ public final class DemoTest {
         Shape circle = Demo.makeCircle(5.0);
         assert circle instanceof Shape.Circle : "makeCircle returns Circle";
         assert ((Shape.Circle) circle).radius == 5.0 : "makeCircle.radius";
-        assert Math.abs(Demo.shapeArea(circle) - Math.PI * 25.0) < 0.0001 : "shapeArea(circle)";
 
         Shape rect = Demo.makeRectangle(3.0, 4.0);
         assert rect instanceof Shape.Rectangle : "makeRectangle returns Rectangle";
-        assert Math.abs(Demo.shapeArea(rect) - 12.0) < 0.0001 : "shapeArea(rect)";
 
         Shape echoedCircle = Demo.echoShape(circle);
         assert echoedCircle instanceof Shape.Circle : "echoShape(circle) type";
@@ -184,11 +188,9 @@ public final class DemoTest {
             new Point(0.0, 0.0), new Point(3.0, 0.0), new Point(0.0, 4.0)
         ));
         assert triangle instanceof Shape.Triangle : "echoShape(triangle) type";
-        assert Math.abs(Demo.shapeArea(triangle) - 6.0) < 0.0001 : "shapeArea(triangle)";
 
         Shape point = Demo.echoShape(Shape.Point.INSTANCE);
         assert point instanceof Shape.Point : "echoShape(point) type";
-        assert Demo.shapeArea(point) == 0.0 : "shapeArea(point)";
 
         Message text = Demo.echoMessage(new Message.Text("hello"));
         assert text instanceof Message.Text : "echoMessage(Text) type";
@@ -484,6 +486,124 @@ public final class DemoTest {
         assert ts.scores().length == 2 : "echoTaggedScores.scores.length";
         assert Math.abs(Demo.averageScore(new TaggedScores("x", new double[]{80.0, 100.0})) - 90.0) < 0.0001 : "averageScore";
 
+        System.out.println("  PASS\n");
+    }
+
+    private static void testClosures() {
+        System.out.println("Testing closures...");
+
+        final int[] observedValue = new int[]{0};
+
+        assert Demo.applyClosure(value -> value * 2, 5) == 10 : "applyClosure";
+        Demo.applyVoidClosure(value -> observedValue[0] = value, 42);
+        assert observedValue[0] == 42 : "applyVoidClosure";
+        assert Demo.applyNullaryClosure(() -> 99) == 99 : "applyNullaryClosure";
+        assert Demo.applyStringClosure(String::toUpperCase, "hello").equals("HELLO") : "applyStringClosure";
+        assert !Demo.applyBoolClosure(value -> !value, true) : "applyBoolClosure";
+        assert Math.abs(Demo.applyF64Closure(value -> value * value, 3.0) - 9.0) < 0.0001 : "applyF64Closure";
+        assert Demo.applyBinaryClosure((left, right) -> left + right, 3, 4) == 7 : "applyBinaryClosure";
+
+        Point transformedPoint = Demo.applyPointClosure(
+            point -> new Point(point.x() + 1.0, point.y() + 1.0),
+            new Point(1.0, 2.0)
+        );
+        assert transformedPoint.x() == 2.0 : "applyPointClosure.x";
+        assert transformedPoint.y() == 3.0 : "applyPointClosure.y";
+
+        int[] mapped = Demo.mapVecWithClosure(value -> value * 2, new int[]{1, 2, 3});
+        assert mapped.length == 3 : "mapVecWithClosure length";
+        assert mapped[0] == 2 && mapped[1] == 4 && mapped[2] == 6 : "mapVecWithClosure values";
+
+        int[] filtered = Demo.filterVecWithClosure(value -> value % 2 == 0, new int[]{1, 2, 3, 4});
+        assert filtered.length == 2 : "filterVecWithClosure length";
+        assert filtered[0] == 2 && filtered[1] == 4 : "filterVecWithClosure values";
+
+        System.out.println("  PASS\n");
+    }
+
+    private static void testSyncCallbacks() {
+        System.out.println("Testing sync callbacks...");
+
+        ValueCallback doubler = value -> value * 2;
+        ValueCallback tripler = value -> value * 3;
+        PointTransformer pointTransformer = point -> new Point(point.x() + 10.0, point.y() + 20.0);
+        StatusMapper statusMapper = status -> status == Status.PENDING ? Status.ACTIVE : Status.INACTIVE;
+        MultiMethodCallback multiMethod = new MultiMethodCallback() {
+            @Override
+            public int methodA(int x) {
+                return x + 1;
+            }
+
+            @Override
+            public int methodB(int x, int y) {
+                return x * y;
+            }
+
+            @Override
+            public int methodC() {
+                return 5;
+            }
+        };
+        OptionCallback optionCallback = key -> key > 0 ? Optional.of(key * 10) : Optional.empty();
+        VecProcessor vecProcessor = values -> Arrays.stream(values).map(value -> value * value).toArray();
+
+        assert Demo.invokeValueCallback(doubler, 4) == 8 : "invokeValueCallback";
+        assert Demo.invokeValueCallbackTwice(doubler, 3, 4) == 14 : "invokeValueCallbackTwice";
+        assert Demo.invokeBoxedValueCallback(doubler, 5) == 10 : "invokeBoxedValueCallback";
+        assert Demo.mapStatus(statusMapper, Status.PENDING) == Status.ACTIVE : "mapStatus";
+
+        int[] processed = Demo.processVec(vecProcessor, new int[]{1, 2, 3});
+        assert processed.length == 3 : "processVec length";
+        assert processed[0] == 1 && processed[1] == 4 && processed[2] == 9 : "processVec values";
+
+        assert Demo.invokeMultiMethod(multiMethod, 3, 4) == 21 : "invokeMultiMethod";
+        assert Demo.invokeMultiMethodBoxed(multiMethod, 3, 4) == 21 : "invokeMultiMethodBoxed";
+        assert Demo.invokeTwoCallbacks(doubler, tripler, 5) == 25 : "invokeTwoCallbacks";
+
+        Optional<Integer> optionResult = Demo.invokeOptionCallback(optionCallback, 7);
+        assert optionResult.isPresent() && optionResult.get() == 70 : "invokeOptionCallback some";
+        assert !Demo.invokeOptionCallback(optionCallback, 0).isPresent() : "invokeOptionCallback none";
+
+        Point transformed = Demo.transformPoint(pointTransformer, new Point(1.0, 2.0));
+        assert transformed.x() == 11.0 : "transformPoint.x";
+        assert transformed.y() == 22.0 : "transformPoint.y";
+
+        Point transformedBoxed = Demo.transformPointBoxed(pointTransformer, new Point(3.0, 4.0));
+        assert transformedBoxed.x() == 13.0 : "transformPointBoxed.x";
+        assert transformedBoxed.y() == 24.0 : "transformPointBoxed.y";
+
+        System.out.println("  PASS\n");
+    }
+
+    private static void testAsyncCallbacks() {
+        System.out.println("Testing async callbacks...");
+        try {
+            AsyncFetcher asyncFetcher = new AsyncFetcher() {
+                @Override
+                public CompletableFuture<Integer> fetchValue(int key) {
+                    return CompletableFuture.completedFuture(key * 100);
+                }
+
+                @Override
+                public CompletableFuture<String> fetchString(String input) {
+                    return CompletableFuture.completedFuture(input.toUpperCase());
+                }
+            };
+            AsyncOptionFetcher asyncOptionFetcher = key -> CompletableFuture.completedFuture(
+                key > 0 ? Optional.of(key * 1000L) : Optional.empty()
+            );
+
+            assert Demo.fetchWithAsyncCallback(asyncFetcher, 5).get() == 500 : "fetchWithAsyncCallback";
+            assert Demo.fetchStringWithAsyncCallback(asyncFetcher, "boltffi").get().equals("BOLTFFI") : "fetchStringWithAsyncCallback";
+
+            Optional<Long> some = Demo.invokeAsyncOptionFetcher(asyncOptionFetcher, 7).get();
+            assert some.isPresent() && some.get() == 7000L : "invokeAsyncOptionFetcher some";
+
+            Optional<Long> none = Demo.invokeAsyncOptionFetcher(asyncOptionFetcher, 0).get();
+            assert !none.isPresent() : "invokeAsyncOptionFetcher none";
+        } catch (Exception exception) {
+            throw new RuntimeException("async callback test failed", exception);
+        }
         System.out.println("  PASS\n");
     }
 

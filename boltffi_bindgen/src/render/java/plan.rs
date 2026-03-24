@@ -43,6 +43,9 @@ pub struct JavaModule {
     pub prefix: String,
     pub records: Vec<JavaRecord>,
     pub enums: Vec<JavaEnum>,
+    pub closures: Vec<JavaClosureInterface>,
+    pub callbacks: Vec<JavaCallbackTrait>,
+    pub async_callback_invokers: Vec<JavaAsyncCallbackInvoker>,
     pub functions: Vec<JavaFunction>,
     pub classes: Vec<JavaClass>,
 }
@@ -60,17 +63,48 @@ impl JavaModule {
                 .any(|c| c.methods.iter().any(|m| m.async_call.is_some()))
     }
 
+    pub fn has_async_callbacks(&self) -> bool {
+        self.callbacks
+            .iter()
+            .any(JavaCallbackTrait::has_async_methods)
+    }
+
+    pub fn uses_completable_future(&self) -> bool {
+        self.has_async() || self.has_async_callbacks()
+    }
+
     pub fn has_wire_params(&self) -> bool {
         self.functions.iter().any(|f| !f.wire_writers.is_empty())
             || self.classes.iter().any(|c| c.has_wire_params())
     }
 
     pub fn needs_wire_writer(&self) -> bool {
-        self.has_wire_params() || !self.records.is_empty() || self.has_data_enums()
+        self.has_wire_params()
+            || !self.records.is_empty()
+            || self.has_data_enums()
+            || self.uses_callback_wire_writer()
     }
 
     pub fn has_data_enums(&self) -> bool {
         self.enums.iter().any(|e| !e.is_c_style() && !e.is_error())
+    }
+
+    pub fn has_closures(&self) -> bool {
+        !self.closures.is_empty()
+    }
+
+    pub fn has_callbacks(&self) -> bool {
+        !self.callbacks.is_empty()
+    }
+
+    fn uses_callback_wire_writer(&self) -> bool {
+        self.closures
+            .iter()
+            .any(JavaClosureInterface::requires_wire_writer)
+            || self
+                .callbacks
+                .iter()
+                .any(JavaCallbackTrait::requires_wire_writer)
     }
 }
 
@@ -436,6 +470,290 @@ impl JavaClassMethod {
 
     pub fn native_return_type(&self) -> &str {
         &self.return_plan.native_return_type
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaClosureInterface {
+    pub interface_name: String,
+    pub callback_id: String,
+    pub callbacks_class_name: String,
+    pub params: Vec<JavaBridgeParam>,
+    pub return_info: Option<JavaBridgeReturn>,
+}
+
+impl JavaClosureInterface {
+    pub fn is_void_return(&self) -> bool {
+        self.return_info.is_none()
+    }
+
+    pub fn boxed_return_type(&self) -> &str {
+        self.return_info
+            .as_ref()
+            .map(JavaBridgeReturn::java_type)
+            .map(box_java_type)
+            .unwrap_or("Void")
+    }
+
+    pub fn requires_wire_writer(&self) -> bool {
+        self.return_info
+            .as_ref()
+            .is_some_and(JavaBridgeReturn::requires_wire_writer)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackTrait {
+    pub interface_name: String,
+    pub callback_id: String,
+    pub sync_methods: Vec<JavaSyncCallbackMethod>,
+    pub async_methods: Vec<JavaAsyncCallbackMethod>,
+}
+
+impl JavaCallbackTrait {
+    pub fn callbacks_class_name(&self) -> String {
+        format!("{}Callbacks", self.interface_name)
+    }
+
+    pub fn has_async_methods(&self) -> bool {
+        !self.async_methods.is_empty()
+    }
+
+    pub fn requires_wire_writer(&self) -> bool {
+        self.sync_methods
+            .iter()
+            .any(JavaSyncCallbackMethod::requires_wire_writer)
+            || self
+                .async_methods
+                .iter()
+                .any(JavaAsyncCallbackMethod::requires_wire_writer)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaBridgeParam {
+    pub name: String,
+    pub java_type: String,
+    pub jni_type: String,
+    pub decode_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub enum JavaBridgeReturn {
+    Value(JavaValueBridgeReturn),
+    Result(JavaResultBridgeReturn),
+}
+
+impl JavaBridgeReturn {
+    pub fn java_type(&self) -> &str {
+        match self {
+            Self::Value(return_info) => return_info.java_type.as_str(),
+            Self::Result(return_info) => return_info.ok_java_type.as_str(),
+        }
+    }
+
+    pub fn jni_type(&self) -> &str {
+        match self {
+            Self::Value(return_info) => return_info.jni_type.as_str(),
+            Self::Result(return_info) => return_info.jni_type.as_str(),
+        }
+    }
+
+    pub fn default_value(&self) -> &str {
+        match self {
+            Self::Value(return_info) => return_info.default_value.as_str(),
+            Self::Result(return_info) => return_info.default_value.as_str(),
+        }
+    }
+
+    pub fn is_value(&self) -> bool {
+        matches!(self, Self::Value(_))
+    }
+
+    pub fn is_result(&self) -> bool {
+        matches!(self, Self::Result(_))
+    }
+
+    pub fn value_return(&self) -> Option<&JavaValueBridgeReturn> {
+        match self {
+            Self::Value(return_info) => Some(return_info),
+            Self::Result(_) => None,
+        }
+    }
+
+    pub fn result_return(&self) -> Option<&JavaResultBridgeReturn> {
+        match self {
+            Self::Value(_) => None,
+            Self::Result(return_info) => Some(return_info),
+        }
+    }
+
+    pub fn requires_wire_writer(&self) -> bool {
+        match self {
+            Self::Value(return_info) => return_info.requires_wire_writer(),
+            Self::Result(_) => true,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaValueBridgeReturn {
+    pub java_type: String,
+    pub jni_type: String,
+    pub default_value: String,
+    pub render: JavaValueBridgeRender,
+}
+
+impl JavaValueBridgeReturn {
+    pub fn is_encoded(&self) -> bool {
+        matches!(self.render, JavaValueBridgeRender::Encode { .. })
+    }
+
+    pub fn direct_prefix(&self) -> &str {
+        match &self.render {
+            JavaValueBridgeRender::Direct { prefix, .. } => prefix,
+            JavaValueBridgeRender::Encode { .. } => "",
+        }
+    }
+
+    pub fn direct_suffix(&self) -> &str {
+        match &self.render {
+            JavaValueBridgeRender::Direct { suffix, .. } => suffix,
+            JavaValueBridgeRender::Encode { .. } => "",
+        }
+    }
+
+    pub fn encode_size_expr(&self) -> &str {
+        match &self.render {
+            JavaValueBridgeRender::Direct { .. } => "",
+            JavaValueBridgeRender::Encode { size_expr, .. } => size_expr,
+        }
+    }
+
+    pub fn encode_expr(&self) -> &str {
+        match &self.render {
+            JavaValueBridgeRender::Direct { .. } => "",
+            JavaValueBridgeRender::Encode { encode_expr, .. } => encode_expr,
+        }
+    }
+
+    pub fn requires_wire_writer(&self) -> bool {
+        self.is_encoded()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub enum JavaValueBridgeRender {
+    Direct {
+        prefix: String,
+        suffix: String,
+    },
+    Encode {
+        size_expr: String,
+        encode_expr: String,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaResultBridgeReturn {
+    pub ok_java_type: String,
+    pub err_java_type: String,
+    pub jni_type: String,
+    pub default_value: String,
+    pub encode_size_expr: String,
+    pub encode_expr: String,
+    pub error_capture: JavaCallbackErrorCapture,
+}
+
+impl JavaResultBridgeReturn {
+    pub fn has_exception_class(&self) -> bool {
+        self.error_capture.exception_class.is_some()
+    }
+
+    pub fn exception_class(&self) -> &str {
+        self.error_capture
+            .exception_class
+            .as_deref()
+            .unwrap_or("RuntimeException")
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaCallbackErrorCapture {
+    pub exception_class: Option<String>,
+    pub is_string: bool,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaSyncCallbackMethod {
+    pub name: String,
+    pub ffi_name: String,
+    pub params: Vec<JavaBridgeParam>,
+    pub return_info: Option<JavaBridgeReturn>,
+}
+
+impl JavaSyncCallbackMethod {
+    pub fn requires_wire_writer(&self) -> bool {
+        self.return_info
+            .as_ref()
+            .is_some_and(JavaBridgeReturn::requires_wire_writer)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaAsyncCallbackMethod {
+    pub name: String,
+    pub ffi_name: String,
+    pub params: Vec<JavaBridgeParam>,
+    pub return_info: Option<JavaBridgeReturn>,
+    pub invoker_suffix: String,
+}
+
+impl JavaAsyncCallbackMethod {
+    pub fn boxed_return_type(&self) -> &str {
+        self.return_info
+            .as_ref()
+            .map(JavaBridgeReturn::java_type)
+            .map(box_java_type)
+            .unwrap_or("Void")
+    }
+
+    pub fn success_invoker_name(&self) -> String {
+        format!("invokeAsyncCallback{}", self.invoker_suffix)
+    }
+
+    pub fn failure_invoker_name(&self) -> String {
+        format!("invokeAsyncCallback{}Failure", self.invoker_suffix)
+    }
+
+    pub fn requires_wire_writer(&self) -> bool {
+        self.return_info
+            .as_ref()
+            .is_some_and(JavaBridgeReturn::requires_wire_writer)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaAsyncCallbackInvoker {
+    pub suffix: String,
+    pub result_jni_type: Option<String>,
+}
+
+impl JavaAsyncCallbackInvoker {
+    pub fn success_name(&self) -> String {
+        format!("invokeAsyncCallback{}", self.suffix)
+    }
+
+    pub fn failure_name(&self) -> String {
+        format!("invokeAsyncCallback{}Failure", self.suffix)
+    }
+
+    pub fn has_result(&self) -> bool {
+        self.result_jni_type.is_some()
+    }
+
+    pub fn result_jni_type(&self) -> &str {
+        self.result_jni_type.as_deref().unwrap_or("")
     }
 }
 

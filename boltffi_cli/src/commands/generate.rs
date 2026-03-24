@@ -297,7 +297,9 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
     })?;
 
     let jni_module =
-        render::jni::JniLowerer::new(&contract, &abi_contract, package_name, module_name).lower();
+        render::jni::JniLowerer::new(&contract, &abi_contract, package_name, module_name)
+            .with_jvm_binding_style(render::jni::JvmBindingStyle::Kotlin)
+            .lower();
     let jni_code = render::jni::JniEmitter::emit(&jni_module);
     let jni_path = jni_dir.join("jni_glue.c");
     std::fs::write(&jni_path, &jni_code).map_err(|source| CliError::WriteFailed {
@@ -387,7 +389,9 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
     }
 
     let jni_module =
-        render::jni::JniLowerer::new(&contract, &abi_contract, package_name, module_name).lower();
+        render::jni::JniLowerer::new(&contract, &abi_contract, package_name, module_name)
+            .with_jvm_binding_style(render::jni::JvmBindingStyle::Java)
+            .lower();
     let jni_code = render::jni::JniEmitter::emit(&jni_module);
     let jni_path = jni_dir.join("jni_glue.c");
     std::fs::write(&jni_path, &jni_code).map_err(|source| CliError::WriteFailed {

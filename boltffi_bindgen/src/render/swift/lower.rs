@@ -2,7 +2,8 @@ use boltffi_ffi_rules::naming::{
     self, snake_to_camel as camel_case, to_upper_camel_case as pascal_case,
 };
 use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ErrorReturnStrategy, ScalarReturnStrategy, ValueReturnStrategy,
+    EncodedReturnStrategy, ErrorReturnStrategy, ReturnInvocationContext, ReturnPlatform,
+    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
 };
 use heck::ToLowerCamelCase;
 
@@ -914,10 +915,11 @@ impl<'a> SwiftLowerer<'a> {
                         // callback return as result in the template so we need to rewrite
                         // the root before handing it off
                         let returns = self.rebase_return_encode(
-                            self.swift_return_from_abi(
+                            self.swift_return_from_abi_with_context(
                                 &abi_method.returns,
                                 &abi_method.error,
                                 &method_def.returns,
+                                ReturnInvocationContext::CallbackVtable,
                             ),
                             "result",
                         );
@@ -1273,7 +1275,26 @@ impl<'a> SwiftLowerer<'a> {
         error: &ErrorTransport,
         returns: &ReturnDef,
     ) -> SwiftReturn {
-        let base = match return_shape.value_return_strategy() {
+        self.swift_return_from_abi_with_context(
+            return_shape,
+            error,
+            returns,
+            ReturnInvocationContext::SyncExport,
+        )
+    }
+
+    fn swift_return_from_abi_with_context(
+        &self,
+        return_shape: &ReturnShape,
+        error: &ErrorTransport,
+        returns: &ReturnDef,
+        context: ReturnInvocationContext,
+    ) -> SwiftReturn {
+        let strategy = return_shape.value_return_strategy();
+        let method =
+            strategy.return_method(error.return_strategy(), context, ReturnPlatform::Native);
+
+        let base = match strategy {
             ValueReturnStrategy::Void => SwiftReturn::Void,
             ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue) => {
                 SwiftReturn::Direct {
@@ -1289,6 +1310,9 @@ impl<'a> SwiftLowerer<'a> {
                 SwiftReturn::CStyleEnumFromRawValue {
                     swift_type: self.swift_name_for_enum(enum_id),
                 }
+            }
+            _ if matches!(method, ValueReturnMethod::WriteToOutBufferParts) => {
+                self.wire_buffer_return(return_shape, returns)
             }
             ValueReturnStrategy::CompositeValue => {
                 let Some(Transport::Composite(layout)) = &return_shape.transport else {
@@ -1431,6 +1455,22 @@ impl<'a> SwiftLowerer<'a> {
                 err_is_string: false,
                 err_encode: None,
             },
+        }
+    }
+
+    fn wire_buffer_return(&self, return_shape: &ReturnShape, returns: &ReturnDef) -> SwiftReturn {
+        SwiftReturn::FromWireBuffer {
+            swift_type: self.swift_return_value_type(returns),
+            decode: return_shape.decode_ops.clone().unwrap_or_else(|| ReadSeq {
+                size: SizeExpr::Fixed(0),
+                ops: vec![],
+                shape: WireShape::Value,
+            }),
+            encode: return_shape.encode_ops.clone().unwrap_or_else(|| WriteSeq {
+                size: SizeExpr::Fixed(0),
+                ops: vec![],
+                shape: WireShape::Value,
+            }),
         }
     }
 }

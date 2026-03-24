@@ -289,12 +289,12 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- endif %}
     }
     jlong handle = (jlong)(uintptr_t)user_data;
-{%- for rp in trampoline.record_params %}
-    jobject buf_p{{ rp.index }} = (*env)->NewDirectByteBuffer(env, (void*)p{{ rp.index }}_ptr, (jlong)p{{ rp.index }}_len);
+{%- for line in trampoline.setup_lines %}
+    {{ line }}
 {%- endfor %}
     if (!boltffi_static_call_cache_ensure(env, &g_{{ trampoline.signature_id }}_cache, "{{ trampoline.callbacks_class_jni_path }}", "call", "(J{{ trampoline.jni_params_signature }}){{ trampoline.jni_return_signature() }}")) {
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) (*g_jvm)->DetachCurrentThread(g_jvm);
 {%- if trampoline.is_void() %}
@@ -306,16 +306,16 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
 {%- if trampoline.is_void() %}
     (*env)->CallStaticVoidMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     if (boltffi_consume_pending_exception(env)) {
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
         }
         return;
     }
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -326,8 +326,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     FfiBuf_u8 _result = {0};
     if (boltffi_consume_pending_exception(env)) {
         if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -346,8 +346,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
         }
         (*env)->DeleteLocalRef(env, _jarr);
     }
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -358,8 +358,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     {{ trampoline.c_return_type() }} _result = {0};
     if (boltffi_consume_pending_exception(env)) {
         if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -373,8 +373,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
         }
         (*env)->DeleteLocalRef(env, _jarr);
     }
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -385,8 +385,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     uint8_t* _result = NULL;
     if (boltffi_consume_pending_exception(env)) {
         if (_jarr != NULL) (*env)->DeleteLocalRef(env, _jarr);
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -402,8 +402,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
         }
         (*env)->DeleteLocalRef(env, _jarr);
     }
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -413,8 +413,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     jlong _handle_val = (*env)->CallStaticLongMethod(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     if (boltffi_consume_pending_exception(env)) {
         BoltFFICallbackHandle _zero = {0};
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -422,8 +422,8 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
         return _zero;
     }
     BoltFFICallbackHandle _result = {{ trampoline.callback_create_fn() }}((uint64_t)_handle_val);
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -433,16 +433,16 @@ static {{ trampoline.c_return_type() }} {{ trampoline.trampoline_name }}(void* u
     {{ trampoline.c_return_type() }} _result = {{ trampoline.jni_return_cast() }}(*env)->{{ trampoline.jni_call_method() }}(env, g_{{ trampoline.signature_id }}_cache.class_ref, g_{{ trampoline.signature_id }}_cache.method, handle{% if !trampoline.jni_call_args.is_empty() %}, {{ trampoline.jni_call_args }}{% endif %});
     if (boltffi_consume_pending_exception(env)) {
         {{ trampoline.c_return_type() }} _zero = {0};
-{%- for rp in trampoline.record_params %}
-        if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+        {{ line }}
 {%- endfor %}
         if (attached) {
             (*g_jvm)->DetachCurrentThread(g_jvm);
         }
         return _zero;
     }
-{%- for rp in trampoline.record_params %}
-    if (buf_p{{ rp.index }} != NULL) (*env)->DeleteLocalRef(env, buf_p{{ rp.index }});
+{%- for line in trampoline.cleanup_lines %}
+    {{ line }}
 {%- endfor %}
     if (attached) {
         (*g_jvm)->DetachCurrentThread(g_jvm);
@@ -987,6 +987,22 @@ JNIEXPORT void JNICALL {{ invoker.jni_fn_name }}(JNIEnv* env, jclass cls, jlong 
     (void)env; (void)cls;
     void (*callback)(uint64_t, FfiStatus) = (void (*)(uint64_t, FfiStatus))callback_ptr;
     callback((uint64_t)callback_data, (FfiStatus){.code = 0});
+{%- endif %}
+}
+
+JNIEXPORT void JNICALL {{ invoker.jni_failure_fn_name }}(JNIEnv* env, jclass cls, jlong callback_ptr, jlong callback_data) {
+{%- if invoker.is_wire() %}
+    (void)env; (void)cls;
+    void (*callback)(uint64_t, const uint8_t*, size_t, FfiStatus) = (void (*)(uint64_t, const uint8_t*, size_t, FfiStatus))callback_ptr;
+    callback((uint64_t)callback_data, NULL, 0, (FfiStatus){.code = 1});
+{%- elif invoker.has_result() %}
+    (void)env; (void)cls;
+    void (*callback)(uint64_t, {{ invoker.c_result_type() }}, FfiStatus) = (void (*)(uint64_t, {{ invoker.c_result_type() }}, FfiStatus))callback_ptr;
+    callback((uint64_t)callback_data, ({{ invoker.c_result_type() }}){0}, (FfiStatus){.code = 1});
+{%- else %}
+    (void)env; (void)cls;
+    void (*callback)(uint64_t, FfiStatus) = (void (*)(uint64_t, FfiStatus))callback_ptr;
+    callback((uint64_t)callback_data, (FfiStatus){.code = 1});
 {%- endif %}
 }
 {%- endfor %}

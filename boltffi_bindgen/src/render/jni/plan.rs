@@ -411,9 +411,10 @@ pub struct JniClosureTrampoline {
     pub signature_id: String,
     pub callbacks_class_jni_path: String,
     pub c_params: String,
+    pub setup_lines: Vec<String>,
+    pub cleanup_lines: Vec<String>,
     pub jni_params_signature: String,
     pub jni_call_args: String,
-    pub record_params: Vec<JniClosureRecordParam>,
     pub return_info: Option<JniClosureTrampolineReturn>,
 }
 
@@ -516,16 +517,10 @@ impl JniClosureTrampoline {
 }
 
 #[derive(Clone)]
-pub struct JniClosureRecordParam {
-    pub index: usize,
-    pub c_type: String,
-    pub size: String,
-}
-
-#[derive(Clone)]
 pub struct JniAsyncCallbackInvoker {
     pub suffix: String,
     pub jni_fn_name: String,
+    pub jni_failure_fn_name: String,
     pub result_type: Option<JniInvokerResult>,
 }
 

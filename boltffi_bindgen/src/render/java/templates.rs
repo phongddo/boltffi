@@ -1,6 +1,8 @@
 use askama::Template;
 
-use super::plan::{JavaClass, JavaEnum, JavaModule, JavaRecord};
+use super::plan::{
+    JavaCallbackTrait, JavaClass, JavaClosureInterface, JavaEnum, JavaModule, JavaRecord,
+};
 
 #[derive(Template)]
 #[template(path = "render_java/preamble.txt", escape = "none")]
@@ -63,6 +65,34 @@ pub struct ClassTemplate<'a> {
     pub async_mode: &'a super::plan::JavaAsyncMode,
 }
 
+#[derive(Template)]
+#[template(path = "render_java/closure.txt", escape = "none")]
+pub struct ClosureTemplate<'a> {
+    pub closure: &'a JavaClosureInterface,
+    pub package_name: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "render_java/callback_trait.txt", escape = "none")]
+pub struct CallbackTraitTemplate<'a> {
+    pub callback: &'a JavaCallbackTrait,
+    pub package_name: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "render_java/closure_callbacks.txt", escape = "none")]
+pub struct ClosureCallbacksTemplate<'a> {
+    pub closure: &'a JavaClosureInterface,
+    pub package_name: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "render_java/callback_callbacks.txt", escape = "none")]
+pub struct CallbackCallbacksTemplate<'a> {
+    pub callback: &'a JavaCallbackTrait,
+    pub package_name: &'a str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,6 +135,9 @@ mod tests {
             prefix: "boltffi".to_string(),
             records: vec![],
             enums: vec![],
+            closures: vec![],
+            callbacks: vec![],
+            async_callback_invokers: vec![],
             functions: vec![],
             classes,
         }

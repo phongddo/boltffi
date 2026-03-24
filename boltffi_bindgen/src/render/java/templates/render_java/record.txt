@@ -54,6 +54,13 @@ public final class {{ record.class_name }} {
 {%- endfor %}
     }
 
+    byte[] wireEncodeToBytes() {
+        try (WireWriter wire = new WireWriter(wireEncodedSize())) {
+            wireEncodeTo(wire);
+            return wire.toByteArray();
+        }
+    }
+
 {% if let Some(layout) = record.blittable_layout %}
     static final int STRUCT_SIZE = {{ layout.struct_size }};
 {%- for field in layout.fields %}
@@ -108,6 +115,16 @@ public final class {{ record.class_name }} {
                 writeBlittableToBuffer(buf, base, items.get(index));
             }
         });
+    }
+
+    static ByteBuffer encodeBlittableVecInput(List<{{ record.class_name }}> items) {
+        int byteCount = items.size() * STRUCT_SIZE;
+        ByteBuffer buf = ByteBuffer.allocateDirect(byteCount).order(ByteOrder.LITTLE_ENDIAN);
+        for (int index = 0; index < items.size(); index++) {
+            int base = index * STRUCT_SIZE;
+            writeBlittableToBuffer(buf, base, items.get(index));
+        }
+        return buf;
     }
 {% endif %}
 

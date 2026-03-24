@@ -10,7 +10,8 @@ use super::mappings;
 use super::names::NamingConvention;
 use super::plan::JavaEnumKind;
 use super::templates::{
-    CStyleEnumTemplate, ClassTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
+    CStyleEnumTemplate, CallbackCallbacksTemplate, CallbackTraitTemplate, ClassTemplate,
+    ClosureCallbacksTemplate, ClosureTemplate, DataEnumAbstractTemplate, DataEnumSealedTemplate,
     ErrorEnumTemplate, FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate,
 };
 use askama::Template;
@@ -100,6 +101,52 @@ impl JavaEmitter {
             files.push(JavaFile {
                 file_name: format!("{}.java", class.class_name),
                 source: class_template.render().expect("class template failed"),
+            });
+        }
+
+        for closure in &module.closures {
+            let template = ClosureTemplate {
+                closure,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", closure.interface_name),
+                source: template
+                    .render()
+                    .expect("closure interface template failed"),
+            });
+
+            let callbacks_template = ClosureCallbacksTemplate {
+                closure,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", closure.callbacks_class_name),
+                source: callbacks_template
+                    .render()
+                    .expect("closure callbacks template failed"),
+            });
+        }
+
+        for callback in &module.callbacks {
+            let template = CallbackTraitTemplate {
+                callback,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", callback.interface_name),
+                source: template.render().expect("callback trait template failed"),
+            });
+
+            let callbacks_template = CallbackCallbacksTemplate {
+                callback,
+                package_name: &module.package_name,
+            };
+            files.push(JavaFile {
+                file_name: format!("{}.java", callback.callbacks_class_name()),
+                source: callbacks_template
+                    .render()
+                    .expect("callback callbacks template failed"),
             });
         }
 
@@ -384,6 +431,20 @@ fn emit_write_expr_with_context(
                 format!("{}.wireEncodeTo({})", render_value(value), writer_name)
             }
         },
+        WriteOp::Result { value, ok, err } => {
+            let result_expr = render_value(value);
+            let ok_inner = emit_write_expr_with_context(ok, writer_name, context);
+            let err_inner = emit_write_expr_with_context(err, writer_name, context);
+            let ok_value_expr = format!("({}).okValue()", result_expr);
+            let err_value_expr = format!("({}).errValue()", result_expr);
+            let remapped_ok = replace_identifier_occurrences(&ok_inner, "okVal", &ok_value_expr);
+            let remapped_err =
+                replace_identifier_occurrences(&err_inner, "errVal", &err_value_expr);
+            format!(
+                "if (({}).isOk()) {{ {}.writeI8((byte)0); {}; }} else {{ {}.writeI8((byte)1); {}; }}",
+                result_expr, writer_name, remapped_ok, writer_name, remapped_err,
+            )
+        }
         WriteOp::Vec {
             value,
             element_type,
@@ -522,6 +583,19 @@ fn emit_size_expr_with_context(size: &SizeExpr, context: &mut JavaEmitContext) -
                 option_expr, remapped_inner,
             )
         }
+        SizeExpr::ResultSize { value, ok, err } => {
+            let result_expr = render_value(value);
+            let ok_expr = emit_size_expr_with_context(ok, context);
+            let err_expr = emit_size_expr_with_context(err, context);
+            let ok_value_expr = format!("({}).okValue()", result_expr);
+            let err_value_expr = format!("({}).errValue()", result_expr);
+            let remapped_ok = replace_identifier_occurrences(&ok_expr, "okVal", &ok_value_expr);
+            let remapped_err = replace_identifier_occurrences(&err_expr, "errVal", &err_value_expr);
+            format!(
+                "(1 + (({}).isOk() ? ({}) : ({})))",
+                result_expr, remapped_ok, remapped_err,
+            )
+        }
         SizeExpr::VecSize {
             value,
             inner,
@@ -610,10 +684,10 @@ mod tests {
     use crate::ir::Lowerer as IrLowerer;
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
-        ClassDef, ConstructorDef, FunctionDef, MethodDef, ParamDef, ParamPassing, Receiver,
-        ReturnDef,
+        CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, FunctionDef,
+        MethodDef, ParamDef, ParamPassing, Receiver, ReturnDef,
     };
-    use crate::ir::ids::{ClassId, FunctionId, MethodId, ParamName};
+    use crate::ir::ids::{CallbackId, ClassId, FunctionId, MethodId, ParamName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::render::java::JavaVersion;
     use std::env;
@@ -671,6 +745,20 @@ mod tests {
             is_async: false,
             doc: None,
             deprecated: None,
+        }
+    }
+
+    fn async_callback_method(
+        name: &str,
+        params: Vec<ParamDef>,
+        returns: ReturnDef,
+    ) -> CallbackMethodDef {
+        CallbackMethodDef {
+            id: MethodId::from(name),
+            params,
+            returns,
+            is_async: true,
+            doc: None,
         }
     }
 
@@ -1003,5 +1091,54 @@ mod tests {
         );
 
         let _ = fs::remove_dir_all(tmp_root);
+    }
+
+    #[test]
+    fn emit_async_callback_bridge_normalizes_throwable_paths() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_callback(CallbackTraitDef {
+            id: CallbackId::new("listener"),
+            methods: vec![async_callback_method(
+                "fetch",
+                vec![param("id", TypeExpr::Primitive(PrimitiveType::I32))],
+                ReturnDef::Result {
+                    ok: TypeExpr::Primitive(PrimitiveType::I32),
+                    err: TypeExpr::String,
+                },
+            )],
+            kind: CallbackKind::Trait,
+            doc: None,
+        });
+
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let output = JavaEmitter::emit(
+            &contract,
+            &abi,
+            "com.test".to_string(),
+            "test".to_string(),
+            JavaOptions::default(),
+        );
+
+        let callback_file = output
+            .files
+            .iter()
+            .find(|file| file.file_name == "ListenerCallbacks.java")
+            .expect("callback bridge should be generated");
+
+        assert!(
+            callback_file
+                .source
+                .contains("future.completeExceptionally(throwable);")
+        );
+        assert!(
+            callback_file
+                .source
+                .contains("Throwable callbackThrowable = unwrapAsyncThrowable(throwable);")
+        );
+        assert!(
+            callback_file
+                .source
+                .contains("callbackThrowable instanceof RuntimeException")
+        );
     }
 }
