@@ -5,10 +5,11 @@ mod transform;
 mod value;
 
 use self::callbacks::{AsyncCallbackParamLowerer, SyncCallbackParamLowerer, TraitObjectParamKind};
-use self::transform::{ParamTransform, ParamTransformClassifier};
+use self::transform::{ClassifiedParamTransform, ParamTransform, ParamTransformClassifier};
 use self::value::{AsyncValueParamLowerer, SyncValueParamLowerer};
 use crate::callbacks::registry::CallbackTraitRegistry;
 use crate::lowering::returns::model::ReturnLoweringContext;
+use boltffi_ffi_rules::transport::ParamValueStrategy;
 
 pub struct FfiParams {
     pub ffi_params: Vec<proc_macro2::TokenStream>,
@@ -107,45 +108,55 @@ impl<'a> SyncParamLowerer<'a> {
                     return acc;
                 };
 
-                match self.param_transform_classifier.classify(&pat_type.ty) {
-                    ParamTransform::Callback {
-                        params: arg_types,
-                        returns,
-                    } => self
-                        .callback_param_lowerer
-                        .lower_callback_param(&mut acc, &name, &arg_types, &returns),
-                    ParamTransform::BoxedDynTrait(trait_path) => {
-                        self.callback_param_lowerer.lower_trait_object_param(
-                            &mut acc,
-                            &name,
-                            &trait_path,
-                            TraitObjectParamKind::Boxed,
-                        )
-                    }
-                    ParamTransform::ArcDynTrait(trait_path) => {
-                        self.callback_param_lowerer.lower_trait_object_param(
-                            &mut acc,
-                            &name,
-                            &trait_path,
-                            TraitObjectParamKind::Arc,
-                        )
-                    }
-                    ParamTransform::OptionArcDynTrait(trait_path) => {
-                        self.callback_param_lowerer.lower_trait_object_param(
-                            &mut acc,
-                            &name,
-                            &trait_path,
-                            TraitObjectParamKind::OptionArc,
-                        )
-                    }
-                    ParamTransform::ImplTrait(trait_path) => self
-                        .callback_param_lowerer
-                        .lower_impl_trait_param(&mut acc, &name, &trait_path),
-                    param_transform => self.value_param_lowerer.lower_param_transform(
+                let classified_param = self.param_transform_classifier.classify(&pat_type.ty);
+
+                match classified_param.contract.value_strategy() {
+                    ParamValueStrategy::CallbackHandle { .. } => match classified_param.transform {
+                        ParamTransform::Callback {
+                            params: arg_types,
+                            returns,
+                        } => self
+                            .callback_param_lowerer
+                            .lower_callback_param(&mut acc, &name, &arg_types, &returns),
+                        ParamTransform::BoxedDynTrait(trait_path) => {
+                            self.callback_param_lowerer.lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::Boxed,
+                            )
+                        }
+                        ParamTransform::ArcDynTrait(trait_path) => {
+                            self.callback_param_lowerer.lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::Arc,
+                            )
+                        }
+                        ParamTransform::OptionArcDynTrait(trait_path) => {
+                            self.callback_param_lowerer.lower_trait_object_param(
+                                &mut acc,
+                                &name,
+                                &trait_path,
+                                TraitObjectParamKind::OptionArc,
+                            )
+                        }
+                        ParamTransform::ImplTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_impl_trait_param(&mut acc, &name, &trait_path),
+                        param_transform => {
+                            unreachable!(
+                                "callback param contract must lower through callback builders: {:?}",
+                                param_transform_name(&param_transform)
+                            )
+                        }
+                    },
+                    _ => self.value_param_lowerer.lower_param_transform(
                         &mut acc,
                         &name,
                         &pat_type.ty,
-                        param_transform,
+                        classified_param.transform,
                     ),
                 }
 
@@ -192,8 +203,8 @@ impl<'a> AsyncParamLowerer<'a> {
                 FnArg::Receiver(_) => None,
             })
             .filter_map(|pat_type| {
-                let param_transform = self.param_transform_classifier.classify(&pat_type.ty);
-                Self::unsupported_param_message(&param_transform)
+                let classified_param = self.param_transform_classifier.classify(&pat_type.ty);
+                Self::unsupported_param_message(&classified_param)
                     .map(|message| syn::Error::new_spanned(&pat_type.ty, message))
             })
             .reduce(|mut left, right| {
@@ -203,8 +214,10 @@ impl<'a> AsyncParamLowerer<'a> {
             .map_or(Ok(()), Err)
     }
 
-    fn unsupported_param_message(param_transform: &ParamTransform) -> Option<&'static str> {
-        match param_transform {
+    fn unsupported_param_message(
+        classified_param: &ClassifiedParamTransform,
+    ) -> Option<&'static str> {
+        match &classified_param.transform {
             ParamTransform::Callback { .. } => {
                 Some("boltffi: async exports do not support closure callback parameters yet")
             }
@@ -246,27 +259,58 @@ impl<'a> AsyncParamLowerer<'a> {
                     return acc;
                 };
 
-                match self.param_transform_classifier.classify(&pat_type.ty) {
-                    ParamTransform::ImplTrait(trait_path) => self
-                        .callback_param_lowerer
-                        .lower_impl_trait_param(&mut acc, &name, &trait_path),
-                    ParamTransform::Callback { .. }
-                    | ParamTransform::BoxedDynTrait(_)
-                    | ParamTransform::ArcDynTrait(_)
-                    | ParamTransform::OptionArcDynTrait(_)
-                    | ParamTransform::SliceMut(_) => {
-                        unreachable!("unsupported async params must be rejected during validation");
-                    }
-                    param_transform => self.value_param_lowerer.lower_param_transform(
+                let classified_param = self.param_transform_classifier.classify(&pat_type.ty);
+
+                match classified_param.contract.value_strategy() {
+                    ParamValueStrategy::CallbackHandle { .. } => match classified_param.transform {
+                        ParamTransform::ImplTrait(trait_path) => self
+                            .callback_param_lowerer
+                            .lower_impl_trait_param(&mut acc, &name, &trait_path),
+                        ParamTransform::Callback { .. }
+                        | ParamTransform::BoxedDynTrait(_)
+                        | ParamTransform::ArcDynTrait(_)
+                        | ParamTransform::OptionArcDynTrait(_)
+                        | ParamTransform::SliceMut(_) => {
+                            unreachable!(
+                                "unsupported async params must be rejected during validation"
+                            );
+                        }
+                        param_transform => {
+                            unreachable!(
+                                "callback param contract must lower through callback builders: {:?}",
+                                param_transform_name(&param_transform)
+                            )
+                        }
+                    },
+                    _ => self.value_param_lowerer.lower_param_transform(
                         &mut acc,
                         &name,
                         &pat_type.ty,
-                        param_transform,
+                        classified_param.transform,
                     ),
                 }
 
                 acc
             })
+    }
+}
+
+fn param_transform_name(param_transform: &ParamTransform) -> &'static str {
+    match param_transform {
+        ParamTransform::PassThrough => "PassThrough",
+        ParamTransform::StrRef => "StrRef",
+        ParamTransform::OwnedString => "OwnedString",
+        ParamTransform::Callback { .. } => "Callback",
+        ParamTransform::SliceRef(_) => "SliceRef",
+        ParamTransform::SliceMut(_) => "SliceMut",
+        ParamTransform::BoxedDynTrait(_) => "BoxedDynTrait",
+        ParamTransform::ArcDynTrait(_) => "ArcDynTrait",
+        ParamTransform::OptionArcDynTrait(_) => "OptionArcDynTrait",
+        ParamTransform::ImplTrait(_) => "ImplTrait",
+        ParamTransform::VecPrimitive(_) => "VecPrimitive",
+        ParamTransform::VecPassable(_) => "VecPassable",
+        ParamTransform::WireEncoded(_) => "WireEncoded",
+        ParamTransform::Passable(_) => "Passable",
     }
 }
 

@@ -1,6 +1,7 @@
 use boltffi_ffi_rules::naming::to_upper_camel_case as pascal_case;
+use boltffi_ffi_rules::transport::EnumTagStrategy;
 
-use crate::ir::codec::{EnumLayout, EnumTagStrategy, VecLayout};
+use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::BuiltinId;
 use crate::ir::ops::{OffsetExpr, ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};

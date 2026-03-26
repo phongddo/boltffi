@@ -755,50 +755,6 @@ pub mod callback {
 }
 
 pub mod transport {
-    //! When returning a buffer (wire-encoded data) from Rust to the host, we need
-    //! to tell the host where the data lives and how big it is. Different platforms
-    //! have different optimal ways to do this:
-    //!
-    //! - WASM: pointers are 32-bit, so ptr+len fits in a single u64 register.
-    //!   Returning a packed u64 avoids allocating a separate descriptor struct.
-    //!
-    //! - Native 64-bit: pointers are 64-bit, so we can't pack ptr+len into u64.
-    //!   We return a FfiBuf struct containing { ptr, len, cap }.
-    //!
-    //! This module defines the transport strategies so both the macro (which
-    //! generates Rust FFI exports) and the codegen (which generates host bindings)
-    //! use the same rules. Adding a new platform means adding a variant here and
-    //! handling it in both macro and codegen.
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub enum BufferTransport {
-        /// Packs a buffer descriptor into a single integer return value.
-        ///
-        /// Example: WASM can return `ptr + len` as one packed `u64`.
-        Packed,
-        /// Returns a dedicated descriptor struct with pointer and length fields.
-        ///
-        /// Example: native 64-bit targets return an `FfiBuf`-style descriptor.
-        Descriptor,
-    }
-
-    impl BufferTransport {
-        pub fn for_target(target: &str) -> Self {
-            match target {
-                "wasm32" | "wasm32-unknown-unknown" | "wasm32-wasi" => Self::Packed,
-                _ => Self::Descriptor,
-            }
-        }
-
-        pub fn is_packed(self) -> bool {
-            matches!(self, Self::Packed)
-        }
-
-        pub fn is_descriptor(self) -> bool {
-            matches!(self, Self::Descriptor)
-        }
-    }
-
     /// Describes which side of the ABI surface is making the return-shape
     /// decision.
     ///
@@ -860,6 +816,21 @@ pub mod transport {
                 Self::Wasm
             } else {
                 Self::Native
+            }
+        }
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum EnumTagStrategy {
+        Discriminant,
+        OrdinalIndex,
+    }
+
+    impl EnumTagStrategy {
+        pub fn resolve_tag(self, ordinal: usize, discriminant: i128) -> i128 {
+            match self {
+                Self::Discriminant => discriminant,
+                Self::OrdinalIndex => ordinal as i128,
             }
         }
     }
@@ -941,6 +912,82 @@ pub mod transport {
         ///
         /// Example: `fn status() -> Status`
         CStyleEnumTag,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ScalarParamStrategy {
+        PrimitiveValue,
+        CStyleEnumTag,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum DirectBufferParamStrategy {
+        ScalarElements,
+        CompositeElements,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum WireParamStrategy {
+        SingleValue,
+        Vec,
+        Option,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum CallbackParamStyle {
+        InlineClosure,
+        ImplTrait,
+        BoxedDyn,
+        ArcDyn,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ParamValueStrategy {
+        Scalar(ScalarParamStrategy),
+        CompositeValue,
+        Utf8String,
+        DirectBuffer(DirectBufferParamStrategy),
+        WireEncoded(WireParamStrategy),
+        ObjectHandle {
+            nullable: bool,
+        },
+        CallbackHandle {
+            nullable: bool,
+            style: CallbackParamStyle,
+        },
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum ParamPassingStrategy {
+        ByValue,
+        SharedRef,
+        MutableRef,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ParamContract {
+        value_strategy: ParamValueStrategy,
+        passing_strategy: ParamPassingStrategy,
+    }
+
+    impl ParamContract {
+        pub fn new(
+            value_strategy: ParamValueStrategy,
+            passing_strategy: ParamPassingStrategy,
+        ) -> Self {
+            Self {
+                value_strategy,
+                passing_strategy,
+            }
+        }
+
+        pub fn value_strategy(self) -> ParamValueStrategy {
+            self.value_strategy
+        }
+
+        pub fn passing_strategy(self) -> ParamPassingStrategy {
+            self.passing_strategy
+        }
     }
 
     /// Describes the value itself that comes back across the boundary.
@@ -1041,6 +1088,80 @@ pub mod transport {
         ///
         /// Example: `fn validate() -> Result<Point, ValidationError>`
         Encoded,
+    }
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub enum DirectBufferReturnMethod {
+        Packed,
+        Descriptor,
+    }
+
+    /// Carries the shared semantic meaning of a return across lowering stages.
+    ///
+    /// This is the single shared return contract that macros, bindgen IR, and
+    /// backends should carry once the value and error shapes have been
+    /// classified. It answers what value comes back and how failure is reported,
+    /// while leaving transport mechanics such as read/write ops to the local
+    /// lowering layer.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+    pub struct ReturnContract {
+        value_strategy: ValueReturnStrategy,
+        error_strategy: ErrorReturnStrategy,
+    }
+
+    impl ReturnContract {
+        pub fn new(
+            value_strategy: ValueReturnStrategy,
+            error_strategy: ErrorReturnStrategy,
+        ) -> Self {
+            Self {
+                value_strategy,
+                error_strategy,
+            }
+        }
+
+        pub fn infallible(value_strategy: ValueReturnStrategy) -> Self {
+            Self::new(value_strategy, ErrorReturnStrategy::None)
+        }
+
+        pub fn value_strategy(self) -> ValueReturnStrategy {
+            self.value_strategy
+        }
+
+        pub fn error_strategy(self) -> ErrorReturnStrategy {
+            self.error_strategy
+        }
+
+        pub fn value_return_method(
+            self,
+            context: ReturnInvocationContext,
+            platform: ReturnPlatform,
+        ) -> ValueReturnMethod {
+            self.value_strategy
+                .return_method(self.error_strategy, context, platform)
+        }
+
+        pub fn direct_buffer_return_method(
+            self,
+            context: ReturnInvocationContext,
+            platform: ReturnPlatform,
+        ) -> Option<DirectBufferReturnMethod> {
+            let uses_direct_buffer_return =
+                matches!(self.value_strategy, ValueReturnStrategy::Buffer(_))
+                    && matches!(
+                        self.value_return_method(context, platform),
+                        ValueReturnMethod::DirectReturn
+                    );
+
+            if !uses_direct_buffer_return {
+                return None;
+            }
+
+            Some(match platform {
+                ReturnPlatform::Wasm => DirectBufferReturnMethod::Packed,
+                ReturnPlatform::Native => DirectBufferReturnMethod::Descriptor,
+            })
+        }
     }
 
     /// Describes where the returned value is delivered in the ABI surface.
@@ -1156,38 +1277,6 @@ pub mod transport {
         use super::*;
 
         #[test]
-        fn wasm_targets_use_packed() {
-            assert_eq!(
-                BufferTransport::for_target("wasm32"),
-                BufferTransport::Packed
-            );
-            assert_eq!(
-                BufferTransport::for_target("wasm32-unknown-unknown"),
-                BufferTransport::Packed
-            );
-            assert_eq!(
-                BufferTransport::for_target("wasm32-wasi"),
-                BufferTransport::Packed
-            );
-        }
-
-        #[test]
-        fn native_targets_use_descriptor() {
-            assert_eq!(
-                BufferTransport::for_target("aarch64-apple-darwin"),
-                BufferTransport::Descriptor
-            );
-            assert_eq!(
-                BufferTransport::for_target("x86_64-unknown-linux-gnu"),
-                BufferTransport::Descriptor
-            );
-            assert_eq!(
-                BufferTransport::for_target("aarch64-linux-android"),
-                BufferTransport::Descriptor
-            );
-        }
-
-        #[test]
         fn scalar_return_strategy_distinguishes_enum_tags() {
             assert_ne!(
                 ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue),
@@ -1204,25 +1293,66 @@ pub mod transport {
         }
 
         #[test]
+        fn host_call_encoded_buffers_use_packed_transport_on_wasm() {
+            assert_eq!(
+                ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                ))
+                .direct_buffer_return_method(
+                    ReturnInvocationContext::HostCall,
+                    ReturnPlatform::Wasm,
+                ),
+                Some(DirectBufferReturnMethod::Packed)
+            );
+        }
+
+        #[test]
+        fn host_call_encoded_buffers_use_descriptor_transport_on_native() {
+            assert_eq!(
+                ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::WireEncoded,
+                ))
+                .direct_buffer_return_method(
+                    ReturnInvocationContext::HostCall,
+                    ReturnPlatform::Native,
+                ),
+                Some(DirectBufferReturnMethod::Descriptor)
+            );
+        }
+
+        #[test]
         fn sync_export_direct_buffer_uses_wasm_return_slot() {
             assert_eq!(
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec).return_method(
-                    ErrorReturnStrategy::None,
+                ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::DirectVec,
+                ))
+                .value_return_method(ReturnInvocationContext::SyncExport, ReturnPlatform::Wasm,),
+                ValueReturnMethod::WriteToReturnSlot
+            );
+        }
+
+        #[test]
+        fn sync_export_return_slot_buffers_do_not_use_direct_buffer_transport() {
+            assert_eq!(
+                ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                    EncodedReturnStrategy::DirectVec,
+                ))
+                .direct_buffer_return_method(
                     ReturnInvocationContext::SyncExport,
                     ReturnPlatform::Wasm,
                 ),
-                ValueReturnMethod::WriteToReturnSlot
+                None
             );
         }
 
         #[test]
         fn inline_closure_composite_uses_native_direct_return() {
             assert_eq!(
-                ValueReturnStrategy::CompositeValue.return_method(
-                    ErrorReturnStrategy::None,
-                    ReturnInvocationContext::InlineClosure,
-                    ReturnPlatform::Native,
-                ),
+                ReturnContract::infallible(ValueReturnStrategy::CompositeValue)
+                    .value_return_method(
+                        ReturnInvocationContext::InlineClosure,
+                        ReturnPlatform::Native,
+                    ),
                 ValueReturnMethod::DirectReturn
             );
         }
@@ -1230,11 +1360,11 @@ pub mod transport {
         #[test]
         fn inline_closure_composite_uses_wasm_return_slot() {
             assert_eq!(
-                ValueReturnStrategy::CompositeValue.return_method(
-                    ErrorReturnStrategy::None,
-                    ReturnInvocationContext::InlineClosure,
-                    ReturnPlatform::Wasm,
-                ),
+                ReturnContract::infallible(ValueReturnStrategy::CompositeValue)
+                    .value_return_method(
+                        ReturnInvocationContext::InlineClosure,
+                        ReturnPlatform::Wasm,
+                    ),
                 ValueReturnMethod::WriteToReturnSlot
             );
         }
@@ -1242,8 +1372,10 @@ pub mod transport {
         #[test]
         fn callback_vtable_scalar_uses_out_parameter() {
             assert_eq!(
-                ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue).return_method(
-                    ErrorReturnStrategy::None,
+                ReturnContract::infallible(ValueReturnStrategy::Scalar(
+                    ScalarReturnStrategy::PrimitiveValue,
+                ))
+                .value_return_method(
                     ReturnInvocationContext::CallbackVtable,
                     ReturnPlatform::Native,
                 ),

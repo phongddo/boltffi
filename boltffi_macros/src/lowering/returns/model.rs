@@ -1,6 +1,7 @@
 pub use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ErrorReturnStrategy, ReturnInvocationContext, ReturnPlatform,
-    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
+    DirectBufferReturnMethod, EncodedReturnStrategy, ErrorReturnStrategy, ReturnContract,
+    ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy, ValueReturnMethod,
+    ValueReturnStrategy,
 };
 use syn::{ReturnType, Type};
 
@@ -13,14 +14,14 @@ use super::classify::classify_value_return_strategy;
 #[derive(Clone)]
 pub struct ResolvedReturn {
     rust_type: syn::Type,
-    value_return_strategy: ValueReturnStrategy,
+    return_contract: ReturnContract,
 }
 
 impl ResolvedReturn {
-    pub fn new(rust_type: syn::Type, value_return_strategy: ValueReturnStrategy) -> Self {
+    pub fn new(rust_type: syn::Type, return_contract: ReturnContract) -> Self {
         Self {
             rust_type,
-            value_return_strategy,
+            return_contract,
         }
     }
 
@@ -29,30 +30,33 @@ impl ResolvedReturn {
     }
 
     pub fn value_return_strategy(&self) -> ValueReturnStrategy {
-        self.value_return_strategy
+        self.return_contract.value_strategy()
     }
 
     pub fn encoded_return_strategy(&self) -> Option<EncodedReturnStrategy> {
-        match self.value_return_strategy {
+        match self.return_contract.value_strategy() {
             ValueReturnStrategy::Buffer(strategy) => Some(strategy),
             _ => None,
         }
     }
 
     pub fn is_unit(&self) -> bool {
-        matches!(self.value_return_strategy, ValueReturnStrategy::Void)
+        matches!(
+            self.return_contract.value_strategy(),
+            ValueReturnStrategy::Void
+        )
     }
 
     pub fn is_primitive_scalar(&self) -> bool {
         matches!(
-            self.value_return_strategy,
+            self.return_contract.value_strategy(),
             ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
         )
     }
 
     pub fn is_passable_value(&self) -> bool {
         matches!(
-            self.value_return_strategy,
+            self.return_contract.value_strategy(),
             ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag)
                 | ValueReturnStrategy::CompositeValue
         )
@@ -63,8 +67,16 @@ impl ResolvedReturn {
         context: ReturnInvocationContext,
         platform: ReturnPlatform,
     ) -> ValueReturnMethod {
-        self.value_return_strategy
-            .return_method(ErrorReturnStrategy::None, context, platform)
+        self.return_contract.value_return_method(context, platform)
+    }
+
+    pub fn direct_buffer_return_method(
+        &self,
+        context: ReturnInvocationContext,
+        platform: ReturnPlatform,
+    ) -> Option<DirectBufferReturnMethod> {
+        self.return_contract
+            .direct_buffer_return_method(context, platform)
     }
 }
 
@@ -96,9 +108,10 @@ impl<'a> ReturnLoweringContext<'a> {
 
     pub fn lower_output(&self, output: &ReturnType) -> ResolvedReturn {
         match output {
-            ReturnType::Default => {
-                ResolvedReturn::new(syn::parse_quote!(()), ValueReturnStrategy::Void)
-            }
+            ReturnType::Default => ResolvedReturn::new(
+                syn::parse_quote!(()),
+                ReturnContract::infallible(ValueReturnStrategy::Void),
+            ),
             ReturnType::Type(_, rust_type) => self.lower_type(rust_type),
         }
     }
@@ -106,7 +119,10 @@ impl<'a> ReturnLoweringContext<'a> {
     pub fn lower_type(&self, rust_type: &Type) -> ResolvedReturn {
         ResolvedReturn::new(
             rust_type.clone(),
-            classify_value_return_strategy(rust_type, self),
+            ReturnContract::new(
+                classify_value_return_strategy(rust_type, self),
+                ErrorReturnStrategy::None,
+            ),
         )
     }
 }

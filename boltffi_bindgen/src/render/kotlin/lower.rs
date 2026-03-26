@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use boltffi_ffi_rules::transport::{ScalarReturnStrategy, ValueReturnStrategy};
+use boltffi_ffi_rules::transport::{EnumTagStrategy, ScalarReturnStrategy, ValueReturnStrategy};
 
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
     AbiEnumPayload, AbiEnumVariant, AbiParam, AbiRecord, AbiStream, CallId, CallMode,
     ErrorTransport, ParamRole, ReturnShape, StreamItemTransport,
 };
-use crate::ir::codec::EnumTagStrategy;
 use crate::ir::codec::VecLayout;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::Receiver;

@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 
 use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform, ScalarReturnStrategy,
-    ValueReturnMethod, ValueReturnStrategy,
+    EncodedReturnStrategy, EnumTagStrategy, ReturnInvocationContext, ReturnPlatform,
+    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
 };
 
 use super::JavaOptions;
@@ -21,7 +21,6 @@ use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
     AbiEnumPayload, AbiEnumVariant, AbiParam, AbiRecord, CallId, CallMode, ParamRole, ReturnShape,
 };
-use crate::ir::codec::EnumTagStrategy;
 use crate::ir::contract::FfiContract;
 use crate::ir::definitions::{
     CallbackKind, CallbackMethodDef, CallbackTraitDef, ClassDef, ConstructorDef, EnumDef, EnumRepr,
@@ -732,11 +731,9 @@ impl<'a> JavaLowerer<'a> {
 
     fn java_return_plan_for_value(&self, ty: &TypeExpr, call: &AbiCall) -> JavaReturnPlan {
         let value_return_strategy = call.returns.value_return_strategy();
-        let value_return_method = call.returns.value_return_method(
-            &call.error,
-            ReturnInvocationContext::HostCall,
-            ReturnPlatform::Native,
-        );
+        let value_return_method = call
+            .returns
+            .value_return_method(ReturnInvocationContext::HostCall, ReturnPlatform::Native);
         match ty {
             TypeExpr::Void => JavaReturnPlan {
                 native_return_type: "void".to_string(),

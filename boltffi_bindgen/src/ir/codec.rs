@@ -1,3 +1,5 @@
+use boltffi_ffi_rules::transport::EnumTagStrategy;
+
 use crate::ir::ids::{BuiltinId, CustomTypeId, EnumId, FieldName, RecordId, VariantName};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 
@@ -66,21 +68,6 @@ impl From<&CodecPlan> for TypeExpr {
 pub enum VecLayout {
     Blittable { element_size: usize },
     Encoded,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EnumTagStrategy {
-    Discriminant,
-    OrdinalIndex,
-}
-
-impl EnumTagStrategy {
-    pub fn resolve_tag(self, ordinal: usize, discriminant: i128) -> i128 {
-        match self {
-            Self::Discriminant => discriminant,
-            Self::OrdinalIndex => ordinal as i128,
-        }
-    }
 }
 
 #[derive(Debug, Clone)]

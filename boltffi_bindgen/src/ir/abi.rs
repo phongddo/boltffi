@@ -1,12 +1,3 @@
-use boltffi_ffi_rules::naming::{
-    CreateFn, GlobalSymbol, Name, RegisterFn, VtableField, VtableType,
-};
-use boltffi_ffi_rules::transport::{
-    EncodedReturnStrategy, ErrorReturnStrategy, ReturnInvocationContext, ReturnPlatform,
-    ScalarReturnStrategy, ValueReturnMethod, ValueReturnStrategy,
-};
-
-use crate::ir::codec::EnumTagStrategy;
 use crate::ir::contract::PackageInfo;
 use crate::ir::definitions::StreamMode;
 use crate::ir::ids::{
@@ -14,8 +5,15 @@ use crate::ir::ids::{
     VariantName,
 };
 use crate::ir::ops::{ReadSeq, WriteSeq};
-use crate::ir::plan::{AbiType, Mutability, ScalarOrigin, SpanContent, Transport};
+use crate::ir::plan::{AbiType, Mutability, Transport};
 use crate::ir::types::TypeExpr;
+use boltffi_ffi_rules::naming::{
+    CreateFn, GlobalSymbol, Name, RegisterFn, VtableField, VtableType,
+};
+use boltffi_ffi_rules::transport::{
+    EnumTagStrategy, ErrorReturnStrategy, ParamContract, ReturnContract, ReturnInvocationContext,
+    ReturnPlatform, ValueReturnMethod, ValueReturnStrategy,
+};
 
 /// The resolved FFI boundary for the whole crate.
 ///
@@ -181,6 +179,7 @@ pub struct AbiParam {
 #[allow(clippy::large_enum_variant)]
 pub enum ParamRole {
     Input {
+        contract: ParamContract,
         transport: Transport,
         mutability: Mutability,
         len_param: Option<ParamName>,
@@ -202,6 +201,7 @@ pub enum ParamRole {
 
 #[derive(Debug, Clone)]
 pub struct ReturnShape {
+    pub contract: ReturnContract,
     pub transport: Option<Transport>,
     pub decode_ops: Option<ReadSeq>,
     pub encode_ops: Option<WriteSeq>,
@@ -210,10 +210,33 @@ pub struct ReturnShape {
 impl ReturnShape {
     pub fn void() -> Self {
         Self {
+            contract: ReturnContract::infallible(ValueReturnStrategy::Void),
             transport: None,
             decode_ops: None,
             encode_ops: None,
         }
+    }
+
+    pub fn from_transport_with_ops(
+        transport: Transport,
+        decode_ops: ReadSeq,
+        encode_ops: WriteSeq,
+    ) -> Self {
+        Self {
+            contract: ReturnContract::infallible(transport.value_return_strategy()),
+            transport: Some(transport),
+            decode_ops: Some(decode_ops),
+            encode_ops: Some(encode_ops),
+        }
+    }
+
+    pub fn with_error_strategy(mut self, error_strategy: ErrorReturnStrategy) -> Self {
+        self.contract = ReturnContract::new(self.contract.value_strategy(), error_strategy);
+        self
+    }
+
+    pub fn return_contract(&self) -> ReturnContract {
+        self.contract
     }
 
     /// Classifies the returned value into the shared return vocabulary.
@@ -232,25 +255,7 @@ impl ReturnShape {
     /// - a direct `Vec<u32>` return becomes [`ValueReturnStrategy::Buffer`]
     /// - a wire-encoded enum return becomes [`ValueReturnStrategy::Buffer`]
     pub fn value_return_strategy(&self) -> ValueReturnStrategy {
-        match &self.transport {
-            None => ValueReturnStrategy::Void,
-            Some(Transport::Scalar(ScalarOrigin::Primitive(_))) => {
-                ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
-            }
-            Some(Transport::Scalar(ScalarOrigin::CStyleEnum { .. })) => {
-                ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag)
-            }
-            Some(Transport::Composite(_)) => ValueReturnStrategy::CompositeValue,
-            Some(Transport::Span(SpanContent::Scalar(_)))
-            | Some(Transport::Span(SpanContent::Composite(_))) => {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
-            }
-            Some(Transport::Span(_)) => {
-                ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded)
-            }
-            Some(Transport::Handle { .. }) => ValueReturnStrategy::ObjectHandle,
-            Some(Transport::Callback { .. }) => ValueReturnStrategy::CallbackHandle,
-        }
+        self.contract.value_strategy()
     }
 
     /// Decides how the already-classified value is delivered to the caller.
@@ -269,12 +274,14 @@ impl ReturnShape {
     ///   [`ValueReturnMethod::WriteToOutBufferParts`]
     pub fn value_return_method(
         &self,
-        error: &ErrorTransport,
         context: ReturnInvocationContext,
         platform: ReturnPlatform,
     ) -> ValueReturnMethod {
-        self.value_return_strategy()
-            .return_method(error.return_strategy(), context, platform)
+        self.contract.value_return_method(context, platform)
+    }
+
+    pub fn error_return_strategy(&self) -> ErrorReturnStrategy {
+        self.contract.error_strategy()
     }
 }
 
@@ -341,6 +348,13 @@ impl AbiParam {
             _ => None,
         }
     }
+
+    pub fn param_contract(&self) -> Option<ParamContract> {
+        match &self.role {
+            ParamRole::Input { contract, .. } => Some(*contract),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -350,12 +364,20 @@ mod tests {
     use crate::ir::plan::ScalarOrigin;
     use crate::ir::types::PrimitiveType;
     use boltffi_ffi_rules::naming;
+    use boltffi_ffi_rules::transport::{
+        ParamContract, ParamPassingStrategy, ParamValueStrategy, ReturnContract,
+        ScalarParamStrategy, ScalarReturnStrategy, ValueReturnStrategy,
+    };
 
     fn scalar_param(name: &str, abi: AbiType) -> AbiParam {
         AbiParam {
             name: ParamName::new(name),
             abi_type: abi,
             role: ParamRole::Input {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                    ParamPassingStrategy::ByValue,
+                ),
                 transport: Transport::Scalar(ScalarOrigin::Primitive(PrimitiveType::I32)),
                 mutability: Mutability::Shared,
                 len_param: None,
@@ -374,6 +396,18 @@ mod tests {
                 PrimitiveType::I32
             )))
         ));
+    }
+
+    #[test]
+    fn scalar_param_exposes_param_contract() {
+        let param = scalar_param("v", AbiType::I32);
+        assert_eq!(
+            param.param_contract(),
+            Some(ParamContract::new(
+                ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                ParamPassingStrategy::ByValue,
+            ))
+        );
     }
 
     #[test]
@@ -405,6 +439,9 @@ mod tests {
             mode: CallMode::Sync,
             params: vec![scalar_param("x", AbiType::I32)],
             returns: ReturnShape {
+                contract: ReturnContract::infallible(ValueReturnStrategy::Scalar(
+                    ScalarReturnStrategy::PrimitiveValue,
+                )),
                 transport: Some(Transport::Scalar(ScalarOrigin::Primitive(
                     PrimitiveType::I32,
                 ))),

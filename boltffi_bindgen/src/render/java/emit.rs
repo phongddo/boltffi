@@ -1,8 +1,10 @@
 use crate::ir::abi::AbiContract;
-use crate::ir::codec::{EnumLayout, EnumTagStrategy, VecLayout};
 use crate::ir::contract::FfiContract;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};
+use boltffi_ffi_rules::transport::EnumTagStrategy;
+
+use crate::ir::codec::{EnumLayout, VecLayout};
 
 use super::JavaOptions;
 use super::lower::JavaLowerer;

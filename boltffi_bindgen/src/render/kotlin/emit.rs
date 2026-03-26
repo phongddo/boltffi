@@ -1,4 +1,6 @@
-use crate::ir::codec::{EnumLayout, EnumTagStrategy, VecLayout};
+use boltffi_ffi_rules::transport::EnumTagStrategy;
+
+use crate::ir::codec::{EnumLayout, VecLayout};
 use crate::ir::ids::BuiltinId;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::{PrimitiveType, TypeExpr};

@@ -56,4 +56,12 @@ impl<'a> NamedTypeTransportClassifier<'a> {
             .category_for(ty)
             .is_some_and(DataTypeCategory::supports_direct_vec)
     }
+
+    pub(crate) fn named_type_category(&self, ty: &Type) -> Option<DataTypeCategory> {
+        if contains_custom_types(ty, self.custom_types) {
+            return None;
+        }
+
+        self.data_types.category_for(ty)
+    }
 }

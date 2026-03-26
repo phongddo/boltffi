@@ -6,8 +6,8 @@ pub(crate) mod model;
 mod tests {
     use super::model::{ResolvedReturn, WasmOptionScalarEncoding};
     use boltffi_ffi_rules::transport::{
-        EncodedReturnStrategy, ReturnInvocationContext, ReturnPlatform, ValueReturnMethod,
-        ValueReturnStrategy,
+        EncodedReturnStrategy, ReturnContract, ReturnInvocationContext, ReturnPlatform,
+        ValueReturnMethod, ValueReturnStrategy,
     };
     use syn::parse_quote;
 
@@ -27,7 +27,9 @@ mod tests {
     fn packed_encoded_return_uses_packed_default_on_wasm_failure() {
         let resolved_return = ResolvedReturn::new(
             parse_quote!(std::time::Duration),
-            ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded),
+            ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                EncodedReturnStrategy::WireEncoded,
+            )),
         );
 
         let statement = resolved_return
@@ -51,7 +53,9 @@ mod tests {
     fn direct_vec_return_uses_void_wasm_failure() {
         let resolved_return = ResolvedReturn::new(
             parse_quote!(Vec<i32>),
-            ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec),
+            ReturnContract::infallible(ValueReturnStrategy::Buffer(
+                EncodedReturnStrategy::DirectVec,
+            )),
         );
 
         assert!(matches!(

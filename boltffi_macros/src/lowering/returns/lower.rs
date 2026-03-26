@@ -7,8 +7,8 @@ use crate::registries::custom_types::{self, CustomTypeRegistry};
 
 use super::classify::{extract_option_inner, primitive_for_type};
 use super::model::{
-    EncodedReturnStrategy, ResolvedReturn, ScalarReturnStrategy, ValueReturnStrategy,
-    WasmOptionScalarEncoding,
+    DirectBufferReturnMethod, EncodedReturnStrategy, ResolvedReturn, ReturnInvocationContext,
+    ReturnPlatform, ScalarReturnStrategy, ValueReturnStrategy, WasmOptionScalarEncoding,
 };
 
 impl ResolvedReturn {
@@ -32,15 +32,33 @@ impl ResolvedReturn {
                     return;
                 }
             }
-            ValueReturnStrategy::Buffer(_) => quote! {
-                #[cfg(target_arch = "wasm32")]
-                {
-                    return ::boltffi::__private::FfiBuf::default().into_packed();
-                }
-                #[cfg(not(target_arch = "wasm32"))]
-                {
-                    return ::boltffi::__private::FfiBuf::default();
-                }
+            ValueReturnStrategy::Buffer(_) => match (
+                self.direct_buffer_return_method(
+                    ReturnInvocationContext::SyncExport,
+                    ReturnPlatform::Wasm,
+                ),
+                self.direct_buffer_return_method(
+                    ReturnInvocationContext::SyncExport,
+                    ReturnPlatform::Native,
+                ),
+            ) {
+                (
+                    Some(DirectBufferReturnMethod::Packed),
+                    Some(DirectBufferReturnMethod::Descriptor),
+                ) => quote! {
+                    #[cfg(target_arch = "wasm32")]
+                    {
+                        return ::boltffi::__private::FfiBuf::default().into_packed();
+                    }
+                    #[cfg(not(target_arch = "wasm32"))]
+                    {
+                        return ::boltffi::__private::FfiBuf::default();
+                    }
+                },
+                methods => panic!(
+                    "unexpected direct buffer return methods for sync export invalid-arg return: {:?}",
+                    methods
+                ),
             },
             ValueReturnStrategy::CompositeValue => {
                 let rust_type = self.rust_type();

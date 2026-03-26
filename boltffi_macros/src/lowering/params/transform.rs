@@ -1,9 +1,14 @@
 use boltffi_ffi_rules::naming;
 use boltffi_ffi_rules::primitive::Primitive;
+use boltffi_ffi_rules::transport::{
+    CallbackParamStyle, DirectBufferParamStrategy, ParamContract, ParamPassingStrategy,
+    ParamValueStrategy, ScalarParamStrategy, WireParamStrategy,
+};
 use quote::quote;
 use syn::Type;
 
 use crate::lowering::transport::{NamedTypeTransport, NamedTypeTransportClassifier, TypeShapeExt};
+use crate::registries::data_types::DataTypeCategory;
 
 pub(super) fn ptr_ident(base: &syn::Ident) -> syn::Ident {
     syn::Ident::new(
@@ -39,6 +44,11 @@ pub(super) enum ParamTransform {
     Passable(syn::Type),
 }
 
+pub(super) struct ClassifiedParamTransform {
+    pub(super) contract: ParamContract,
+    pub(super) transform: ParamTransform,
+}
+
 #[derive(Clone)]
 pub(super) struct WireEncodedParam {
     pub(super) kind: WireEncodedParamKind,
@@ -64,81 +74,191 @@ impl<'a> ParamTransformClassifier<'a> {
         }
     }
 
-    pub(super) fn classify(&self, ty: &Type) -> ParamTransform {
+    pub(super) fn classify(&self, ty: &Type) -> ClassifiedParamTransform {
         let type_str = quote!(#ty).to_string().replace(' ', "");
 
         if let Some((params, returns)) = extract_closure_signature(ty) {
-            return ParamTransform::Callback { params, returns };
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::CallbackHandle {
+                        nullable: false,
+                        style: CallbackParamStyle::InlineClosure,
+                    },
+                    Self::passing_strategy(ty),
+                ),
+                transform: ParamTransform::Callback { params, returns },
+            };
         }
 
         if let Some(trait_path) = extract_impl_callback_trait(ty) {
-            return ParamTransform::ImplTrait(trait_path);
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::CallbackHandle {
+                        nullable: false,
+                        style: CallbackParamStyle::ImplTrait,
+                    },
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::ImplTrait(trait_path),
+            };
         }
 
         if let Some((inner_ty, is_mut)) = extract_slice_inner(ty) {
-            return if is_mut {
-                ParamTransform::SliceMut(inner_ty)
+            let passing_strategy = if is_mut {
+                ParamPassingStrategy::MutableRef
             } else {
-                ParamTransform::SliceRef(inner_ty)
+                ParamPassingStrategy::SharedRef
+            };
+            let value_strategy = Self::direct_buffer_value_strategy(&inner_ty);
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(value_strategy, passing_strategy),
+                transform: if is_mut {
+                    ParamTransform::SliceMut(inner_ty)
+                } else {
+                    ParamTransform::SliceRef(inner_ty)
+                },
             };
         }
 
         if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Box") {
-            return ParamTransform::BoxedDynTrait(trait_path);
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::CallbackHandle {
+                        nullable: false,
+                        style: CallbackParamStyle::BoxedDyn,
+                    },
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::BoxedDynTrait(trait_path),
+            };
         }
 
         if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Arc") {
-            return ParamTransform::ArcDynTrait(trait_path);
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::CallbackHandle {
+                        nullable: false,
+                        style: CallbackParamStyle::ArcDyn,
+                    },
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::ArcDynTrait(trait_path),
+            };
         }
 
         if type_str.starts_with("*const") || type_str.starts_with("*mut") {
-            return ParamTransform::PassThrough;
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::PassThrough,
+            };
         }
 
         if type_str.contains("extern") && type_str.contains("fn(") {
-            return ParamTransform::PassThrough;
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::PassThrough,
+            };
         }
 
         if let Some(inner_ty) = extract_vec_param_inner(ty) {
             let inner_str = quote!(#inner_ty).to_string().replace(' ', "");
             if is_primitive_vec_inner(&inner_str) {
-                return ParamTransform::VecPrimitive(inner_ty);
+                return ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::ScalarElements),
+                        ParamPassingStrategy::ByValue,
+                    ),
+                    transform: ParamTransform::VecPrimitive(inner_ty),
+                };
             }
             if self
                 .named_type_transport_classifier
                 .supports_direct_vec_transport(&inner_ty)
             {
-                return ParamTransform::VecPassable(inner_ty);
+                return ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::DirectBuffer(
+                            DirectBufferParamStrategy::CompositeElements,
+                        ),
+                        ParamPassingStrategy::ByValue,
+                    ),
+                    transform: ParamTransform::VecPassable(inner_ty),
+                };
             }
-            return ParamTransform::WireEncoded(WireEncodedParam {
-                kind: WireEncodedParamKind::Vec,
-                rust_type: ty.clone(),
-            });
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::WireEncoded(WireParamStrategy::Vec),
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::WireEncoded(WireEncodedParam {
+                    kind: WireEncodedParamKind::Vec,
+                    rust_type: ty.clone(),
+                }),
+            };
         }
 
         if let Some(inner_ty) = extract_option_param_inner(ty) {
             if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Arc") {
-                return ParamTransform::OptionArcDynTrait(trait_path);
+                return ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::CallbackHandle {
+                            nullable: true,
+                            style: CallbackParamStyle::ArcDyn,
+                        },
+                        ParamPassingStrategy::ByValue,
+                    ),
+                    transform: ParamTransform::OptionArcDynTrait(trait_path),
+                };
             }
-            return ParamTransform::WireEncoded(WireEncodedParam {
-                kind: WireEncodedParamKind::Option,
-                rust_type: ty.clone(),
-            });
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::WireEncoded(WireParamStrategy::Option),
+                    Self::passing_strategy(ty),
+                ),
+                transform: ParamTransform::WireEncoded(WireEncodedParam {
+                    kind: WireEncodedParamKind::Option,
+                    rust_type: ty.clone(),
+                }),
+            };
         }
 
         if ty.is_generic_nominal_type() {
-            return ParamTransform::WireEncoded(WireEncodedParam {
-                kind: WireEncodedParamKind::Required,
-                rust_type: ty.clone(),
-            });
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
+                    Self::passing_strategy(ty),
+                ),
+                transform: ParamTransform::WireEncoded(WireEncodedParam {
+                    kind: WireEncodedParamKind::Required,
+                    rust_type: ty.clone(),
+                }),
+            };
         }
 
         if type_str == "&str" || (type_str.starts_with("&'") && type_str.ends_with("str")) {
-            return ParamTransform::StrRef;
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Utf8String,
+                    ParamPassingStrategy::SharedRef,
+                ),
+                transform: ParamTransform::StrRef,
+            };
         }
 
         if type_str == "String" || type_str == "std::string::String" {
-            return ParamTransform::OwnedString;
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Utf8String,
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::OwnedString,
+            };
         }
 
         if ty.is_named_nominal_type() {
@@ -146,15 +266,63 @@ impl<'a> ParamTransformClassifier<'a> {
                 .named_type_transport_classifier
                 .classify_named_type_transport(ty)
             {
-                NamedTypeTransport::Passable => ParamTransform::Passable(ty.clone()),
-                NamedTypeTransport::WireEncoded => ParamTransform::WireEncoded(WireEncodedParam {
-                    kind: WireEncodedParamKind::Required,
-                    rust_type: ty.clone(),
-                }),
+                NamedTypeTransport::Passable => ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        self.named_value_strategy(ty),
+                        Self::passing_strategy(ty),
+                    ),
+                    transform: ParamTransform::Passable(ty.clone()),
+                },
+                NamedTypeTransport::WireEncoded => ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
+                        Self::passing_strategy(ty),
+                    ),
+                    transform: ParamTransform::WireEncoded(WireEncodedParam {
+                        kind: WireEncodedParamKind::Required,
+                        rust_type: ty.clone(),
+                    }),
+                },
             };
         }
 
-        ParamTransform::PassThrough
+        ClassifiedParamTransform {
+            contract: ParamContract::new(
+                ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                Self::passing_strategy(ty),
+            ),
+            transform: ParamTransform::PassThrough,
+        }
+    }
+
+    fn passing_strategy(ty: &Type) -> ParamPassingStrategy {
+        match ty {
+            Type::Reference(reference) if reference.mutability.is_some() => {
+                ParamPassingStrategy::MutableRef
+            }
+            Type::Reference(_) => ParamPassingStrategy::SharedRef,
+            _ => ParamPassingStrategy::ByValue,
+        }
+    }
+
+    fn direct_buffer_value_strategy(inner_ty: &Type) -> ParamValueStrategy {
+        if inner_ty.is_primitive_type() {
+            ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::ScalarElements)
+        } else {
+            ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::CompositeElements)
+        }
+    }
+
+    fn named_value_strategy(&self, ty: &Type) -> ParamValueStrategy {
+        match self.named_type_transport_classifier.named_type_category(ty) {
+            Some(DataTypeCategory::Scalar) => {
+                ParamValueStrategy::Scalar(ScalarParamStrategy::CStyleEnumTag)
+            }
+            Some(DataTypeCategory::Blittable) => ParamValueStrategy::CompositeValue,
+            Some(DataTypeCategory::WireEncoded) | None => {
+                ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue)
+            }
+        }
     }
 }
 

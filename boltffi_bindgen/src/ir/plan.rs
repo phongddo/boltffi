@@ -1,4 +1,9 @@
 use boltffi_ffi_rules::naming::{GlobalSymbol, Name, VtableField};
+use boltffi_ffi_rules::transport::{
+    CallbackParamStyle, DirectBufferParamStrategy, EncodedReturnStrategy, ParamContract,
+    ParamValueStrategy, ScalarParamStrategy, ScalarReturnStrategy, ValueReturnStrategy,
+    WireParamStrategy,
+};
 
 use crate::ir::codec::CodecPlan;
 use crate::ir::ids::{CallbackId, ClassId, EnumId, FieldName, ParamName, RecordId};
@@ -40,6 +45,7 @@ pub struct CompletionCallback {
 #[derive(Debug, Clone)]
 pub struct ParamPlan {
     pub name: ParamName,
+    pub contract: ParamContract,
     pub transport: Transport,
     pub mutability: Mutability,
 }
@@ -82,6 +88,60 @@ impl ScalarOrigin {
         match self {
             Self::Primitive(p) => *p,
             Self::CStyleEnum { tag_type, .. } => *tag_type,
+        }
+    }
+}
+
+impl Transport {
+    pub fn value_return_strategy(&self) -> ValueReturnStrategy {
+        match self {
+            Self::Scalar(ScalarOrigin::Primitive(_)) => {
+                ValueReturnStrategy::Scalar(ScalarReturnStrategy::PrimitiveValue)
+            }
+            Self::Scalar(ScalarOrigin::CStyleEnum { .. }) => {
+                ValueReturnStrategy::Scalar(ScalarReturnStrategy::CStyleEnumTag)
+            }
+            Self::Composite(_) => ValueReturnStrategy::CompositeValue,
+            Self::Span(SpanContent::Scalar(_)) | Self::Span(SpanContent::Composite(_)) => {
+                ValueReturnStrategy::Buffer(EncodedReturnStrategy::DirectVec)
+            }
+            Self::Span(_) => ValueReturnStrategy::Buffer(EncodedReturnStrategy::WireEncoded),
+            Self::Handle { .. } => ValueReturnStrategy::ObjectHandle,
+            Self::Callback { .. } => ValueReturnStrategy::CallbackHandle,
+        }
+    }
+
+    pub fn param_value_strategy(&self) -> ParamValueStrategy {
+        match self {
+            Self::Scalar(ScalarOrigin::Primitive(_)) => {
+                ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue)
+            }
+            Self::Scalar(ScalarOrigin::CStyleEnum { .. }) => {
+                ParamValueStrategy::Scalar(ScalarParamStrategy::CStyleEnumTag)
+            }
+            Self::Composite(_) => ParamValueStrategy::CompositeValue,
+            Self::Span(SpanContent::Utf8) => ParamValueStrategy::Utf8String,
+            Self::Span(SpanContent::Scalar(_)) => {
+                ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::ScalarElements)
+            }
+            Self::Span(SpanContent::Composite(_)) => {
+                ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::CompositeElements)
+            }
+            Self::Span(SpanContent::Encoded(_)) => {
+                ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue)
+            }
+            Self::Handle { nullable, .. } => ParamValueStrategy::ObjectHandle {
+                nullable: *nullable,
+            },
+            Self::Callback {
+                nullable, style, ..
+            } => ParamValueStrategy::CallbackHandle {
+                nullable: *nullable,
+                style: match style {
+                    CallbackStyle::ImplTrait => CallbackParamStyle::ImplTrait,
+                    CallbackStyle::BoxedDyn => CallbackParamStyle::BoxedDyn,
+                },
+            },
         }
     }
 }
