@@ -74,8 +74,12 @@ impl JavaModule {
     }
 
     pub fn has_wire_params(&self) -> bool {
-        self.functions.iter().any(|f| !f.wire_writers.is_empty())
+        self.functions
+            .iter()
+            .any(|function| function.input_bindings.has_wire_writers())
             || self.classes.iter().any(|c| c.has_wire_params())
+            || self.records.iter().any(JavaRecord::has_wire_params)
+            || self.enums.iter().any(JavaEnum::has_wire_params)
     }
 
     pub fn needs_wire_writer(&self) -> bool {
@@ -114,6 +118,8 @@ pub struct JavaEnum {
     pub kind: JavaEnumKind,
     pub value_type: String,
     pub variants: Vec<JavaEnumVariant>,
+    pub constructors: Vec<JavaValueTypeConstructor>,
+    pub methods: Vec<JavaValueTypeMethod>,
 }
 
 impl JavaEnum {
@@ -140,6 +146,28 @@ impl JavaEnum {
 
     pub fn is_abstract(&self) -> bool {
         matches!(self.kind, JavaEnumKind::AbstractClass)
+    }
+
+    pub fn has_constructors(&self) -> bool {
+        !self.constructors.is_empty()
+    }
+
+    pub fn has_static_methods(&self) -> bool {
+        self.methods.iter().any(|method| method.is_static)
+    }
+
+    pub fn has_instance_methods(&self) -> bool {
+        self.methods.iter().any(|method| !method.is_static)
+    }
+
+    pub fn has_wire_params(&self) -> bool {
+        self.constructors
+            .iter()
+            .any(|constructor| constructor.input_bindings.has_wire_writers())
+            || self
+                .methods
+                .iter()
+                .any(|method| method.input_bindings.has_wire_writers())
     }
 }
 
@@ -181,6 +209,8 @@ pub struct JavaRecord {
     pub class_name: String,
     pub fields: Vec<JavaRecordField>,
     pub blittable_layout: Option<JavaBlittableLayout>,
+    pub constructors: Vec<JavaValueTypeConstructor>,
+    pub methods: Vec<JavaValueTypeMethod>,
 }
 
 impl JavaRecord {
@@ -194,6 +224,28 @@ impl JavaRecord {
 
     pub fn uses_native_record_syntax(&self) -> bool {
         matches!(self.shape, JavaRecordShape::NativeRecord)
+    }
+
+    pub fn has_constructors(&self) -> bool {
+        !self.constructors.is_empty()
+    }
+
+    pub fn has_static_methods(&self) -> bool {
+        self.methods.iter().any(|method| method.is_static)
+    }
+
+    pub fn has_instance_methods(&self) -> bool {
+        self.methods.iter().any(|method| !method.is_static)
+    }
+
+    pub fn has_wire_params(&self) -> bool {
+        self.constructors
+            .iter()
+            .any(|constructor| constructor.input_bindings.has_wire_writers())
+            || self
+                .methods
+                .iter()
+                .any(|method| method.input_bindings.has_wire_writers())
     }
 }
 
@@ -361,7 +413,7 @@ pub struct JavaFunction {
     pub params: Vec<JavaParam>,
     pub return_type: String,
     pub return_plan: JavaReturnPlan,
-    pub wire_writers: Vec<JavaWireWriter>,
+    pub input_bindings: JavaInputBindings,
     pub async_call: Option<JavaAsyncCall>,
 }
 
@@ -388,11 +440,86 @@ pub struct JavaWireWriter {
 }
 
 #[derive(Debug, Clone)]
+pub struct JavaDirectCompositeInput {
+    pub binding_name: String,
+    pub param_name: String,
+    pub declaration_expr: String,
+}
+
+impl JavaDirectCompositeInput {
+    pub fn declaration(&self) -> String {
+        format!(
+            "java.nio.ByteBuffer {} = {}",
+            self.binding_name, self.declaration_expr
+        )
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct JavaInputBindings {
+    pub direct_composites: Vec<JavaDirectCompositeInput>,
+    pub wire_writers: Vec<JavaWireWriter>,
+}
+
+impl JavaInputBindings {
+    pub fn is_empty(&self) -> bool {
+        self.direct_composites.is_empty() && self.wire_writers.is_empty()
+    }
+
+    pub fn has_wire_writers(&self) -> bool {
+        !self.wire_writers.is_empty()
+    }
+
+    pub fn binding_name_for(&self, param_name: &str) -> Option<&str> {
+        self.direct_composites
+            .iter()
+            .find(|binding| binding.param_name == param_name)
+            .map(|binding| binding.binding_name.as_str())
+            .or_else(|| {
+                self.wire_writers
+                    .iter()
+                    .find(|binding| binding.param_name == param_name)
+                    .map(|binding| binding.binding_name.as_str())
+            })
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct JavaParam {
     pub name: String,
     pub java_type: String,
     pub native_type: String,
     pub native_expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaNativeParam {
+    pub name: String,
+    pub native_type: String,
+    pub expr: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaValueTypeConstructor {
+    pub name: String,
+    pub params: Vec<JavaParam>,
+    pub native_params: Vec<JavaNativeParam>,
+    pub return_type: String,
+    pub return_plan: JavaReturnPlan,
+    pub input_bindings: JavaInputBindings,
+    pub ffi_name: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct JavaValueTypeMethod {
+    pub name: String,
+    pub ffi_name: String,
+    pub is_static: bool,
+    pub params: Vec<JavaParam>,
+    pub native_params: Vec<JavaNativeParam>,
+    pub return_type: String,
+    pub return_plan: JavaReturnPlan,
+    pub input_bindings: JavaInputBindings,
 }
 
 #[derive(Debug, Clone)]
@@ -419,8 +546,13 @@ impl JavaClass {
     }
 
     pub fn has_wire_params(&self) -> bool {
-        self.constructors.iter().any(|c| !c.wire_writers.is_empty())
-            || self.methods.iter().any(|m| !m.wire_writers.is_empty())
+        self.constructors
+            .iter()
+            .any(|constructor| constructor.input_bindings.has_wire_writers())
+            || self
+                .methods
+                .iter()
+                .any(|method| method.input_bindings.has_wire_writers())
     }
 }
 
@@ -438,7 +570,7 @@ pub struct JavaConstructor {
     pub is_fallible: bool,
     pub params: Vec<JavaParam>,
     pub ffi_name: String,
-    pub wire_writers: Vec<JavaWireWriter>,
+    pub input_bindings: JavaInputBindings,
 }
 
 impl JavaConstructor {
@@ -455,7 +587,7 @@ pub struct JavaClassMethod {
     pub params: Vec<JavaParam>,
     pub return_type: String,
     pub return_plan: JavaReturnPlan,
-    pub wire_writers: Vec<JavaWireWriter>,
+    pub input_bindings: JavaInputBindings,
     pub async_call: Option<JavaAsyncCall>,
 }
 

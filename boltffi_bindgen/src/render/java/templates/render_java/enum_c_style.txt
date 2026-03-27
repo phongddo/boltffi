@@ -31,4 +31,16 @@ public enum {{ enumeration.class_name }} {
     int wireTag() {
         return ordinal();
     }
+
+    {{ enumeration.value_type }} nativeValue() {
+        return value;
+    }
+
+{%- for ctor in enumeration.constructors %}
+{% include "render_java/value_type_constructor.txt" %}
+{%- endfor %}
+
+{%- for method in enumeration.methods %}
+{% include "render_java/value_type_method.txt" %}
+{%- endfor %}
 }

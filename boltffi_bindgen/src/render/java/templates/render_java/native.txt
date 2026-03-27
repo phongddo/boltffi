@@ -40,6 +40,22 @@ final class Native {
     static native {{ func.native_return_type() }} {{ func.ffi_name }}({% for param in func.params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
 {%- endif %}
 {%- endfor %}
+{%- for record in module.records %}
+{%- for ctor in record.constructors %}
+    static native {{ ctor.return_plan.native_return_type }} {{ ctor.ffi_name }}({% for param in ctor.native_params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
+{%- for method in record.methods %}
+    static native {{ method.return_plan.native_return_type }} {{ method.ffi_name }}({% for param in method.native_params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
+{%- endfor %}
+{%- for enumeration in module.enums %}
+{%- for ctor in enumeration.constructors %}
+    static native {{ ctor.return_plan.native_return_type }} {{ ctor.ffi_name }}({% for param in ctor.native_params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
+{%- for method in enumeration.methods %}
+    static native {{ method.return_plan.native_return_type }} {{ method.ffi_name }}({% for param in method.native_params %}{{ param.native_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
+{%- endfor %}
 {%- for class in module.classes %}
     static native void {{ class.ffi_free }}(long handle);
 {%- for ctor in class.constructors %}

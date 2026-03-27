@@ -12,10 +12,11 @@ use super::plan::{
     JavaAsyncCall, JavaAsyncCallbackInvoker, JavaAsyncCallbackMethod, JavaAsyncMode,
     JavaBlittableField, JavaBlittableLayout, JavaBridgeParam, JavaBridgeReturn,
     JavaCallbackErrorCapture, JavaCallbackTrait, JavaClass, JavaClassMethod, JavaClosureInterface,
-    JavaConstructor, JavaConstructorKind, JavaEnum, JavaEnumField, JavaEnumKind, JavaEnumVariant,
-    JavaFunction, JavaModule, JavaParam, JavaRecord, JavaRecordField, JavaRecordShape,
-    JavaResultBridgeReturn, JavaReturnPlan, JavaReturnRender, JavaSyncCallbackMethod,
-    JavaValueBridgeRender, JavaValueBridgeReturn, JavaWireWriter,
+    JavaConstructor, JavaConstructorKind, JavaDirectCompositeInput, JavaEnum, JavaEnumField,
+    JavaEnumKind, JavaEnumVariant, JavaFunction, JavaInputBindings, JavaModule, JavaNativeParam,
+    JavaParam, JavaRecord, JavaRecordField, JavaRecordShape, JavaResultBridgeReturn,
+    JavaReturnPlan, JavaReturnRender, JavaSyncCallbackMethod, JavaValueBridgeRender,
+    JavaValueBridgeReturn, JavaValueTypeConstructor, JavaValueTypeMethod, JavaWireWriter,
 };
 use crate::ir::abi::{
     AbiCall, AbiCallbackInvocation, AbiCallbackMethod, AbiContract, AbiEnum, AbiEnumField,
@@ -41,6 +42,68 @@ pub struct JavaLowerer<'a> {
     module_name: String,
     options: JavaOptions,
     supported_types: HashSet<String>,
+}
+
+#[derive(Clone, Copy)]
+enum JavaValueTypeDef<'a> {
+    Record(&'a RecordDef),
+    Enum(&'a EnumDef),
+}
+
+impl<'a> JavaValueTypeDef<'a> {
+    fn type_expr(self) -> TypeExpr {
+        match self {
+            Self::Record(record) => TypeExpr::Record(record.id.clone()),
+            Self::Enum(enumeration) => TypeExpr::Enum(enumeration.id.clone()),
+        }
+    }
+
+    fn type_name(self) -> &'a str {
+        match self {
+            Self::Record(record) => record.id.as_str(),
+            Self::Enum(enumeration) => enumeration.id.as_str(),
+        }
+    }
+
+    fn constructors(self) -> &'a [ConstructorDef] {
+        match self {
+            Self::Record(record) => &record.constructors,
+            Self::Enum(enumeration) => &enumeration.constructors,
+        }
+    }
+
+    fn methods(self) -> &'a [MethodDef] {
+        match self {
+            Self::Record(record) => &record.methods,
+            Self::Enum(enumeration) => &enumeration.methods,
+        }
+    }
+
+    fn constructor_call_id(self, index: usize) -> CallId {
+        match self {
+            Self::Record(record) => CallId::RecordConstructor {
+                record_id: record.id.clone(),
+                index,
+            },
+            Self::Enum(enumeration) => CallId::EnumConstructor {
+                enum_id: enumeration.id.clone(),
+                index,
+            },
+        }
+    }
+
+    fn method_call_id(self, method: &MethodDef) -> CallId {
+        match self {
+            Self::Record(record) => CallId::RecordMethod {
+                record_id: record.id.clone(),
+                method_id: method.id.clone(),
+            },
+            Self::Enum(enumeration) => CallId::EnumMethod {
+                enum_id: enumeration.id.clone(),
+                method_id: method.id.clone(),
+            },
+        }
+    }
 }
 
 impl<'a> JavaLowerer<'a> {
@@ -251,11 +314,14 @@ impl<'a> JavaLowerer<'a> {
         } else {
             JavaRecordShape::ClassicClass
         };
+        let value_type = JavaValueTypeDef::Record(record);
         JavaRecord {
             shape,
             class_name,
             fields,
             blittable_layout,
+            constructors: self.lower_value_type_constructors(value_type),
+            methods: self.lower_value_type_methods(value_type),
         }
     }
 
@@ -339,6 +405,128 @@ impl<'a> JavaLowerer<'a> {
             equals_expr: self.record_field_equals_expr(&field.type_expr, field.name.as_str()),
             hash_expr: self.record_field_hash_expr(&field.type_expr, field.name.as_str()),
         }
+    }
+
+    fn lower_value_type_constructors(
+        &self,
+        owner: JavaValueTypeDef<'_>,
+    ) -> Vec<JavaValueTypeConstructor> {
+        owner
+            .constructors()
+            .iter()
+            .enumerate()
+            .filter(|(_, constructor)| constructor.name().is_some())
+            .map(|(index, constructor)| {
+                let call = self.find_abi_call(&owner.constructor_call_id(index));
+                JavaValueTypeConstructor::lower(self, owner, constructor, call)
+            })
+            .collect()
+    }
+
+    fn lower_value_type_methods(&self, owner: JavaValueTypeDef<'_>) -> Vec<JavaValueTypeMethod> {
+        owner
+            .methods()
+            .iter()
+            .filter(|method| self.is_supported_method(method))
+            .map(|method| {
+                let call = self.find_abi_call(&owner.method_call_id(method));
+                JavaValueTypeMethod::lower(self, owner, method, call)
+            })
+            .collect()
+    }
+
+    fn find_abi_call(&self, call_id: &CallId) -> &AbiCall {
+        self.abi
+            .calls
+            .iter()
+            .find(|call| &call.id == call_id)
+            .expect("abi call not found")
+    }
+
+    fn strip_value_self_param(call: &AbiCall) -> AbiCall {
+        AbiCall {
+            params: call
+                .params
+                .iter()
+                .filter(|param| param.name.as_str() != "self")
+                .cloned()
+                .collect(),
+            ..call.clone()
+        }
+    }
+
+    fn lower_self_input_bindings(&self, call: &AbiCall) -> JavaInputBindings {
+        let Some(self_param) = call
+            .params
+            .iter()
+            .find(|param| param.name.as_str() == "self")
+        else {
+            return JavaInputBindings::default();
+        };
+        match &self_param.role {
+            ParamRole::Input {
+                transport: Transport::Composite(_),
+                ..
+            } => JavaInputBindings {
+                direct_composites: vec![JavaDirectCompositeInput {
+                    binding_name: "_direct_self".to_string(),
+                    param_name: "self".to_string(),
+                    declaration_expr: "this.encodeBlittableInput()".to_string(),
+                }],
+                wire_writers: Vec::new(),
+            },
+            ParamRole::Input {
+                encode_ops: Some(encode_ops),
+                ..
+            } => {
+                let remapped = remap_root_in_seq(encode_ops, ValueExpr::Var("this".into()));
+                JavaInputBindings {
+                    direct_composites: Vec::new(),
+                    wire_writers: vec![JavaWireWriter {
+                        binding_name: "_wire_self".to_string(),
+                        param_name: "self".to_string(),
+                        size_expr: super::emit::emit_size_expr(&remapped.size),
+                        encode_expr: super::emit::emit_write_expr(&remapped, "_wire_self"),
+                    }],
+                }
+            }
+            _ => JavaInputBindings::default(),
+        }
+    }
+
+    fn lower_self_native_param(&self, call: &AbiCall) -> Option<JavaNativeParam> {
+        let self_param = call
+            .params
+            .iter()
+            .find(|param| param.name.as_str() == "self")?;
+        let transport = match &self_param.role {
+            ParamRole::Input { transport, .. } => transport,
+            _ => return None,
+        };
+
+        Some(match transport {
+            Transport::Scalar(ScalarOrigin::CStyleEnum { tag_type, .. }) => JavaNativeParam {
+                name: "selfValue".to_string(),
+                native_type: mappings::java_type(*tag_type).to_string(),
+                expr: "this.nativeValue()".to_string(),
+            },
+            Transport::Scalar(origin) => JavaNativeParam {
+                name: "selfValue".to_string(),
+                native_type: mappings::java_type(origin.primitive()).to_string(),
+                expr: "this".to_string(),
+            },
+            Transport::Composite(_) => JavaNativeParam {
+                name: "selfBuffer".to_string(),
+                native_type: "ByteBuffer".to_string(),
+                expr: "_direct_self".to_string(),
+            },
+            Transport::Span(_) => JavaNativeParam {
+                name: "selfBuffer".to_string(),
+                native_type: "ByteBuffer".to_string(),
+                expr: "_wire_self.toBuffer()".to_string(),
+            },
+            Transport::Handle { .. } | Transport::Callback { .. } => return None,
+        })
     }
 
     fn record_field_equals_expr(&self, ty: &TypeExpr, field_name: &str) -> String {
@@ -494,7 +682,7 @@ impl<'a> JavaLowerer<'a> {
     fn lower_function(&self, func: &FunctionDef) -> JavaFunction {
         let call = self.abi_call_for_function(func);
 
-        let wire_writers = self.wire_writers_for_params(call);
+        let input_bindings = self.input_bindings_for_params(call);
 
         let params: Vec<JavaParam> = func
             .params
@@ -504,7 +692,7 @@ impl<'a> JavaLowerer<'a> {
                     parameter.name.as_str(),
                     &parameter.type_expr,
                     call,
-                    &wire_writers,
+                    &input_bindings,
                 )
             })
             .collect();
@@ -521,7 +709,7 @@ impl<'a> JavaLowerer<'a> {
             params,
             return_type: self.return_java_type(&func.returns),
             return_plan,
-            wire_writers,
+            input_bindings,
             async_call,
         }
     }
@@ -531,7 +719,7 @@ impl<'a> JavaLowerer<'a> {
         name: &str,
         ty: &TypeExpr,
         call: &AbiCall,
-        wire_writers: &[JavaWireWriter],
+        input_bindings: &JavaInputBindings,
     ) -> JavaParam {
         let field_name = NamingConvention::field_name(name);
         let java_type = self.java_type(ty);
@@ -550,6 +738,18 @@ impl<'a> JavaLowerer<'a> {
                 ),
             ),
             TypeExpr::Bytes => ("byte[]".to_string(), field_name.clone()),
+            TypeExpr::Record(record_id) if matches!(abi_transport, Some(Transport::Composite(layout)) if &layout.record_id == record_id) =>
+            {
+                let binding_name = input_bindings
+                    .binding_name_for(name)
+                    .expect("direct composite input binding must exist");
+                return JavaParam {
+                    name: field_name,
+                    java_type,
+                    native_type: "ByteBuffer".to_string(),
+                    native_expr: binding_name.to_string(),
+                };
+            }
             TypeExpr::Enum(_)
                 if matches!(
                     abi_transport,
@@ -591,13 +791,14 @@ impl<'a> JavaLowerer<'a> {
                         native_expr,
                     };
                 }
-                let has_wire_writer = wire_writers.iter().any(|w| w.param_name == name);
+                let has_wire_writer = input_bindings
+                    .wire_writers
+                    .iter()
+                    .any(|binding| binding.param_name == name);
                 if has_wire_writer {
-                    let binding_name = wire_writers
-                        .iter()
-                        .find(|w| w.param_name == name)
-                        .map(|w| w.binding_name.as_str())
-                        .unwrap_or("");
+                    let binding_name = input_bindings
+                        .binding_name_for(name)
+                        .expect("vec wire binding must exist");
                     (
                         "ByteBuffer".to_string(),
                         format!("{}.toBuffer()", binding_name),
@@ -615,11 +816,9 @@ impl<'a> JavaLowerer<'a> {
             }
             TypeExpr::Handle(_) => ("long".to_string(), format!("{}.handle", field_name)),
             TypeExpr::Record(_) | TypeExpr::Enum(_) | TypeExpr::Option(_) => {
-                let binding_name = wire_writers
-                    .iter()
-                    .find(|w| w.param_name == name)
-                    .map(|w| w.binding_name.as_str())
-                    .unwrap_or("");
+                let binding_name = input_bindings
+                    .binding_name_for(name)
+                    .expect("encoded input binding must exist");
                 (
                     "ByteBuffer".to_string(),
                     format!("{}.toBuffer()", binding_name),
@@ -636,27 +835,61 @@ impl<'a> JavaLowerer<'a> {
         }
     }
 
-    fn wire_writers_for_params(&self, call: &AbiCall) -> Vec<JavaWireWriter> {
-        call.params
+    fn input_bindings_for_params(&self, call: &AbiCall) -> JavaInputBindings {
+        let direct_composites = call
+            .params
             .iter()
-            .filter_map(|param| {
-                self.input_write_ops(param).map(|encode_ops| {
-                    let param_name = param.name.as_str().to_string();
-                    let binding_name = format!("_wire_{}", param.name.as_str());
-                    let encode_expr = super::emit::emit_write_expr(&encode_ops, &binding_name);
-                    JavaWireWriter {
-                        binding_name,
-                        param_name,
-                        size_expr: super::emit::emit_size_expr(&encode_ops.size),
-                        encode_expr,
-                    }
-                })
-            })
-            .collect()
+            .filter_map(|param| self.direct_composite_input(param))
+            .collect();
+        let wire_writers = call
+            .params
+            .iter()
+            .filter_map(|param| self.wire_writer_for_param(param))
+            .collect();
+
+        JavaInputBindings {
+            direct_composites,
+            wire_writers,
+        }
+    }
+
+    fn direct_composite_input(&self, param: &AbiParam) -> Option<JavaDirectCompositeInput> {
+        match &param.role {
+            ParamRole::Input {
+                transport: Transport::Composite(_),
+                ..
+            } => Some(JavaDirectCompositeInput {
+                binding_name: format!("_direct_{}", param.name.as_str()),
+                param_name: param.name.as_str().to_string(),
+                declaration_expr: format!(
+                    "{}.encodeBlittableInput()",
+                    NamingConvention::field_name(param.name.as_str())
+                ),
+            }),
+            _ => None,
+        }
+    }
+
+    fn wire_writer_for_param(&self, param: &AbiParam) -> Option<JavaWireWriter> {
+        self.input_write_ops(param).map(|encode_ops| {
+            let param_name = param.name.as_str().to_string();
+            let binding_name = format!("_wire_{}", param.name.as_str());
+            let encode_expr = super::emit::emit_write_expr(&encode_ops, &binding_name);
+            JavaWireWriter {
+                binding_name,
+                param_name,
+                size_expr: super::emit::emit_size_expr(&encode_ops.size),
+                encode_expr,
+            }
+        })
     }
 
     fn input_write_ops(&self, param: &AbiParam) -> Option<WriteSeq> {
         match &param.role {
+            ParamRole::Input {
+                transport: Transport::Composite(_),
+                ..
+            } => None,
             ParamRole::Input {
                 transport: Transport::Span(SpanContent::Composite(_)),
                 ..
@@ -1083,7 +1316,7 @@ impl<'a> JavaLowerer<'a> {
         index: usize,
     ) -> JavaConstructor {
         let call = self.abi_call_for_constructor(class, index);
-        let wire_writers = self.wire_writers_for_params(call);
+        let input_bindings = self.input_bindings_for_params(call);
 
         let (kind, name) = match ctor {
             ConstructorDef::Default { .. } => (JavaConstructorKind::Primary, String::new()),
@@ -1105,7 +1338,7 @@ impl<'a> JavaLowerer<'a> {
                     param_def.name.as_str(),
                     &param_def.type_expr,
                     call,
-                    &wire_writers,
+                    &input_bindings,
                 )
             })
             .collect();
@@ -1116,14 +1349,14 @@ impl<'a> JavaLowerer<'a> {
             is_fallible: ctor.is_fallible(),
             params,
             ffi_name: call.symbol.as_str().to_string(),
-            wire_writers,
+            input_bindings,
         }
     }
 
     fn lower_class_method(&self, class: &ClassDef, method: &MethodDef) -> JavaClassMethod {
         let raw_call = self.abi_call_for_method(class, method);
         let call = Self::strip_receiver(raw_call);
-        let wire_writers = self.wire_writers_for_params(&call);
+        let input_bindings = self.input_bindings_for_params(&call);
         let is_static = method.receiver == Receiver::Static;
 
         let params: Vec<JavaParam> = method
@@ -1134,7 +1367,7 @@ impl<'a> JavaLowerer<'a> {
                     param_def.name.as_str(),
                     &param_def.type_expr,
                     &call,
-                    &wire_writers,
+                    &input_bindings,
                 )
             })
             .collect();
@@ -1152,7 +1385,7 @@ impl<'a> JavaLowerer<'a> {
             params,
             return_type: self.return_java_type(&method.returns),
             return_plan,
-            wire_writers,
+            input_bindings,
             async_call,
         }
     }
@@ -1263,11 +1496,14 @@ impl<'a> JavaLowerer<'a> {
                 self.lower_enum_variant(abi_enum, variant, ordinal, kind, &variant_names)
             })
             .collect();
+        let owner = JavaValueTypeDef::Enum(enumeration);
         JavaEnum {
             class_name,
             kind,
             value_type,
             variants,
+            constructors: self.lower_value_type_constructors(owner),
+            methods: self.lower_value_type_methods(owner),
         }
     }
 
@@ -2003,6 +2239,133 @@ fn java_blittable_encode_expr(
         }
         PrimitiveType::F64 => {
             format!("buf.putDouble(base + {}, {})", offset, accessor)
+        }
+    }
+}
+
+impl JavaNativeParam {
+    fn from_param(param: &JavaParam) -> Self {
+        Self {
+            name: param.name.clone(),
+            native_type: param.native_type.clone(),
+            expr: param.native_expr.clone(),
+        }
+    }
+}
+
+impl JavaValueTypeConstructor {
+    fn lower(
+        lowerer: &JavaLowerer<'_>,
+        owner: JavaValueTypeDef<'_>,
+        constructor: &ConstructorDef,
+        call: &AbiCall,
+    ) -> Self {
+        let input_bindings = lowerer.input_bindings_for_params(call);
+        let params = constructor
+            .params()
+            .iter()
+            .map(|param_def| {
+                lowerer.lower_param(
+                    param_def.name.as_str(),
+                    &param_def.type_expr,
+                    call,
+                    &input_bindings,
+                )
+            })
+            .collect::<Vec<_>>();
+        let native_params = params.iter().map(JavaNativeParam::from_param).collect();
+
+        let owner_type = owner.type_expr();
+        let constructor_return = if constructor.is_fallible() {
+            ReturnDef::Result {
+                ok: owner_type,
+                err: TypeExpr::String,
+            }
+        } else if constructor.is_optional() {
+            ReturnDef::Value(TypeExpr::Option(Box::new(owner_type)))
+        } else {
+            ReturnDef::Value(owner_type)
+        };
+
+        Self {
+            name: NamingConvention::method_name(
+                constructor
+                    .name()
+                    .expect("value type constructors must be named")
+                    .as_str(),
+            ),
+            params,
+            native_params,
+            return_type: lowerer.return_java_type(&constructor_return),
+            return_plan: lowerer.return_plan(&constructor_return, call),
+            input_bindings,
+            ffi_name: call.symbol.as_str().to_string(),
+        }
+    }
+}
+
+impl JavaValueTypeMethod {
+    fn lower(
+        lowerer: &JavaLowerer<'_>,
+        owner: JavaValueTypeDef<'_>,
+        method: &MethodDef,
+        call: &AbiCall,
+    ) -> Self {
+        let call_without_self = JavaLowerer::strip_value_self_param(call);
+        let input_bindings = lowerer.input_bindings_for_params(&call_without_self);
+        let params = method
+            .params
+            .iter()
+            .map(|param_def| {
+                lowerer.lower_param(
+                    param_def.name.as_str(),
+                    &param_def.type_expr,
+                    &call_without_self,
+                    &input_bindings,
+                )
+            })
+            .collect::<Vec<_>>();
+
+        let mut native_params = Vec::new();
+        let mut all_input_bindings = JavaInputBindings::default();
+        if method.receiver != Receiver::Static {
+            if let Some(self_native_param) = lowerer.lower_self_native_param(call) {
+                native_params.push(self_native_param);
+            }
+            all_input_bindings = lowerer.lower_self_input_bindings(call);
+        }
+        native_params.extend(params.iter().map(JavaNativeParam::from_param));
+        all_input_bindings
+            .direct_composites
+            .extend(input_bindings.direct_composites);
+        all_input_bindings
+            .wire_writers
+            .extend(input_bindings.wire_writers);
+
+        let mutating_void =
+            method.receiver == Receiver::RefMutSelf && matches!(method.returns, ReturnDef::Void);
+        let (return_type, return_plan) = if mutating_void {
+            let owner_type = owner.type_expr();
+            (
+                lowerer.java_type(&owner_type),
+                lowerer.java_return_plan_for_value(&owner_type, &call_without_self),
+            )
+        } else {
+            (
+                lowerer.return_java_type(&method.returns),
+                lowerer.return_plan(&method.returns, &call_without_self),
+            )
+        };
+
+        Self {
+            name: NamingConvention::method_name(method.id.as_str()),
+            ffi_name: call.symbol.as_str().to_string(),
+            is_static: method.receiver == Receiver::Static,
+            params,
+            native_params,
+            return_type,
+            return_plan,
+            input_bindings: all_input_bindings,
         }
     }
 }
@@ -2844,7 +3207,7 @@ mod tests {
     }
 
     #[test]
-    fn function_record_param_uses_wire_writer() {
+    fn function_record_param_uses_direct_composite_input() {
         let mut contract = empty_contract();
         contract.catalog.insert_record(record_def(
             "Point",
@@ -2863,7 +3226,12 @@ mod tests {
         let func = &module.functions[0];
         let p = &func.params[0];
         assert_eq!(p.native_type, "ByteBuffer");
-        assert!(!func.wire_writers.is_empty());
+        assert!(func.input_bindings.wire_writers.is_empty());
+        assert_eq!(func.input_bindings.direct_composites.len(), 1);
+        assert_eq!(
+            func.input_bindings.direct_composites[0].binding_name,
+            "_direct_point"
+        );
     }
 
     #[test]
@@ -2881,7 +3249,7 @@ mod tests {
         let module = lower(&contract);
         let func = &module.functions[0];
         assert_eq!(func.params[0].native_type, "ByteBuffer");
-        assert!(!func.wire_writers.is_empty());
+        assert!(!func.input_bindings.wire_writers.is_empty());
     }
 
     #[test]
@@ -2931,7 +3299,7 @@ mod tests {
         let module = lower(&contract);
         let func = &module.functions[0];
         assert_eq!(func.params[0].native_type, "ByteBuffer");
-        assert!(func.wire_writers.is_empty());
+        assert!(func.input_bindings.wire_writers.is_empty());
         assert_eq!(
             func.params[0].native_expr,
             "Point.encodeBlittableVecInput(points)"
@@ -3640,7 +4008,7 @@ mod tests {
     }
 
     #[test]
-    fn class_has_wire_params_propagates() {
+    fn class_direct_composite_params_do_not_report_wire_usage() {
         let mut contract = empty_contract();
         contract.catalog.insert_record(record_def(
             "config",
@@ -3656,6 +4024,278 @@ mod tests {
         ));
 
         let module = lower(&contract);
+        assert!(!module.has_wire_params());
+        assert_eq!(
+            module.classes[0].constructors[0]
+                .input_bindings
+                .direct_composites
+                .len(),
+            1
+        );
+        assert!(
+            module.classes[0].constructors[0]
+                .input_bindings
+                .wire_writers
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn record_value_type_members_are_lowered() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_record(RecordDef {
+            is_repr_c: true,
+            id: RecordId::new("point"),
+            fields: vec![
+                field("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                field("y", TypeExpr::Primitive(PrimitiveType::F64)),
+            ],
+            constructors: vec![
+                named_factory("origin"),
+                named_init(
+                    "from_polar",
+                    vec![
+                        param_def("radius", TypeExpr::Primitive(PrimitiveType::F64)),
+                        param_def("theta", TypeExpr::Primitive(PrimitiveType::F64)),
+                    ],
+                ),
+                fallible_named_init(
+                    "try_unit",
+                    vec![
+                        param_def("x", TypeExpr::Primitive(PrimitiveType::F64)),
+                        param_def("y", TypeExpr::Primitive(PrimitiveType::F64)),
+                    ],
+                ),
+            ],
+            methods: vec![
+                instance_method(
+                    "distance",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+                ),
+                MethodDef {
+                    id: MethodId::from("scale"),
+                    receiver: Receiver::RefMutSelf,
+                    params: vec![param_def("factor", TypeExpr::Primitive(PrimitiveType::F64))],
+                    returns: ReturnDef::Void,
+                    is_async: false,
+                    doc: None,
+                    deprecated: None,
+                },
+                static_method(
+                    "dimensions",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::U32)),
+                ),
+            ],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let record = module
+            .records
+            .iter()
+            .find(|record| record.class_name == "Point")
+            .unwrap();
+
+        assert_eq!(record.constructors.len(), 3);
+        assert_eq!(record.constructors[0].name, "origin");
+        assert_eq!(record.constructors[1].name, "fromPolar");
+        assert_eq!(record.constructors[2].name, "tryUnit");
+        assert_eq!(record.constructors[1].return_type, "Point");
+        assert!(record.constructors[2].return_plan.is_result());
+        assert!(record.constructors[2].return_plan.result_err_is_string());
+
+        assert_eq!(record.methods.len(), 3);
+        assert_eq!(record.methods[0].name, "distance");
+        assert!(!record.methods[0].is_static);
+        assert_eq!(record.methods[0].native_params[0].name, "selfBuffer");
+        assert_eq!(record.methods[0].native_params[0].native_type, "ByteBuffer");
+        assert_eq!(record.methods[0].native_params[0].expr, "_direct_self");
+
+        assert_eq!(record.methods[1].name, "scale");
+        assert_eq!(record.methods[1].return_type, "Point");
+        assert!(record.methods[1].return_plan.is_decode());
+
+        assert_eq!(record.methods[2].name, "dimensions");
+        assert!(record.methods[2].is_static);
+        assert!(record.has_constructors());
+        assert!(record.has_static_methods());
+        assert!(record.has_instance_methods());
+    }
+
+    #[test]
+    fn c_style_enum_value_type_members_are_lowered() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("direction"),
+            repr: EnumRepr::CStyle {
+                tag_type: PrimitiveType::I32,
+                variants: vec![
+                    CStyleVariant {
+                        name: VariantName::new("North"),
+                        discriminant: 0,
+                        doc: None,
+                    },
+                    CStyleVariant {
+                        name: VariantName::new("South"),
+                        discriminant: 1,
+                        doc: None,
+                    },
+                ],
+            },
+            is_error: false,
+            constructors: vec![
+                named_init(
+                    "new",
+                    vec![param_def("raw", TypeExpr::Primitive(PrimitiveType::I32))],
+                ),
+                named_factory("cardinal"),
+            ],
+            methods: vec![
+                instance_method(
+                    "opposite",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Enum(EnumId::new("direction"))),
+                ),
+                instance_method("label", vec![], ReturnDef::Value(TypeExpr::String)),
+                static_method(
+                    "count",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::U32)),
+                ),
+            ],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let enumeration = module
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.class_name == "Direction")
+            .unwrap();
+
+        assert_eq!(enumeration.constructors.len(), 2);
+        assert_eq!(enumeration.constructors[0].name, "_new");
+        assert_eq!(enumeration.constructors[1].name, "cardinal");
+        assert_eq!(enumeration.constructors[0].params[0].java_type, "int");
+
+        assert_eq!(enumeration.methods.len(), 3);
+        assert_eq!(enumeration.methods[0].name, "opposite");
+        assert_eq!(enumeration.methods[0].return_type, "Direction");
+        assert_eq!(enumeration.methods[0].native_params[0].name, "selfValue");
+        assert_eq!(enumeration.methods[0].native_params[0].native_type, "int");
+        assert_eq!(
+            enumeration.methods[0].native_params[0].expr,
+            "this.nativeValue()"
+        );
+        assert!(enumeration.methods[0].return_plan.is_c_style_enum());
+        assert_eq!(
+            enumeration.methods[0].return_plan.c_style_enum_class(),
+            "Direction"
+        );
+
+        assert_eq!(enumeration.methods[1].name, "label");
+        assert_eq!(enumeration.methods[1].return_type, "String");
+        assert!(enumeration.methods[1].return_plan.is_decode());
+
+        assert_eq!(enumeration.methods[2].name, "count");
+        assert!(enumeration.methods[2].is_static);
+        assert!(enumeration.has_constructors());
+        assert!(enumeration.has_static_methods());
+        assert!(enumeration.has_instance_methods());
+    }
+
+    #[test]
+    fn data_enum_value_type_members_are_lowered() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("shape"),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::I32,
+                variants: vec![DataVariant {
+                    name: VariantName::new("Circle"),
+                    discriminant: 0,
+                    payload: VariantPayload::Tuple(vec![TypeExpr::Primitive(PrimitiveType::F64)]),
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![
+                named_init(
+                    "new",
+                    vec![param_def("radius", TypeExpr::Primitive(PrimitiveType::F64))],
+                ),
+                named_factory("unit_circle"),
+                fallible_named_init(
+                    "try_circle",
+                    vec![param_def("radius", TypeExpr::Primitive(PrimitiveType::F64))],
+                ),
+            ],
+            methods: vec![
+                instance_method(
+                    "area",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::F64)),
+                ),
+                instance_method("describe", vec![], ReturnDef::Value(TypeExpr::String)),
+                static_method(
+                    "variant_count",
+                    vec![],
+                    ReturnDef::Value(TypeExpr::Primitive(PrimitiveType::U32)),
+                ),
+            ],
+            doc: None,
+            deprecated: None,
+        });
+
+        let module = lower(&contract);
+        let enumeration = module
+            .enums
+            .iter()
+            .find(|enumeration| enumeration.class_name == "Shape")
+            .unwrap();
+
+        assert_eq!(enumeration.constructors.len(), 3);
+        assert_eq!(enumeration.constructors[0].name, "_new");
+        assert_eq!(enumeration.constructors[1].name, "unitCircle");
+        assert_eq!(enumeration.constructors[2].name, "tryCircle");
+        assert!(enumeration.constructors[2].return_plan.is_result());
+        assert!(
+            enumeration.constructors[2]
+                .return_plan
+                .result_err_is_string()
+        );
+
+        assert_eq!(enumeration.methods.len(), 3);
+        assert_eq!(enumeration.methods[0].name, "area");
+        assert_eq!(enumeration.methods[0].native_params[0].name, "selfBuffer");
+        assert_eq!(
+            enumeration.methods[0].native_params[0].native_type,
+            "ByteBuffer"
+        );
+        assert_eq!(
+            enumeration.methods[0].native_params[0].expr,
+            "_wire_self.toBuffer()"
+        );
+        assert!(
+            !enumeration.methods[0]
+                .input_bindings
+                .wire_writers
+                .is_empty()
+        );
+        assert_eq!(enumeration.methods[0].return_type, "double");
+        assert!(enumeration.methods[0].return_plan.is_direct());
+
+        assert_eq!(enumeration.methods[1].name, "describe");
+        assert_eq!(enumeration.methods[1].return_type, "String");
+        assert!(enumeration.methods[1].return_plan.is_decode());
+
+        assert_eq!(enumeration.methods[2].name, "variantCount");
+        assert!(enumeration.methods[2].is_static);
+        assert!(enumeration.has_wire_params());
         assert!(module.has_wire_params());
     }
 

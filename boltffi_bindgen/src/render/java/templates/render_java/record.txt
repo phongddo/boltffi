@@ -32,6 +32,14 @@ public final class {{ record.class_name }} {
 {%- endfor %}
 {% endif %}
 
+{%- for ctor in record.constructors %}
+{% include "render_java/value_type_constructor.txt" %}
+{%- endfor %}
+
+{%- for method in record.methods %}
+{% include "render_java/value_type_method.txt" %}
+{%- endfor %}
+
     static {{ record.class_name }} decode(WireReader reader) {
         return new {{ record.class_name }}(
 {%- for field in record.fields %}
