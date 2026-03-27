@@ -1141,7 +1141,7 @@ impl SwiftParam {
                 format!("{}Ptr.baseAddress, UInt({}Ptr.count)", self.name, self.name)
             }
             SwiftConversion::ToWireBuffer { .. } => {
-                format!("{}Bytes, UInt({}Bytes.count)", self.name, self.name)
+                format!("{}Buf.baseAddress, UInt({}Buf.count)", self.name, self.name)
             }
             SwiftConversion::PrimitiveBuffer { .. } => {
                 format!("{}Ptr.baseAddress, UInt({}Ptr.count)", self.name, self.name)
@@ -1213,6 +1213,7 @@ impl SwiftParam {
             &self.conversion,
             SwiftConversion::ToString
                 | SwiftConversion::ToCompositeBuffer { .. }
+                | SwiftConversion::ToWireBuffer { .. }
                 | SwiftConversion::ToData
                 | SwiftConversion::PrimitiveBuffer { .. }
                 | SwiftConversion::MutableBuffer { .. }
@@ -1224,6 +1225,10 @@ impl SwiftParam {
             SwiftConversion::ToString => Some(format!("{n}.withUTF8 {{ {n}Buf in", n = self.name)),
             SwiftConversion::ToCompositeBuffer { .. } => Some(format!(
                 "{}Raw.withUnsafeBufferPointer {{ {}Ptr in",
+                self.name, self.name
+            )),
+            SwiftConversion::ToWireBuffer { .. } => Some(format!(
+                "{}Bytes.withUnsafeBufferPointer {{ {}Buf in",
                 self.name, self.name
             )),
             SwiftConversion::ToData => Some(format!(
@@ -1246,6 +1251,7 @@ impl SwiftParam {
         match &self.conversion {
             SwiftConversion::ToString
             | SwiftConversion::ToCompositeBuffer { .. }
+            | SwiftConversion::ToWireBuffer { .. }
             | SwiftConversion::ToData => Some("}"),
             SwiftConversion::PrimitiveBuffer { .. } | SwiftConversion::MutableBuffer { .. } => {
                 Some("}")

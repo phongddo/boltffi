@@ -7,7 +7,9 @@ use boltffi_ffi_rules::transport::{
 use quote::quote;
 use syn::Type;
 
-use crate::lowering::transport::{NamedTypeTransport, NamedTypeTransportClassifier, TypeShapeExt};
+use crate::lowering::transport::{
+    NamedTypeTransport, NamedTypeTransportClassifier, StandardContainer, TypeShapeExt,
+};
 use crate::registries::data_types::DataTypeCategory;
 
 pub(super) fn ptr_ident(base: &syn::Ident) -> syn::Ident {
@@ -68,6 +70,42 @@ pub(super) struct ParamTransformClassifier<'a> {
     named_type_transport_classifier: NamedTypeTransportClassifier<'a>,
 }
 
+struct ParamSyntax<'a> {
+    ty: &'a Type,
+    spelling: String,
+}
+
+enum ParsedParamShape {
+    InlineClosure(ClosureSignature),
+    ImplCallbackTrait(syn::Path),
+    Slice(SliceShape),
+    TraitObject(TraitObjectShape),
+    Vec(syn::Type),
+    Option(syn::Type),
+}
+
+struct ClosureSignature {
+    params: Vec<syn::Type>,
+    returns: Option<syn::Type>,
+}
+
+struct SliceShape {
+    inner: syn::Type,
+    is_mutable: bool,
+}
+
+struct TraitObjectShape {
+    trait_path: syn::Path,
+    ownership: TraitObjectOwnership,
+    is_optional: bool,
+}
+
+#[derive(Clone, Copy)]
+enum TraitObjectOwnership {
+    Boxed,
+    Shared,
+}
+
 impl<'a> ParamTransformClassifier<'a> {
     pub(super) fn new(named_type_transport_classifier: NamedTypeTransportClassifier<'a>) -> Self {
         Self {
@@ -76,168 +114,151 @@ impl<'a> ParamTransformClassifier<'a> {
     }
 
     pub(super) fn classify(&self, ty: &Type) -> ClassifiedParamTransform {
-        let type_str = quote!(#ty).to_string().replace(' ', "");
+        let param_syntax = ParamSyntax::new(ty);
 
-        if let Some((params, returns)) = extract_closure_signature(ty) {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::CallbackHandle {
-                        nullable: false,
-                        style: CallbackParamStyle::InlineClosure,
+        if let Some(param_shape) = param_syntax.parse_shape() {
+            return match param_shape {
+                ParsedParamShape::InlineClosure(closure) => ClassifiedParamTransform {
+                    contract: ParamContract::new(
+                        ParamValueStrategy::CallbackHandle {
+                            nullable: false,
+                            style: CallbackParamStyle::InlineClosure,
+                        },
+                        Self::passing_strategy(ty),
+                    ),
+                    transform: ParamTransform::Callback {
+                        params: closure.params,
+                        returns: closure.returns,
                     },
-                    Self::passing_strategy(ty),
-                ),
-                transform: ParamTransform::Callback { params, returns },
-            };
-        }
-
-        if let Some(trait_path) = extract_impl_callback_trait(ty) {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::CallbackHandle {
-                        nullable: false,
-                        style: CallbackParamStyle::ImplTrait,
-                    },
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::ImplTrait(trait_path),
-            };
-        }
-
-        if let Some((inner_ty, is_mut)) = extract_slice_inner(ty) {
-            let passing_strategy = if is_mut {
-                ParamPassingStrategy::MutableRef
-            } else {
-                ParamPassingStrategy::SharedRef
-            };
-            let value_strategy = Self::direct_buffer_value_strategy(&inner_ty);
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(value_strategy, passing_strategy),
-                transform: if is_mut {
-                    ParamTransform::SliceMut(inner_ty)
-                } else {
-                    ParamTransform::SliceRef(inner_ty)
                 },
-            };
-        }
-
-        if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Box") {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::CallbackHandle {
-                        nullable: false,
-                        style: CallbackParamStyle::BoxedDyn,
-                    },
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::BoxedDynTrait(trait_path),
-            };
-        }
-
-        if let Some(trait_path) = extract_dyn_trait_in_container(ty, "Arc") {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::CallbackHandle {
-                        nullable: false,
-                        style: CallbackParamStyle::ArcDyn,
-                    },
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::ArcDynTrait(trait_path),
-            };
-        }
-
-        if type_str.starts_with("*const") || type_str.starts_with("*mut") {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::PassThrough,
-            };
-        }
-
-        if type_str.contains("extern") && type_str.contains("fn(") {
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::PassThrough,
-            };
-        }
-
-        if let Some(inner_ty) = extract_vec_param_inner(ty) {
-            let inner_str = quote!(#inner_ty).to_string().replace(' ', "");
-            if is_primitive_vec_inner(&inner_str) {
-                return ClassifiedParamTransform {
+                ParsedParamShape::ImplCallbackTrait(trait_path) => ClassifiedParamTransform {
                     contract: ParamContract::new(
-                        ParamValueStrategy::DirectBuffer(DirectBufferParamStrategy::ScalarElements),
+                        ParamValueStrategy::CallbackHandle {
+                            nullable: false,
+                            style: CallbackParamStyle::ImplTrait,
+                        },
                         ParamPassingStrategy::ByValue,
                     ),
-                    transform: ParamTransform::VecPrimitive(inner_ty),
-                };
-            }
-            if self
-                .named_type_transport_classifier
-                .supports_direct_vec_transport(&inner_ty)
-            {
-                return ClassifiedParamTransform {
-                    contract: ParamContract::new(
-                        ParamValueStrategy::DirectBuffer(
-                            DirectBufferParamStrategy::CompositeElements,
+                    transform: ParamTransform::ImplTrait(trait_path),
+                },
+                ParsedParamShape::Slice(slice) => {
+                    let passing_strategy = if slice.is_mutable {
+                        ParamPassingStrategy::MutableRef
+                    } else {
+                        ParamPassingStrategy::SharedRef
+                    };
+                    let value_strategy = Self::direct_buffer_value_strategy(&slice.inner);
+                    ClassifiedParamTransform {
+                        contract: ParamContract::new(value_strategy, passing_strategy),
+                        transform: if slice.is_mutable {
+                            ParamTransform::SliceMut(slice.inner)
+                        } else {
+                            ParamTransform::SliceRef(slice.inner)
+                        },
+                    }
+                }
+                ParsedParamShape::TraitObject(trait_object) => {
+                    let is_optional = trait_object.is_optional;
+                    let style = trait_object.callback_style();
+                    let transform = trait_object.into_transform();
+                    ClassifiedParamTransform {
+                        contract: ParamContract::new(
+                            ParamValueStrategy::CallbackHandle {
+                                nullable: is_optional,
+                                style,
+                            },
+                            ParamPassingStrategy::ByValue,
                         ),
-                        ParamPassingStrategy::ByValue,
-                    ),
-                    transform: ParamTransform::VecPassable(inner_ty),
-                };
-            }
-            return ClassifiedParamTransform {
-                contract: ParamContract::new(
-                    ParamValueStrategy::WireEncoded(WireParamStrategy::Vec),
-                    ParamPassingStrategy::ByValue,
-                ),
-                transform: ParamTransform::WireEncoded(WireEncodedParam {
-                    kind: WireEncodedParamKind::Vec,
-                    rust_type: ty.clone(),
-                }),
+                        transform,
+                    }
+                }
+                ParsedParamShape::Vec(inner_ty) => {
+                    let inner_str = quote!(#inner_ty).to_string().replace(' ', "");
+                    if is_primitive_vec_inner(&inner_str) {
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::DirectBuffer(
+                                    DirectBufferParamStrategy::ScalarElements,
+                                ),
+                                ParamPassingStrategy::ByValue,
+                            ),
+                            transform: ParamTransform::VecPrimitive(inner_ty),
+                        }
+                    } else if self
+                        .named_type_transport_classifier
+                        .supports_direct_vec_transport(&inner_ty)
+                    {
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::DirectBuffer(
+                                    DirectBufferParamStrategy::CompositeElements,
+                                ),
+                                ParamPassingStrategy::ByValue,
+                            ),
+                            transform: ParamTransform::VecPassable(inner_ty),
+                        }
+                    } else {
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::WireEncoded(WireParamStrategy::Vec),
+                                ParamPassingStrategy::ByValue,
+                            ),
+                            transform: ParamTransform::WireEncoded(WireEncodedParam {
+                                kind: WireEncodedParamKind::Vec,
+                                rust_type: ty.clone(),
+                            }),
+                        }
+                    }
+                }
+                ParsedParamShape::Option(inner_ty) => {
+                    if let Some(trait_object) = TraitObjectShape::parse_optional(ty) {
+                        let is_optional = trait_object.is_optional;
+                        let style = trait_object.callback_style();
+                        let transform = trait_object.into_transform();
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::CallbackHandle {
+                                    nullable: is_optional,
+                                    style,
+                                },
+                                ParamPassingStrategy::ByValue,
+                            ),
+                            transform,
+                        }
+                    } else {
+                        let _ = inner_ty;
+                        ClassifiedParamTransform {
+                            contract: ParamContract::new(
+                                ParamValueStrategy::WireEncoded(WireParamStrategy::Option),
+                                Self::passing_strategy(ty),
+                            ),
+                            transform: ParamTransform::WireEncoded(WireEncodedParam {
+                                kind: WireEncodedParamKind::Option,
+                                rust_type: ty.clone(),
+                            }),
+                        }
+                    }
+                }
             };
         }
 
-        if let Some(inner_ty) = extract_option_param_inner(ty) {
-            if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Box") {
-                return ClassifiedParamTransform {
-                    contract: ParamContract::new(
-                        ParamValueStrategy::CallbackHandle {
-                            nullable: true,
-                            style: CallbackParamStyle::BoxedDyn,
-                        },
-                        ParamPassingStrategy::ByValue,
-                    ),
-                    transform: ParamTransform::OptionBoxedDynTrait(trait_path),
-                };
-            }
-            if let Some(trait_path) = extract_dyn_trait_in_container(&inner_ty, "Arc") {
-                return ClassifiedParamTransform {
-                    contract: ParamContract::new(
-                        ParamValueStrategy::CallbackHandle {
-                            nullable: true,
-                            style: CallbackParamStyle::ArcDyn,
-                        },
-                        ParamPassingStrategy::ByValue,
-                    ),
-                    transform: ParamTransform::OptionArcDynTrait(trait_path),
-                };
-            }
+        if param_syntax.is_raw_pointer() {
             return ClassifiedParamTransform {
                 contract: ParamContract::new(
-                    ParamValueStrategy::WireEncoded(WireParamStrategy::Option),
-                    Self::passing_strategy(ty),
+                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                    ParamPassingStrategy::ByValue,
                 ),
-                transform: ParamTransform::WireEncoded(WireEncodedParam {
-                    kind: WireEncodedParamKind::Option,
-                    rust_type: ty.clone(),
-                }),
+                transform: ParamTransform::PassThrough,
+            };
+        }
+
+        if param_syntax.is_extern_fn_pointer() {
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::Scalar(ScalarParamStrategy::PrimitiveValue),
+                    ParamPassingStrategy::ByValue,
+                ),
+                transform: ParamTransform::PassThrough,
             };
         }
 
@@ -254,7 +275,7 @@ impl<'a> ParamTransformClassifier<'a> {
             };
         }
 
-        if type_str == "&str" || (type_str.starts_with("&'") && type_str.ends_with("str")) {
+        if param_syntax.is_str_ref() {
             return ClassifiedParamTransform {
                 contract: ParamContract::new(
                     ParamValueStrategy::Utf8String,
@@ -264,7 +285,7 @@ impl<'a> ParamTransformClassifier<'a> {
             };
         }
 
-        if type_str == "String" || type_str == "std::string::String" {
+        if param_syntax.is_owned_string() {
             return ClassifiedParamTransform {
                 contract: ParamContract::new(
                     ParamValueStrategy::Utf8String,
@@ -339,18 +360,70 @@ impl<'a> ParamTransformClassifier<'a> {
     }
 }
 
-fn extract_closure_signature(ty: &Type) -> Option<(Vec<syn::Type>, Option<syn::Type>)> {
-    if let Type::BareFn(bare_fn) = ty {
-        let params: Vec<syn::Type> = bare_fn.inputs.iter().map(|arg| arg.ty.clone()).collect();
-        let returns = match &bare_fn.output {
-            syn::ReturnType::Default => None,
-            syn::ReturnType::Type(_, ty) => Some((**ty).clone()),
-        };
-        return Some((params, returns));
+impl<'a> ParamSyntax<'a> {
+    fn new(ty: &'a Type) -> Self {
+        Self {
+            ty,
+            spelling: quote!(#ty).to_string().replace(' ', ""),
+        }
     }
 
-    if let Type::ImplTrait(impl_trait) = ty {
-        return impl_trait
+    fn parse_shape(&self) -> Option<ParsedParamShape> {
+        ClosureSignature::parse(self.ty)
+            .map(ParsedParamShape::InlineClosure)
+            .or_else(|| {
+                TraitObjectShape::parse_impl_trait(self.ty).map(ParsedParamShape::ImplCallbackTrait)
+            })
+            .or_else(|| SliceShape::parse(self.ty).map(ParsedParamShape::Slice))
+            .or_else(|| {
+                TraitObjectShape::parse_required(self.ty).map(ParsedParamShape::TraitObject)
+            })
+            .or_else(|| match self.ty.type_descriptor().standard_container() {
+                Some(StandardContainer::Vec(inner_type)) => {
+                    Some(ParsedParamShape::Vec(inner_type.clone()))
+                }
+                Some(StandardContainer::Option(inner_type)) => {
+                    Some(ParsedParamShape::Option(inner_type.clone()))
+                }
+                Some(StandardContainer::Result { .. }) | None => None,
+            })
+    }
+
+    fn is_raw_pointer(&self) -> bool {
+        self.spelling.starts_with("*const") || self.spelling.starts_with("*mut")
+    }
+
+    fn is_extern_fn_pointer(&self) -> bool {
+        self.spelling.contains("extern") && self.spelling.contains("fn(")
+    }
+
+    fn is_str_ref(&self) -> bool {
+        self.spelling == "&str"
+            || (self.spelling.starts_with("&'") && self.spelling.ends_with("str"))
+    }
+
+    fn is_owned_string(&self) -> bool {
+        self.spelling == "String" || self.spelling == "std::string::String"
+    }
+}
+
+impl ClosureSignature {
+    fn parse(ty: &Type) -> Option<Self> {
+        if let Type::BareFn(bare_fn) = ty {
+            return Some(Self {
+                params: bare_fn.inputs.iter().map(|arg| arg.ty.clone()).collect(),
+                returns: match &bare_fn.output {
+                    syn::ReturnType::Default => None,
+                    syn::ReturnType::Type(_, output_ty) => Some((**output_ty).clone()),
+                },
+            });
+        }
+
+        let Type::ImplTrait(impl_trait) = ty else {
+            return None;
+        };
+
+        impl_trait
             .bounds
             .iter()
             .filter_map(|bound| match bound {
@@ -359,41 +432,100 @@ fn extract_closure_signature(ty: &Type) -> Option<(Vec<syn::Type>, Option<syn::T
             })
             .filter_map(|path| path.segments.last())
             .filter_map(|segment| {
-                let ident = segment.ident.to_string();
-                (ident == "Fn" || ident == "FnMut" || ident == "FnOnce")
-                    .then_some(&segment.arguments)
+                matches!(
+                    segment.ident.to_string().as_str(),
+                    "Fn" | "FnMut" | "FnOnce"
+                )
+                .then_some(&segment.arguments)
             })
             .filter_map(|arguments| match arguments {
-                syn::PathArguments::Parenthesized(args) => Some(args),
+                syn::PathArguments::Parenthesized(parenthesized) => Some(parenthesized),
                 _ => None,
             })
-            .map(|args| {
-                let params: Vec<syn::Type> = args.inputs.iter().cloned().collect();
-                let returns = match &args.output {
+            .map(|arguments| Self {
+                params: arguments.inputs.iter().cloned().collect(),
+                returns: match &arguments.output {
                     syn::ReturnType::Default => None,
-                    syn::ReturnType::Type(_, ty) => Some((**ty).clone()),
-                };
-                (params, returns)
+                    syn::ReturnType::Type(_, output_ty) => Some((**output_ty).clone()),
+                },
             })
-            .next();
+            .next()
     }
-
-    None
 }
 
-fn extract_slice_inner(ty: &Type) -> Option<(syn::Type, bool)> {
-    if let Type::Reference(ref_ty) = ty
-        && let Type::Slice(slice_ty) = ref_ty.elem.as_ref()
-    {
-        let is_mut = ref_ty.mutability.is_some();
-        return Some((*slice_ty.elem.clone(), is_mut));
+impl SliceShape {
+    fn parse(ty: &Type) -> Option<Self> {
+        let Type::Reference(reference) = ty else {
+            return None;
+        };
+        let Type::Slice(slice) = reference.elem.as_ref() else {
+            return None;
+        };
+        Some(Self {
+            inner: (*slice.elem).clone(),
+            is_mutable: reference.mutability.is_some(),
+        })
     }
-    None
 }
 
-fn extract_impl_callback_trait(ty: &Type) -> Option<syn::Path> {
-    if let Type::ImplTrait(impl_trait) = ty {
-        return impl_trait
+impl TraitObjectShape {
+    fn parse_required(ty: &Type) -> Option<Self> {
+        Self::parse_container(ty, false)
+    }
+
+    fn parse_optional(ty: &Type) -> Option<Self> {
+        let Some(StandardContainer::Option(inner_type)) = ty.type_descriptor().standard_container()
+        else {
+            return None;
+        };
+        Self::parse_container(inner_type, true)
+    }
+
+    fn parse_container(ty: &Type, is_optional: bool) -> Option<Self> {
+        Self::parse_trait_object(ty, "Box", TraitObjectOwnership::Boxed, is_optional).or_else(
+            || Self::parse_trait_object(ty, "Arc", TraitObjectOwnership::Shared, is_optional),
+        )
+    }
+
+    fn parse_trait_object(
+        ty: &Type,
+        container_name: &str,
+        ownership: TraitObjectOwnership,
+        is_optional: bool,
+    ) -> Option<Self> {
+        let Type::Path(type_path) = ty else {
+            return None;
+        };
+        if type_path.qself.is_some() {
+            return None;
+        }
+        let segment = type_path.path.segments.last()?;
+        if segment.ident != container_name {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &segment.arguments else {
+            return None;
+        };
+        let syn::GenericArgument::Type(Type::TraitObject(trait_object)) = arguments.args.first()?
+        else {
+            return None;
+        };
+        let syn::TypeParamBound::Trait(trait_bound) = trait_object.bounds.first()? else {
+            return None;
+        };
+        Some(Self {
+            trait_path: trait_bound.path.clone(),
+            ownership,
+            is_optional,
+        })
+    }
+
+    fn parse_impl_trait(ty: &Type) -> Option<syn::Path> {
+        let Type::ImplTrait(impl_trait) = ty else {
+            return None;
+        };
+
+        impl_trait
             .bounds
             .iter()
             .filter_map(|bound| match bound {
@@ -408,76 +540,57 @@ fn extract_impl_callback_trait(ty: &Type) -> Option<syn::Path> {
                     .last()
                     .map(|segment| segment.ident.to_string())
                     .unwrap_or_default();
-                !is_non_callback_bound(*modifier, &trait_name)
+                !Self::is_non_callback_bound(*modifier, &trait_name)
             })
             .map(|(_, path)| path.clone())
-            .next();
+            .next()
     }
-    None
-}
 
-fn is_non_callback_bound(modifier: syn::TraitBoundModifier, name: &str) -> bool {
-    if matches!(modifier, syn::TraitBoundModifier::Maybe(_)) && name == "Sized" {
-        return true;
+    fn is_non_callback_bound(modifier: syn::TraitBoundModifier, name: &str) -> bool {
+        if matches!(modifier, syn::TraitBoundModifier::Maybe(_)) && name == "Sized" {
+            return true;
+        }
+        matches!(
+            name,
+            "Fn" | "FnMut"
+                | "FnOnce"
+                | "Send"
+                | "Sync"
+                | "Unpin"
+                | "UnwindSafe"
+                | "RefUnwindSafe"
+                | "Sized"
+                | "Copy"
+                | "Clone"
+                | "Default"
+                | "Debug"
+                | "Eq"
+                | "PartialEq"
+                | "Ord"
+                | "PartialOrd"
+                | "Hash"
+        )
     }
-    matches!(
-        name,
-        "Fn" | "FnMut"
-            | "FnOnce"
-            | "Send"
-            | "Sync"
-            | "Unpin"
-            | "UnwindSafe"
-            | "RefUnwindSafe"
-            | "Sized"
-            | "Copy"
-            | "Clone"
-            | "Default"
-            | "Debug"
-            | "Eq"
-            | "PartialEq"
-            | "Ord"
-            | "PartialOrd"
-            | "Hash"
-    )
-}
 
-fn extract_dyn_trait_in_container(ty: &Type, container: &str) -> Option<syn::Path> {
-    if let Type::Path(type_path) = ty
-        && type_path.qself.is_none()
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == container
-        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-        && let Some(syn::GenericArgument::Type(Type::TraitObject(trait_obj))) = args.args.first()
-        && let Some(syn::TypeParamBound::Trait(trait_bound)) = trait_obj.bounds.first()
-    {
-        return Some(trait_bound.path.clone());
+    fn callback_style(&self) -> CallbackParamStyle {
+        match self.ownership {
+            TraitObjectOwnership::Boxed => CallbackParamStyle::BoxedDyn,
+            TraitObjectOwnership::Shared => CallbackParamStyle::ArcDyn,
+        }
     }
-    None
-}
 
-fn extract_vec_param_inner(ty: &Type) -> Option<syn::Type> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Vec"
-        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
-    {
-        return Some(inner_ty.clone());
+    fn into_transform(self) -> ParamTransform {
+        match (self.ownership, self.is_optional) {
+            (TraitObjectOwnership::Boxed, false) => ParamTransform::BoxedDynTrait(self.trait_path),
+            (TraitObjectOwnership::Shared, false) => ParamTransform::ArcDynTrait(self.trait_path),
+            (TraitObjectOwnership::Boxed, true) => {
+                ParamTransform::OptionBoxedDynTrait(self.trait_path)
+            }
+            (TraitObjectOwnership::Shared, true) => {
+                ParamTransform::OptionArcDynTrait(self.trait_path)
+            }
+        }
     }
-    None
-}
-
-fn extract_option_param_inner(ty: &Type) -> Option<syn::Type> {
-    if let Type::Path(type_path) = ty
-        && let Some(segment) = type_path.path.segments.last()
-        && segment.ident == "Option"
-        && let syn::PathArguments::AngleBracketed(args) = &segment.arguments
-        && let Some(syn::GenericArgument::Type(inner_ty)) = args.args.first()
-    {
-        return Some(inner_ty.clone());
-    }
-    None
 }
 
 pub(super) fn is_primitive_vec_inner(type_string: &str) -> bool {

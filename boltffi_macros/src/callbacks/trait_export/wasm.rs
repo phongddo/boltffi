@@ -2,8 +2,9 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 use syn::{FnArg, Pat, ReturnType};
 
+use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
-use super::{direct_callback_return_ffi_type, parse_result_type, to_snake_case_ident};
+use crate::callbacks::snake_case_ident;
 use crate::lowering::returns::model::{ReturnLoweringContext, ValueReturnStrategy};
 use crate::registries::custom_types;
 
@@ -90,7 +91,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
                     },
                 )
             } else {
-                let ffi_return_type = direct_callback_return_ffi_type(return_type);
+                let ffi_return_type = CallbackReturnType::new(return_type).ffi_type();
                 (
                     quote! {
                         fn #import_name(handle: u32, #(#ffi_param_types),*) -> #ffi_return_type;
@@ -213,7 +214,9 @@ impl<'a> WasmCallbackMethodExpander<'a> {
     fn async_poll_body(&self, return_type: Option<&syn::Type>) -> TokenStream {
         match return_type {
             Some(return_type) => {
-                if let Some((ok_type, err_type)) = parse_result_type(return_type) {
+                if let Some(result_types) = CallbackReturnType::new(return_type).result_types() {
+                    let ok_type = result_types.ok;
+                    let err_type = result_types.err;
                     quote! {
                         std::future::poll_fn(move |cx| {
                             ::boltffi::__private::set_request_waker(request_id, cx.waker().clone());
@@ -327,7 +330,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
         param_type: &syn::Type,
     ) -> WasmCallbackParamLowering {
         let rust_param = quote! { #param_name: #param_type };
-        let direct_ffi_type = direct_callback_return_ffi_type(param_type);
+        let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
         if matches!(
             self.return_lowering
                 .lower_type(param_type)
@@ -373,7 +376,7 @@ impl<'a> WasmCallbackMethodExpander<'a> {
     }
 
     fn method_name_snake(&self) -> syn::Ident {
-        to_snake_case_ident(&self.method.sig.ident.to_string())
+        snake_case_ident(&self.method.sig.ident)
     }
 
     fn return_type(&self) -> Option<syn::Type> {

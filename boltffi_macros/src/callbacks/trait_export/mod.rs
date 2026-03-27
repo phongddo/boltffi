@@ -12,9 +12,51 @@ use self::local_handle::LocalHandleExpander;
 use self::native::NativeCallbackMethodExpander;
 use self::wasm::{WasmCallbackMethodExpander, WasmMethodExpansion};
 
+use crate::callbacks::snake_case_ident;
 use crate::lowering::returns::model::ReturnLoweringContext;
 use crate::registries::custom_types;
 use crate::registries::data_types;
+
+pub(super) struct CallbackReturnType<'a> {
+    rust_type: &'a Type,
+}
+
+pub(super) struct ParsedResultTypes {
+    pub(super) ok: Type,
+    pub(super) err: Type,
+}
+
+impl<'a> CallbackReturnType<'a> {
+    pub(super) fn new(rust_type: &'a Type) -> Self {
+        Self { rust_type }
+    }
+
+    pub(super) fn ffi_type(&self) -> proc_macro2::TokenStream {
+        let rust_type = self.rust_type;
+        quote!(<#rust_type as ::boltffi::__private::Passable>::Out)
+    }
+
+    pub(super) fn result_types(&self) -> Option<ParsedResultTypes> {
+        let Type::Path(type_path) = self.rust_type else {
+            return None;
+        };
+        let result_segment = type_path.path.segments.last()?;
+        if result_segment.ident != "Result" {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &result_segment.arguments else {
+            return None;
+        };
+        let mut types = arguments.args.iter().filter_map(|argument| match argument {
+            syn::GenericArgument::Type(ty) => Some(ty.clone()),
+            _ => None,
+        });
+        Some(ParsedResultTypes {
+            ok: types.next()?,
+            err: types.next()?,
+        })
+    }
+}
 
 pub fn ffi_trait_impl(item: TokenStream) -> TokenStream {
     let item_trait = syn::parse_macro_input!(item as syn::ItemTrait);
@@ -28,7 +70,7 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
     let data_types = data_types::registry_for_current_crate()?;
     let return_lowering = ReturnLoweringContext::new(&custom_types, &data_types);
     let trait_name = &item_trait.ident;
-    let trait_name_snake = to_snake_case_ident(&trait_name.to_string());
+    let trait_name_snake = snake_case_ident(trait_name);
     let vtable_name = syn::Ident::new(&format!("{}VTable", trait_name), trait_name.span());
     let foreign_name = syn::Ident::new(&format!("Foreign{}", trait_name), trait_name.span());
     let vtable_static = syn::Ident::new(
@@ -350,32 +392,4 @@ fn expand_ffi_trait(item_trait: syn::ItemTrait) -> Result<proc_macro2::TokenStre
         #foreign_type_impl
         #local_handle_impl
     })
-}
-
-fn to_snake_case_ident(name: &str) -> syn::Ident {
-    syn::Ident::new(&naming::to_snake_case(name), proc_macro2::Span::call_site())
-}
-
-fn direct_callback_return_ffi_type(ty: &syn::Type) -> proc_macro2::TokenStream {
-    quote!(<#ty as ::boltffi::__private::Passable>::Out)
-}
-
-fn parse_result_type(ty: &Type) -> Option<(Type, Type)> {
-    let Type::Path(type_path) = ty else {
-        return None;
-    };
-    let result_segment = type_path.path.segments.last()?;
-    if result_segment.ident != "Result" {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(args) = &result_segment.arguments else {
-        return None;
-    };
-    let mut types = args.args.iter().filter_map(|arg| match arg {
-        syn::GenericArgument::Type(ty) => Some(ty.clone()),
-        _ => None,
-    });
-    let ok = types.next()?;
-    let err = types.next()?;
-    Some((ok, err))
 }

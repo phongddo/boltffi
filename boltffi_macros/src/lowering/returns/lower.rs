@@ -5,7 +5,7 @@ use syn::Type;
 
 use crate::registries::custom_types::{self, CustomTypeRegistry};
 
-use super::classify::{extract_option_inner, primitive_for_type};
+use super::classify::ReturnTypeDescriptor;
 use super::model::{
     DirectBufferReturnMethod, EncodedReturnStrategy, ResolvedReturn, ReturnInvocationContext,
     ReturnPlatform, ScalarReturnStrategy, ValueReturnStrategy, WasmOptionScalarEncoding,
@@ -152,8 +152,8 @@ impl ResolvedReturn {
 
 impl WasmOptionScalarEncoding {
     pub fn from_option_rust_type(rust_type: &Type) -> Option<Self> {
-        extract_option_inner(rust_type)
-            .and_then(|inner| primitive_for_type(&inner))
+        ReturnTypeDescriptor::parse(rust_type)
+            .option_primitive()
             .map(|primitive| Self { primitive })
     }
 

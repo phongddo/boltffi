@@ -54,3 +54,22 @@ pub fn result_to_string(v: Result<i32, String>) -> String {
         Err(err) => format!("err: {}", err),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use boltffi::__private::wire;
+
+    #[test]
+    fn exported_result_string_parameter_round_trips() {
+        let input_bytes = wire::encode(&Err::<i32, String>("bad".to_owned()));
+        let output_buffer =
+            unsafe { super::boltffi_result_to_string(input_bytes.as_ptr(), input_bytes.len()) };
+        let output_bytes = unsafe { output_buffer.as_byte_slice() }.to_vec();
+        drop(output_buffer);
+
+        let output_string: String =
+            wire::decode(&output_bytes).expect("exported result_to_string should decode");
+
+        assert_eq!(output_string, "err: bad");
+    }
+}

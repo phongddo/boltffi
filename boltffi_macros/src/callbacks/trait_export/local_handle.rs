@@ -2,8 +2,9 @@ use boltffi_ffi_rules::transport::{ReturnInvocationContext, ReturnPlatform, Valu
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote};
 
+use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
-use super::{direct_callback_return_ffi_type, to_snake_case_ident};
+use crate::callbacks::snake_case_ident;
 use crate::lowering::returns::lower::encoded_return_buffer_expression;
 use crate::lowering::returns::model::{
     ReturnLoweringContext, ScalarReturnStrategy, ValueReturnStrategy,
@@ -239,7 +240,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
 
     fn expand(&self) -> Result<LocalHandleMethodExpansion, syn::Error> {
         let method_name = &self.method.sig.ident;
-        let method_name_snake = to_snake_case_ident(&method_name.to_string());
+        let method_name_snake = snake_case_ident(method_name);
         let function_name = format_ident!(
             "__boltffi_local_{}_{}",
             self.trait_name_snake,
@@ -616,7 +617,7 @@ impl<'a> LocalHandleMethodExpander<'a> {
     }
 
     fn lower_param(&self, param_name: &syn::Ident, param_type: &syn::Type) -> LocalHandleParam {
-        let direct_ffi_type = direct_callback_return_ffi_type(param_type);
+        let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
         if matches!(
             self.return_lowering
                 .lower_type(param_type)

@@ -3,6 +3,7 @@ use quote::quote;
 use syn::{ReturnType, Type};
 
 use crate::callbacks::registry::CallbackTraitRegistry;
+use crate::lowering::transport::{StandardContainer, TypeShapeExt};
 
 #[derive(Clone)]
 pub(crate) struct SyncCallbackReturn {
@@ -17,15 +18,22 @@ enum CallbackReturnOwnership {
     Shared,
 }
 
-enum CallbackReturnCandidate {
-    Direct {
-        trait_path: syn::Path,
-        ownership: CallbackReturnOwnership,
-    },
-    Optional {
-        trait_path: syn::Path,
-        ownership: CallbackReturnOwnership,
-    },
+#[derive(Clone)]
+struct CallbackReturnDescriptor {
+    trait_path: syn::Path,
+    shape: CallbackReturnShape,
+}
+
+#[derive(Clone, Copy)]
+enum CallbackReturnShape {
+    Direct { ownership: CallbackReturnOwnership },
+    Optional { ownership: CallbackReturnOwnership },
+}
+
+#[derive(Clone)]
+struct CallbackTraitObject {
+    trait_path: syn::Path,
+    ownership: CallbackReturnOwnership,
 }
 
 impl SyncCallbackReturn {
@@ -86,6 +94,112 @@ impl SyncCallbackReturn {
     }
 }
 
+impl CallbackReturnDescriptor {
+    fn parse(rust_type: &Type) -> Option<Self> {
+        CallbackTraitObject::parse(rust_type)
+            .map(Self::direct)
+            .or_else(|| Self::parse_optional(rust_type))
+    }
+
+    fn direct(trait_object: CallbackTraitObject) -> Self {
+        Self {
+            trait_path: trait_object.trait_path,
+            shape: CallbackReturnShape::Direct {
+                ownership: trait_object.ownership,
+            },
+        }
+    }
+
+    fn parse_optional(rust_type: &Type) -> Option<Self> {
+        let Some(StandardContainer::Option(inner_type)) =
+            rust_type.type_descriptor().standard_container()
+        else {
+            return None;
+        };
+        let trait_object = CallbackTraitObject::parse(inner_type)?;
+        Some(Self {
+            trait_path: trait_object.trait_path,
+            shape: CallbackReturnShape::Optional {
+                ownership: trait_object.ownership,
+            },
+        })
+    }
+
+    fn resolve(
+        self,
+        rust_type: &Type,
+        callback_registry: &CallbackTraitRegistry,
+    ) -> syn::Result<Option<SyncCallbackReturn>> {
+        let Some(resolution) = callback_registry.resolve(&self.trait_path) else {
+            return Ok(None);
+        };
+
+        if !resolution.supports_local_handle {
+            return Err(syn::Error::new_spanned(
+                rust_type,
+                "boltffi: sync callback returns require an object-safe exported callback trait without async methods",
+            ));
+        }
+
+        Ok(Some(SyncCallbackReturn {
+            ownership: self.shape.ownership(),
+            is_optional: self.shape.is_optional(),
+            local_handle_path: resolution.local_handle_path,
+        }))
+    }
+}
+
+impl CallbackReturnShape {
+    fn ownership(self) -> CallbackReturnOwnership {
+        match self {
+            Self::Direct { ownership } | Self::Optional { ownership } => ownership,
+        }
+    }
+
+    fn is_optional(self) -> bool {
+        matches!(self, Self::Optional { .. })
+    }
+}
+
+impl CallbackTraitObject {
+    fn parse(rust_type: &Type) -> Option<Self> {
+        Self::parse_container(rust_type, "Box", CallbackReturnOwnership::Boxed)
+            .or_else(|| Self::parse_container(rust_type, "Arc", CallbackReturnOwnership::Shared))
+    }
+
+    fn parse_container(
+        rust_type: &Type,
+        container_name: &str,
+        ownership: CallbackReturnOwnership,
+    ) -> Option<Self> {
+        let Type::Path(type_path) = rust_type else {
+            return None;
+        };
+        let container_segment = type_path.path.segments.last()?;
+        if container_segment.ident != container_name {
+            return None;
+        }
+        let syn::PathArguments::AngleBracketed(arguments) = &container_segment.arguments else {
+            return None;
+        };
+        let inner_type = arguments.args.iter().find_map(|argument| match argument {
+            syn::GenericArgument::Type(inner_type) => Some(inner_type),
+            _ => None,
+        })?;
+        let Type::TraitObject(trait_object) = inner_type else {
+            return None;
+        };
+        let trait_path = trait_object.bounds.iter().find_map(|bound| match bound {
+            syn::TypeParamBound::Trait(trait_bound) => Some(trait_bound.path.clone()),
+            _ => None,
+        })?;
+        Some(Self {
+            trait_path,
+            ownership,
+        })
+    }
+}
+
 pub(crate) fn resolve_sync_callback_return(
     output: &ReturnType,
     callback_registry: &CallbackTraitRegistry,
@@ -94,103 +208,60 @@ pub(crate) fn resolve_sync_callback_return(
         return Ok(None);
     };
 
-    let Some(candidate) = extract_callback_return_candidate(rust_type) else {
+    let Some(descriptor) = CallbackReturnDescriptor::parse(rust_type) else {
         return Ok(None);
     };
 
-    let (trait_path, ownership, is_optional) = match candidate {
-        CallbackReturnCandidate::Direct {
-            trait_path,
-            ownership,
-        } => (trait_path, ownership, false),
-        CallbackReturnCandidate::Optional {
-            trait_path,
-            ownership,
-        } => (trait_path, ownership, true),
-    };
+    descriptor.resolve(rust_type, callback_registry)
+}
 
-    let Some(resolution) = callback_registry.resolve(&trait_path) else {
-        return Ok(None);
-    };
+#[cfg(test)]
+mod tests {
+    use quote::ToTokens;
+    use syn::{Type, parse_quote};
 
-    if !resolution.supports_local_handle {
-        return Err(syn::Error::new_spanned(
-            rust_type,
-            "boltffi: sync callback returns require an object-safe exported callback trait without async methods",
+    use super::{CallbackReturnDescriptor, CallbackReturnOwnership, CallbackReturnShape};
+
+    #[test]
+    fn parses_direct_boxed_callback_return() {
+        let rust_type: Type = parse_quote!(Box<dyn ProgressListener>);
+        let descriptor =
+            CallbackReturnDescriptor::parse(&rust_type).expect("callback return should parse");
+
+        assert_eq!(
+            descriptor.trait_path.to_token_stream().to_string(),
+            "ProgressListener"
+        );
+        assert!(matches!(
+            descriptor.shape,
+            CallbackReturnShape::Direct {
+                ownership: CallbackReturnOwnership::Boxed
+            }
         ));
     }
 
-    Ok(Some(SyncCallbackReturn {
-        ownership,
-        is_optional,
-        local_handle_path: resolution.local_handle_path,
-    }))
-}
+    #[test]
+    fn parses_optional_shared_callback_return() {
+        let rust_type: Type = parse_quote!(Option<Arc<dyn ProgressListener>>);
+        let descriptor =
+            CallbackReturnDescriptor::parse(&rust_type).expect("callback return should parse");
 
-fn extract_callback_return_candidate(rust_type: &Type) -> Option<CallbackReturnCandidate> {
-    if let Some((trait_path, ownership)) = extract_trait_object_container(rust_type) {
-        return Some(CallbackReturnCandidate::Direct {
-            trait_path,
-            ownership,
-        });
+        assert_eq!(
+            descriptor.trait_path.to_token_stream().to_string(),
+            "ProgressListener"
+        );
+        assert!(matches!(
+            descriptor.shape,
+            CallbackReturnShape::Optional {
+                ownership: CallbackReturnOwnership::Shared
+            }
+        ));
     }
 
-    let Type::Path(type_path) = rust_type else {
-        return None;
-    };
-    let option_segment = type_path.path.segments.last()?;
-    if option_segment.ident != "Option" {
-        return None;
+    #[test]
+    fn ignores_non_callback_returns() {
+        let rust_type: Type = parse_quote!(String);
+
+        assert!(CallbackReturnDescriptor::parse(&rust_type).is_none());
     }
-    let syn::PathArguments::AngleBracketed(arguments) = &option_segment.arguments else {
-        return None;
-    };
-    let inner_type = arguments.args.iter().find_map(|argument| match argument {
-        syn::GenericArgument::Type(inner_type) => Some(inner_type),
-        _ => None,
-    })?;
-    let (trait_path, ownership) = extract_trait_object_container(inner_type)?;
-    Some(CallbackReturnCandidate::Optional {
-        trait_path,
-        ownership,
-    })
-}
-
-fn extract_trait_object_container(
-    rust_type: &Type,
-) -> Option<(syn::Path, CallbackReturnOwnership)> {
-    if let Some(trait_path) = extract_dyn_trait_in_container(rust_type, "Box") {
-        return Some((trait_path, CallbackReturnOwnership::Boxed));
-    }
-
-    extract_dyn_trait_in_container(rust_type, "Arc")
-        .map(|trait_path| (trait_path, CallbackReturnOwnership::Shared))
-}
-
-fn extract_dyn_trait_in_container(rust_type: &Type, container_name: &str) -> Option<syn::Path> {
-    let Type::Path(type_path) = rust_type else {
-        return None;
-    };
-    let container_segment = type_path.path.segments.last()?;
-    if container_segment.ident != container_name {
-        return None;
-    }
-    let syn::PathArguments::AngleBracketed(arguments) = &container_segment.arguments else {
-        return None;
-    };
-    let inner_type = arguments.args.iter().find_map(|argument| match argument {
-        syn::GenericArgument::Type(inner_type) => Some(inner_type),
-        _ => None,
-    })?;
-    extract_dyn_trait_path(inner_type)
-}
-
-fn extract_dyn_trait_path(rust_type: &Type) -> Option<syn::Path> {
-    let Type::TraitObject(trait_object) = rust_type else {
-        return None;
-    };
-    trait_object.bounds.iter().find_map(|bound| match bound {
-        syn::TypeParamBound::Trait(trait_bound) => Some(trait_bound.path.clone()),
-        _ => None,
-    })
 }

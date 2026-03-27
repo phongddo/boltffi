@@ -5,7 +5,7 @@ use crate::registries::data_types::{DataTypeCategory, DataTypeRegistry};
 
 mod type_shape;
 
-pub(crate) use type_shape::TypeShapeExt;
+pub(crate) use type_shape::{RustTypeShape, StandardContainer, TypeDescriptor, TypeShapeExt};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum NamedTypeTransport {

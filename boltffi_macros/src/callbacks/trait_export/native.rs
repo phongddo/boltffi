@@ -2,8 +2,9 @@ use boltffi_ffi_rules::transport::{ReturnInvocationContext, ReturnPlatform, Valu
 use proc_macro2::TokenStream;
 use quote::quote;
 
+use super::CallbackReturnType;
 use super::lowered_return::LoweredCallbackReturn;
-use super::{direct_callback_return_ffi_type, parse_result_type, to_snake_case_ident};
+use crate::callbacks::snake_case_ident;
 use crate::lowering::returns::model::{ReturnLoweringContext, ValueReturnStrategy};
 use crate::registries::custom_types;
 
@@ -66,7 +67,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                     )
                 }
             } else {
-                let ffi_return_type = direct_callback_return_ffi_type(return_type);
+                let ffi_return_type = CallbackReturnType::new(return_type).ffi_type();
                 quote! {
                     extern "C" fn(
                         callback_data: u64,
@@ -132,7 +133,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
             if wire_return {
                 quote! { out_ptr: *mut *mut u8, out_len: *mut usize, }
             } else {
-                let ffi_return_type = direct_callback_return_ffi_type(return_type);
+                let ffi_return_type = CallbackReturnType::new(return_type).ffi_type();
                 quote! { out: *mut #ffi_return_type, }
             }
         } else {
@@ -175,7 +176,10 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         call_args: &[TokenStream],
         prelude_stmts: &[TokenStream],
     ) -> TokenStream {
-        let error_expr = parse_result_type(return_type).map(|(_, err_ty)| {
+        let error_expr = CallbackReturnType::new(return_type)
+            .result_types()
+            .map(|result_types| {
+                let err_ty = result_types.err;
             quote! {
                 Err(<#err_ty as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
                     ::boltffi::UnexpectedFfiCallbackError::new(error_msg)
@@ -249,7 +253,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 })
                 .unwrap_or_default();
 
-            let ffi_return_type = direct_callback_return_ffi_type(return_type);
+            let ffi_return_type = CallbackReturnType::new(return_type).ffi_type();
             (
                 quote! {
                     extern "C" fn callback(
@@ -437,7 +441,10 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         call_args: &[TokenStream],
         prelude_stmts: &[TokenStream],
     ) -> TokenStream {
-        let error_expr = parse_result_type(return_type).map(|(_, err_ty)| {
+        let error_expr = CallbackReturnType::new(return_type)
+            .result_types()
+            .map(|result_types| {
+                let err_ty = result_types.err;
             quote! {
                 return Err(<#err_ty as ::core::convert::From<::boltffi::UnexpectedFfiCallbackError>>::from(
                     ::boltffi::UnexpectedFfiCallbackError::new("sync callback returned error status")
@@ -483,7 +490,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
                 decode_result.expect("wire decode callback return")
             }
         } else {
-            let ffi_return_type = direct_callback_return_ffi_type(return_type);
+            let ffi_return_type = CallbackReturnType::new(return_type).ffi_type();
             quote! {
                 #(#prelude_stmts)*
                 let mut out: #ffi_return_type = Default::default();
@@ -556,7 +563,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
         param_type: &syn::Type,
     ) -> NativeCallbackParamLowering {
         let rust_param = quote! { #param_name: #param_type };
-        let direct_ffi_type = direct_callback_return_ffi_type(param_type);
+        let direct_ffi_type = CallbackReturnType::new(param_type).ffi_type();
         if matches!(
             self.return_lowering
                 .lower_type(param_type)
@@ -598,7 +605,7 @@ impl<'a> NativeCallbackMethodExpander<'a> {
     }
 
     fn method_name_snake(&self) -> syn::Ident {
-        to_snake_case_ident(&self.method.sig.ident.to_string())
+        snake_case_ident(&self.method.sig.ident)
     }
 
     fn return_type(&self) -> Option<&syn::Type> {
