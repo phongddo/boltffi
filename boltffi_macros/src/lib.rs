@@ -5,6 +5,7 @@ use syn::{DeriveInput, ItemFn, parse_macro_input};
 mod callbacks;
 mod expansion;
 mod exports;
+mod index;
 mod lowering;
 mod registries;
 mod safety;
