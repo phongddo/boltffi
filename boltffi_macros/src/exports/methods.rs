@@ -554,7 +554,7 @@ fn generate_factory_constructor_export(
     let export_name = syn::Ident::new(export_name.as_str(), method_name.span());
 
     let inputs = method.sig.inputs.iter().cloned();
-    let on_wire_record_error = quote! { ::core::ptr::null_mut() };
+    let on_wire_record_error = quote! { return ::core::ptr::null_mut(); };
     let FfiParams {
         ffi_params,
         conversions,
@@ -1471,9 +1471,23 @@ fn generate_stream_exports(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index::callback_traits::CallbackTraitRegistry;
+    use crate::index::custom_types::CustomTypeRegistry;
+    use crate::index::data_types::DataTypeRegistry;
+    use crate::lowering::returns::model::ReturnLoweringContext;
 
     fn parse_impl(code: &str) -> syn::ItemImpl {
         syn::parse_str(code).expect("failed to parse impl block")
+    }
+
+    fn return_lowering() -> ReturnLoweringContext<'static> {
+        let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        ReturnLoweringContext::new(custom_types, data_types)
+    }
+
+    fn callback_registry() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
     }
 
     fn extract_receiver_mutability(method: &syn::ImplItemFn) -> Option<bool> {
@@ -1690,5 +1704,41 @@ mod tests {
             "#,
         );
         assert!(!has_mut_self_methods(&impl_block));
+    }
+
+    #[test]
+    fn factory_constructor_with_wire_encoded_param_returns_early_on_decode_error() {
+        let impl_block = parse_impl(
+            r#"
+            impl Inventory {
+                pub fn from_person(person: Person) -> Self {
+                    let _ = person;
+                    Self
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("constructor method should exist");
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+
+        let generated = generate_factory_constructor_export(
+            MethodCallable::new(method),
+            &type_name,
+            "Inventory",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("constructor export should be generated")
+        .to_string();
+
+        assert!(generated.contains("let person : Person"));
+        assert!(generated.contains("return :: core :: ptr :: null_mut ()"));
     }
 }
