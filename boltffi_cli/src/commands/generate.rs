@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::path::{Component, Path};
 
+use boltffi_bindgen::render::dart::DartEmitter;
 use boltffi_bindgen::render::typescript::{
     TypeScriptEmitter, TypeScriptLowerError, TypeScriptLowerer,
 };
@@ -21,6 +22,7 @@ pub enum GenerateTarget {
     Java,
     Header,
     Typescript,
+    Dart,
     All,
 }
 
@@ -64,6 +66,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
         }
         GenerateTarget::Header => generate_header(config, options.output),
         GenerateTarget::Typescript => generate_typescript(config, options.output),
+        GenerateTarget::Dart => generate_dart(config, options.output),
         GenerateTarget::All => {
             if config.should_process(Target::Swift, options.experimental) {
                 generate_swift(config, options.output.clone())?;
@@ -522,6 +525,40 @@ fn generate_typescript(config: &Config, output: Option<PathBuf>) -> Result<()> {
         path: node_output_path.clone(),
         source,
     })?;
+
+    Ok(())
+}
+
+fn generate_dart(config: &Config, output: Option<PathBuf>) -> Result<()> {
+    let output_dir = output.unwrap_or_else(|| config.languages.dart.output.clone());
+
+    if let Err(source) = std::fs::create_dir_all(&output_dir) {
+        return Err(CliError::CreateDirectoryFailed {
+            path: output_dir,
+            source,
+        });
+    }
+
+    let crate_dir = std::env::current_dir()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    let crate_name = config.library_name();
+
+    let mut module = scan_crate(&crate_dir, crate_name, Some(32), config)?;
+
+    let ffi = ir::build_contract(&mut module);
+    let abi = ir::Lowerer::new(&ffi).to_abi_contract();
+
+    let output = DartEmitter::emit(&ffi, &abi, &config.package.name);
+
+    let output_path = output_dir.join(format!("{}.dart", config.package.name));
+
+    if let Err(source) = std::fs::write(&output_path, &output) {
+        return Err(CliError::WriteFailed {
+            path: output_path,
+            source,
+        });
+    }
 
     Ok(())
 }

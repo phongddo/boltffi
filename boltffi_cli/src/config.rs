@@ -52,6 +52,8 @@ pub struct Config {
     pub package: PackageConfig,
     #[serde(default)]
     pub targets: TargetsConfig,
+    #[serde(default)]
+    pub languages: LanguagesConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -83,6 +85,18 @@ pub struct TargetsConfig {
     pub wasm: WasmConfig,
     #[serde(default)]
     pub java: JavaConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct LanguagesConfig {
+    #[serde(default)]
+    pub dart: DartConfig,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct DartConfig {
+    #[serde(default = "default_dart_output")]
+    pub output: PathBuf,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
@@ -476,6 +490,10 @@ fn default_wasm_triple() -> String {
 
 fn default_wasm_output() -> PathBuf {
     PathBuf::from("dist/wasm")
+}
+
+fn default_dart_output() -> PathBuf {
+    PathBuf::from("dist/dart")
 }
 
 impl Config {

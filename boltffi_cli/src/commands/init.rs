@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
-    CargoConfig, Config, ErrorStyle, FactoryStyle, HeaderConfig, JavaConfig, PackageConfig,
-    SpmConfig, TargetsConfig, WasmConfig, XcframeworkConfig,
+    CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig, JavaConfig,
+    LanguagesConfig, PackageConfig, SpmConfig, TargetsConfig, WasmConfig, XcframeworkConfig,
 };
 use crate::error::Result;
 
@@ -124,6 +124,11 @@ fn create_default_config(package_name: &str) -> Config {
             },
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),
+        },
+        languages: LanguagesConfig {
+            dart: DartConfig {
+                output: PathBuf::from("dist/dart"),
+            },
         },
     }
 }

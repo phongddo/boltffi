@@ -161,6 +161,8 @@ enum GenerateTargetArg {
     Header,
     #[value(help = "Generate TypeScript bindings for WASM")]
     Typescript,
+    #[value(help = "Generate Dart Bindings")]
+    Dart,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -384,6 +386,7 @@ fn execute_command(
                         GenerateTargetArg::Java => GenerateTarget::Java,
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
+                        GenerateTargetArg::Dart => GenerateTarget::Dart,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
