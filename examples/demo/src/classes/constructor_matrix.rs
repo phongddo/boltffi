@@ -172,6 +172,20 @@ impl ConstructorCoverageMatrix {
         ))
     }
 
+    pub fn summarize_borrowed_inputs(
+        &self,
+        profile: &UserProfile,
+        search_result: &SearchResult,
+        filter: &Filter,
+    ) -> String {
+        format!(
+            "{};query={};filter={}",
+            Self::summarize_profile(profile),
+            search_result.query,
+            Self::summarize_filter(filter)
+        )
+    }
+
     pub fn constructor_variant(&self) -> String {
         self.constructor_variant.clone()
     }

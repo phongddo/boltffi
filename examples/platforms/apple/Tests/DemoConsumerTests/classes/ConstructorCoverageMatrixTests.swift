@@ -21,15 +21,15 @@ final class ConstructorCoverageMatrixTests: XCTestCase {
         XCTAssertEqual(stringAndBytes.payloadChecksum(), 10)
         XCTAssertEqual(stringAndBytes.vectorCount(), 4)
 
-        let blittableAndRecord = ConstructorCoverageMatrix(withBlittableAndRecord: Point(x: 1.5, y: 2.5), person: Person(name: "Ali", age: 31))
+        let blittableAndRecord = ConstructorCoverageMatrix(withBlittableAndRecord: Point(x: 1.5, y: 2.5), person: Person(name: "Alice", age: 31))
         XCTAssertEqual(blittableAndRecord.constructorVariant(), "with_blittable_and_record")
-        XCTAssertEqual(blittableAndRecord.summary(), "origin=1.5:2.5;person=Ali#31")
+        XCTAssertEqual(blittableAndRecord.summary(), "origin=1.5:2.5;person=Alice#31")
         XCTAssertEqual(blittableAndRecord.payloadChecksum(), 0)
         XCTAssertEqual(blittableAndRecord.vectorCount(), 1)
 
-        let optionalProfileAndCursor = ConstructorCoverageMatrix(withOptionalProfileAndCursor: UserProfile(name: "Nora", age: 29, email: "nora@example.com", score: 9.5), nextCursor: "cursor-7")
+        let optionalProfileAndCursor = ConstructorCoverageMatrix(withOptionalProfileAndCursor: UserProfile(name: "John", age: 29, email: "john@example.com", score: 9.5), nextCursor: "cursor-7")
         XCTAssertEqual(optionalProfileAndCursor.constructorVariant(), "with_optional_profile_and_cursor")
-        XCTAssertEqual(optionalProfileAndCursor.summary(), "profile=Nora#29#nora@example.com#9.5;cursor=cursor-7")
+        XCTAssertEqual(optionalProfileAndCursor.summary(), "profile=John#29#john@example.com#9.5;cursor=cursor-7")
         XCTAssertEqual(optionalProfileAndCursor.payloadChecksum(), 0)
         XCTAssertEqual(optionalProfileAndCursor.vectorCount(), 2)
 
@@ -39,7 +39,7 @@ final class ConstructorCoverageMatrixTests: XCTestCase {
         XCTAssertEqual(vectorsAndPolygon.payloadChecksum(), 0)
         XCTAssertEqual(vectorsAndPolygon.vectorCount(), 7)
 
-        let collectionRecords = ConstructorCoverageMatrix(withCollectionRecords: Team(name: "Platform", members: ["Ali", "Nora"]), classroom: Classroom(students: [Person(name: "Sam", age: 20), Person(name: "Lea", age: 21)]), polygon: Polygon(points: [Point(x: 0, y: 0), Point(x: 1, y: 0), Point(x: 1, y: 1)]))
+        let collectionRecords = ConstructorCoverageMatrix(withCollectionRecords: Team(name: "Platform", members: ["Alice", "John"]), classroom: Classroom(students: [Person(name: "Alice", age: 20), Person(name: "John", age: 21)]), polygon: Polygon(points: [Point(x: 0, y: 0), Point(x: 1, y: 0), Point(x: 1, y: 1)]))
         XCTAssertEqual(collectionRecords.constructorVariant(), "with_collection_records")
         XCTAssertEqual(collectionRecords.summary(), "team=Platform;members=2;students=2;polygon=3")
         XCTAssertEqual(collectionRecords.payloadChecksum(), 0)
@@ -51,11 +51,19 @@ final class ConstructorCoverageMatrixTests: XCTestCase {
         XCTAssertEqual(enumMix.payloadChecksum(), 0)
         XCTAssertEqual(enumMix.vectorCount(), 1)
 
-        let everything = ConstructorCoverageMatrix(withEverything: Person(name: "Ali", age: 31), address: Address(street: "Main", city: "AMS", zip: "1000"), profile: UserProfile(name: "Nora", age: 29, email: "nora@example.com", score: 9.5), searchResult: SearchResult(query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5), payload: Data([4, 5, 6]), filter: .byRange(min: 1, max: 3), tags: ["alpha", "beta"])
+        let everything = ConstructorCoverageMatrix(withEverything: Person(name: "Alice", age: 31), address: Address(street: "Main", city: "AMS", zip: "1000"), profile: UserProfile(name: "John", age: 29, email: "john@example.com", score: 9.5), searchResult: SearchResult(query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5), payload: Data([4, 5, 6]), filter: .byRange(min: 1, max: 3), tags: ["alpha", "beta"])
         XCTAssertEqual(everything.constructorVariant(), "with_everything")
-        XCTAssertEqual(everything.summary(), "person=Ali#31;city=AMS;profile=profile=Nora#29#nora@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta")
+        XCTAssertEqual(everything.summary(), "person=Alice#31;city=AMS;profile=profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta")
         XCTAssertEqual(everything.payloadChecksum(), 15)
         XCTAssertEqual(everything.vectorCount(), 10)
+        XCTAssertEqual(
+            everything.summarizeBorrowedInputs(
+                profile: UserProfile(name: "John", age: 29, email: "john@example.com", score: 9.5),
+                searchResult: SearchResult(query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5),
+                filter: .byRange(min: 1, max: 3)
+            ),
+            "profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0"
+        )
 
         let fallible = try ConstructorCoverageMatrix(tryWithPayloadAndSearchResult: Data([7, 8]), searchResult: SearchResult(query: "search", total: 4, nextCursor: "cursor-4", maxScore: nil), filter: .byName(name: "ali"))
         XCTAssertEqual(fallible.constructorVariant(), "try_with_payload_and_search_result")

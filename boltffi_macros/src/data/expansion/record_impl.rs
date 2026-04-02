@@ -637,3 +637,71 @@ pub fn data_impl_block(item: TokenStream) -> TokenStream {
         .unwrap_or_else(|error| error.to_compile_error())
         .into()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::index::callback_traits::CallbackTraitRegistry;
+    use crate::index::custom_types::CustomTypeRegistry;
+    use crate::index::data_types::DataTypeRegistry;
+    use crate::lowering::returns::model::ReturnLoweringContext;
+
+    fn parse_impl(code: &str) -> syn::ItemImpl {
+        syn::parse_str(code).expect("failed to parse impl block")
+    }
+
+    fn return_lowering() -> ReturnLoweringContext<'static> {
+        let custom_types = Box::leak(Box::new(CustomTypeRegistry::default()));
+        let data_types = Box::leak(Box::new(DataTypeRegistry::default()));
+        ReturnLoweringContext::new(custom_types, data_types)
+    }
+
+    fn callback_registry() -> &'static CallbackTraitRegistry {
+        Box::leak(Box::new(CallbackTraitRegistry::default()))
+    }
+
+    #[test]
+    fn record_instance_method_with_borrowed_wire_params_lowers_to_buffers_and_storage() {
+        let impl_block = parse_impl(
+            r#"
+            impl Inventory {
+                pub fn summarize(&self, profile: &UserProfile, filter: &Filter) -> String {
+                    let _ = (profile, filter);
+                    String::new()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("record instance method should exist");
+        let type_name = syn::Ident::new("Inventory", proc_macro2::Span::call_site());
+
+        let generated = generate_record_instance_export(
+            &type_name,
+            "Inventory",
+            method,
+            false,
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("record instance export should be generated")
+        .to_string();
+
+        assert!(generated.contains("profile_storage_ptr : * const u8"));
+        assert!(generated.contains("profile_storage_len : usize"));
+        assert!(generated.contains("filter_storage_ptr : * const u8"));
+        assert!(generated.contains("filter_storage_len : usize"));
+        assert!(generated.contains("let profile_storage : UserProfile"));
+        assert!(generated.contains("let filter_storage : Filter"));
+        assert!(generated.contains("let profile = & profile_storage"));
+        assert!(generated.contains("let filter = & filter_storage"));
+        assert!(!generated.contains("profile : & UserProfile"));
+        assert!(!generated.contains("filter : & Filter"));
+    }
+}

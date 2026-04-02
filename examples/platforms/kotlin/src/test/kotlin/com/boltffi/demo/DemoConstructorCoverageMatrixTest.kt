@@ -28,19 +28,19 @@ class DemoConstructorCoverageMatrixTest {
             assertEquals(4u, matrix.vectorCount())
         }
 
-        ConstructorCoverageMatrix(Point(1.5, 2.5), Person("Ali", 31u)).use { matrix ->
+        ConstructorCoverageMatrix(Point(1.5, 2.5), Person("Alice", 31u)).use { matrix ->
             assertEquals("with_blittable_and_record", matrix.constructorVariant())
-            assertEquals("origin=1.5:2.5;person=Ali#31", matrix.summary())
+            assertEquals("origin=1.5:2.5;person=Alice#31", matrix.summary())
             assertEquals(0u, matrix.payloadChecksum())
             assertEquals(1u, matrix.vectorCount())
         }
 
         ConstructorCoverageMatrix(
-            UserProfile("Nora", 29u, "nora@example.com", 9.5),
+            UserProfile("John", 29u, "john@example.com", 9.5),
             "cursor-7",
         ).use { matrix ->
             assertEquals("with_optional_profile_and_cursor", matrix.constructorVariant())
-            assertEquals("profile=Nora#29#nora@example.com#9.5;cursor=cursor-7", matrix.summary())
+            assertEquals("profile=John#29#john@example.com#9.5;cursor=cursor-7", matrix.summary())
             assertEquals(0u, matrix.payloadChecksum())
             assertEquals(2u, matrix.vectorCount())
         }
@@ -57,8 +57,8 @@ class DemoConstructorCoverageMatrixTest {
         }
 
         ConstructorCoverageMatrix(
-            Team("Platform", listOf("Ali", "Nora")),
-            Classroom(listOf(Person("Sam", 20u), Person("Lea", 21u))),
+            Team("Platform", listOf("Alice", "John")),
+            Classroom(listOf(Person("Alice", 20u), Person("John", 21u))),
             Polygon(listOf(Point(0.0, 0.0), Point(1.0, 0.0), Point(1.0, 1.0))),
         ).use { matrix ->
             assertEquals("with_collection_records", matrix.constructorVariant())
@@ -82,9 +82,9 @@ class DemoConstructorCoverageMatrixTest {
         }
 
         ConstructorCoverageMatrix(
-            Person("Ali", 31u),
+            Person("Alice", 31u),
             Address("Main", "AMS", "1000"),
-            UserProfile("Nora", 29u, "nora@example.com", 9.5),
+            UserProfile("John", 29u, "john@example.com", 9.5),
             SearchResult("route", 5u, "next-9", 7.5),
             byteArrayOf(4, 5, 6),
             Filter.ByRange(1.0, 3.0),
@@ -92,11 +92,19 @@ class DemoConstructorCoverageMatrixTest {
         ).use { matrix ->
             assertEquals("with_everything", matrix.constructorVariant())
             assertEquals(
-                "person=Ali#31;city=AMS;profile=profile=Nora#29#nora@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta",
+                "person=Alice#31;city=AMS;profile=profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta",
                 matrix.summary(),
             )
             assertEquals(15u, matrix.payloadChecksum())
             assertEquals(10u, matrix.vectorCount())
+            assertEquals(
+                "profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0",
+                matrix.summarizeBorrowedInputs(
+                    UserProfile("John", 29u, "john@example.com", 9.5),
+                    SearchResult("route", 5u, "next-9", 7.5),
+                    Filter.ByRange(1.0, 3.0),
+                ),
+            )
         }
 
         ConstructorCoverageMatrix(

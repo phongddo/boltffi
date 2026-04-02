@@ -26,19 +26,19 @@ export async function run() {
     4,
   );
   assertMatrix(
-    demo.ConstructorCoverageMatrix.withBlittableAndRecord({ x: 1.5, y: 2.5 }, { name: "Ali", age: 31 }),
+    demo.ConstructorCoverageMatrix.withBlittableAndRecord({ x: 1.5, y: 2.5 }, { name: "Alice", age: 31 }),
     "with_blittable_and_record",
-    "origin=1.5:2.5;person=Ali#31",
+    "origin=1.5:2.5;person=Alice#31",
     0,
     1,
   );
   assertMatrix(
     demo.ConstructorCoverageMatrix.withOptionalProfileAndCursor(
-      { name: "Nora", age: 29, email: "nora@example.com", score: 9.5 },
+      { name: "John", age: 29, email: "john@example.com", score: 9.5 },
       "cursor-7",
     ),
     "with_optional_profile_and_cursor",
-    "profile=Nora#29#nora@example.com#9.5;cursor=cursor-7",
+    "profile=John#29#john@example.com#9.5;cursor=cursor-7",
     0,
     2,
   );
@@ -55,8 +55,8 @@ export async function run() {
   );
   assertMatrix(
     demo.ConstructorCoverageMatrix.withCollectionRecords(
-      { name: "Platform", members: ["Ali", "Nora"] },
-      { students: [{ name: "Sam", age: 20 }, { name: "Lea", age: 21 }] },
+      { name: "Platform", members: ["Alice", "John"] },
+      { students: [{ name: "Alice", age: 20 }, { name: "John", age: 21 }] },
       { points: [{ x: 0, y: 0 }, { x: 1, y: 0 }, { x: 1, y: 1 }] },
     ),
     "with_collection_records",
@@ -77,19 +77,37 @@ export async function run() {
   );
   assertMatrix(
     demo.ConstructorCoverageMatrix.withEverything(
-      { name: "Ali", age: 31 },
+      { name: "Alice", age: 31 },
       { street: "Main", city: "AMS", zip: "1000" },
-      { name: "Nora", age: 29, email: "nora@example.com", score: 9.5 },
+      { name: "John", age: 29, email: "john@example.com", score: 9.5 },
       { query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5 },
       new Uint8Array([4, 5, 6]),
       { tag: "ByRange", min: 1, max: 3 },
       ["alpha", "beta"],
     ),
     "with_everything",
-    "person=Ali#31;city=AMS;profile=profile=Nora#29#nora@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta",
+    "person=Alice#31;city=AMS;profile=profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta",
     15,
     10,
   );
+  const borrowedSummaryMatrix = demo.ConstructorCoverageMatrix.withEverything(
+    { name: "Alice", age: 31 },
+    { street: "Main", city: "AMS", zip: "1000" },
+    { name: "John", age: 29, email: "john@example.com", score: 9.5 },
+    { query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5 },
+    new Uint8Array([4, 5, 6]),
+    { tag: "ByRange", min: 1, max: 3 },
+    ["alpha", "beta"],
+  );
+  assert.equal(
+    borrowedSummaryMatrix.summarizeBorrowedInputs(
+      { name: "John", age: 29, email: "john@example.com", score: 9.5 },
+      { query: "route", total: 5, nextCursor: "next-9", maxScore: 7.5 },
+      { tag: "ByRange", min: 1, max: 3 },
+    ),
+    "profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0",
+  );
+  borrowedSummaryMatrix.dispose();
 
   const fallible = demo.ConstructorCoverageMatrix.tryWithPayloadAndSearchResult(
     new Uint8Array([7, 8]),

@@ -1741,4 +1741,92 @@ mod tests {
         assert!(generated.contains("let person : Person"));
         assert!(generated.contains("return :: core :: ptr :: null_mut ()"));
     }
+
+    #[test]
+    fn instance_method_with_borrowed_wire_params_lowers_to_buffers_and_storage() {
+        let impl_block = parse_impl(
+            r#"
+            impl Inventory {
+                pub fn summarize(&self, profile: &UserProfile, filter: &Filter) -> String {
+                    let _ = (profile, filter);
+                    String::new()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("instance method should exist");
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+
+        let generated = generate_sync_method_export(
+            MethodCallable::new(method),
+            &type_name,
+            "Inventory",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("instance export should be generated")
+        .to_string();
+
+        assert!(generated.contains("profile_storage_ptr : * const u8"));
+        assert!(generated.contains("profile_storage_len : usize"));
+        assert!(generated.contains("filter_storage_ptr : * const u8"));
+        assert!(generated.contains("filter_storage_len : usize"));
+        assert!(generated.contains("let profile_storage : UserProfile"));
+        assert!(generated.contains("let filter_storage : Filter"));
+        assert!(generated.contains("let profile = & profile_storage"));
+        assert!(generated.contains("let filter = & filter_storage"));
+        assert!(!generated.contains("profile : & UserProfile"));
+        assert!(!generated.contains("filter : & Filter"));
+    }
+
+    #[test]
+    fn async_method_with_borrowed_wire_params_lowers_to_buffers_and_storage() {
+        let impl_block = parse_impl(
+            r#"
+            impl Inventory {
+                pub async fn summarize_async(&self, profile: &UserProfile, filter: &Filter) -> String {
+                    let _ = (profile, filter);
+                    String::new()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("async instance method should exist");
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+
+        let generated = generate_async_method_export(
+            MethodCallable::new(method),
+            &type_name,
+            "Inventory",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("async instance export should be generated")
+        .to_string();
+
+        assert!(generated.contains("profile_storage_ptr : * const u8"));
+        assert!(generated.contains("profile_storage_len : usize"));
+        assert!(generated.contains("filter_storage_ptr : * const u8"));
+        assert!(generated.contains("filter_storage_len : usize"));
+        assert!(generated.contains("let profile_storage : UserProfile"));
+        assert!(generated.contains("let filter_storage : Filter"));
+        assert!(generated.contains("let profile = & profile_storage"));
+        assert!(generated.contains("let filter = & filter_storage"));
+        assert!(!generated.contains("profile : & UserProfile"));
+        assert!(!generated.contains("filter : & Filter"));
+    }
 }
