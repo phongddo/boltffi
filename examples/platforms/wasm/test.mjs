@@ -6,6 +6,7 @@ import { run as runAsyncTraits } from "./tests/callbacks/async_traits.test.mjs";
 import { run as runClosures } from "./tests/callbacks/closures.test.mjs";
 import { run as runSyncTraits } from "./tests/callbacks/sync_traits.test.mjs";
 import { run as runAsyncMethods } from "./tests/classes/async_methods.test.mjs";
+import { run as runConstructorMatrix } from "./tests/classes/constructor_matrix.test.mjs";
 import { run as runConstructors } from "./tests/classes/constructors.test.mjs";
 import { run as runMethods } from "./tests/classes/methods.test.mjs";
 import { run as runStaticMethods } from "./tests/classes/static_methods.test.mjs";
@@ -23,6 +24,7 @@ import { run as runScalars } from "./tests/primitives/scalars.test.mjs";
 import { run as runStrings } from "./tests/primitives/strings.test.mjs";
 import { run as runVecs } from "./tests/primitives/vecs.test.mjs";
 import { run as runBlittableRecords } from "./tests/records/blittable.test.mjs";
+import { run as runDefaultValueRecords } from "./tests/records/default_values.test.mjs";
 import { run as runNestedRecords } from "./tests/records/nested.test.mjs";
 import { run as runCollectionRecords } from "./tests/records/with_collections.test.mjs";
 import { run as runEnumRecords } from "./tests/records/with_enums.test.mjs";
@@ -43,6 +45,7 @@ const suites = [
   runClosures,
   runSyncTraits,
   runAsyncMethods,
+  runConstructorMatrix,
   runConstructors,
   runMethods,
   runStaticMethods,
@@ -60,6 +63,7 @@ const suites = [
   runStrings,
   runVecs,
   runBlittableRecords,
+  runDefaultValueRecords,
   runNestedRecords,
   runCollectionRecords,
   runEnumRecords,

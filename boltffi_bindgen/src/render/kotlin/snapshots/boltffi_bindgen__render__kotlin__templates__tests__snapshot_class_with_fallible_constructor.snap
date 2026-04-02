@@ -1,6 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 1010
+assertion_line: 1031
 expression: template.render().unwrap()
 ---
 class Connection private constructor(internal val handle: Long) : AutoCloseable {
@@ -9,7 +9,7 @@ class Connection private constructor(internal val handle: Long) : AutoCloseable 
     constructor(url: String) : this(
         kotlin.run {
             val urlWire = WireWriterPool.acquire(BoltFFIWire.sizeString(url))
-        run {
+        kotlin.run {
             val wire = urlWire.writer
             BoltFFIWire.writeString(url)
         }

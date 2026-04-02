@@ -38,4 +38,7 @@ export async function run() {
     demo.ValidationErrorException,
     demo.ValidationError.InvalidFormat,
   );
+
+  assert.equal(demo.mayFail(true), "Success!");
+  assert.equal(demo.divideApp(10, 2), 5);
 }

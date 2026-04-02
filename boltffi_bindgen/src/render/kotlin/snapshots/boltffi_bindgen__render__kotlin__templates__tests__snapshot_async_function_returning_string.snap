@@ -1,13 +1,13 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 887
+assertion_line: 908
 expression: template.render().unwrap()
 ---
 
 suspend fun fetchData(url: String): String = boltffiCallAsync(
     createFuture = {
         val urlWire = WireWriterPool.acquire(BoltFFIWire.sizeString(url))
-        run {
+        kotlin.run {
             val wire = urlWire.writer
             BoltFFIWire.writeString(url)
         }

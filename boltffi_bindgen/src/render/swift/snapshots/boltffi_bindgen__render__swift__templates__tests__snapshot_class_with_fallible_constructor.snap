@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/swift/templates.rs
+assertion_line: 1278
 expression: "render_class(&cls, \"boltffi\")"
 ---
 public final class Connection {
@@ -11,7 +12,8 @@ public final class Connection {
 
     public init(url: String) throws {
         var url = url
-        guard let ptr = url.withUTF8 { urlBuf -> OpaquePointer? in boltffi_connection_open(urlBuf.baseAddress!, UInt(urlBuf.count)) } else {
+        let ptr = url.withUTF8 { urlBuf -> OpaquePointer? in boltffi_connection_open(urlBuf.baseAddress!, UInt(urlBuf.count)) }
+        guard let ptr = ptr else {
             throw FfiError(message: takeLastErrorMessage())
         }
         self.handle = ptr

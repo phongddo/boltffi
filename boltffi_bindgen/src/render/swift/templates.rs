@@ -1279,6 +1279,53 @@ mod tests {
     }
 
     #[test]
+    fn class_with_fallible_convenience_constructor_binds_through_temporary_optional() {
+        let cls = SwiftClass {
+            name: "Connection".to_string(),
+            ffi_free: "boltffi_connection_free".to_string(),
+            constructors: vec![SwiftConstructor::Convenience {
+                name: "tryOpen".to_string(),
+                ffi_symbol: "boltffi_connection_open".to_string(),
+                params: vec![
+                    SwiftParam {
+                        label: None,
+                        name: "payload".to_string(),
+                        swift_type: "Data".to_string(),
+                        conversion: SwiftConversion::ToData,
+                    },
+                    SwiftParam {
+                        label: None,
+                        name: "searchResult".to_string(),
+                        swift_type: "String".to_string(),
+                        conversion: SwiftConversion::ToWireBuffer {
+                            encode: write_string("searchResult"),
+                        },
+                    },
+                    SwiftParam {
+                        label: None,
+                        name: "filter".to_string(),
+                        swift_type: "String".to_string(),
+                        conversion: SwiftConversion::ToWireBuffer {
+                            encode: write_string("filter"),
+                        },
+                    },
+                ],
+                is_fallible: true,
+                is_optional: false,
+                throw_decode_expr: None,
+                doc: None,
+            }],
+            methods: vec![],
+            streams: vec![],
+            doc: None,
+        };
+        let rendered = render_class(&cls, "boltffi");
+        assert!(rendered.contains("let ptr = payload.withUnsafeBytes"));
+        assert!(rendered.contains("guard let ptr = ptr else {"));
+        assert!(!rendered.contains("guard let ptr = payload.withUnsafeBytes"));
+    }
+
+    #[test]
     fn snapshot_sync_function_with_multiple_string_params() {
         let func = SwiftFunction {
             name: "concat".to_string(),

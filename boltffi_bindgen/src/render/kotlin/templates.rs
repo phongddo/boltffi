@@ -1032,6 +1032,79 @@ mod tests {
     }
 
     #[test]
+    fn class_constructor_with_multiple_wire_writers_uses_qualified_run_blocks() {
+        let cls = KotlinClass {
+            class_name: "Connection".to_string(),
+            doc: None,
+            prefix: "boltffi".to_string(),
+            ffi_free: "boltffi_connection_free".to_string(),
+            constructors: vec![KotlinConstructor {
+                name: "Connection".to_string(),
+                surface: KotlinConstructorSurface::Constructor,
+                is_fallible: true,
+                return_type: None,
+                throws: false,
+                err_type: "FfiException".to_string(),
+                return_is_direct: false,
+                return_cast: String::new(),
+                decode_expr: String::new(),
+                is_blittable_return: false,
+                signature_params: vec![
+                    KotlinSignatureParam {
+                        name: "searchResult".to_string(),
+                        kotlin_type: "SearchResult".to_string(),
+                    },
+                    KotlinSignatureParam {
+                        name: "filter".to_string(),
+                        kotlin_type: "Filter".to_string(),
+                    },
+                ],
+                wire_writers: vec![
+                    KotlinWireWriter::WireBuffer {
+                        binding_name: "searchResultWire".to_string(),
+                        size_expr: "searchResult.wireEncodedSize()".to_string(),
+                        encode_expr: "searchResult.wireEncodeTo(wire)".to_string(),
+                    },
+                    KotlinWireWriter::WireBuffer {
+                        binding_name: "filterWire".to_string(),
+                        size_expr: "filter.wireEncodedSize()".to_string(),
+                        encode_expr: "filter.wireEncodeTo(wire)".to_string(),
+                    },
+                ],
+                wire_writer_closes: vec![
+                    "searchResultWire.close()".to_string(),
+                    "filterWire.close()".to_string(),
+                ],
+                native_args: vec![
+                    "searchResultWire.buffer".to_string(),
+                    "filterWire.buffer".to_string(),
+                ],
+                ffi_name: "boltffi_connection_open".to_string(),
+                doc: None,
+            }],
+            methods: vec![],
+            streams: vec![],
+            use_companion_methods: false,
+        };
+        let template = ClassTemplate {
+            class_name: &cls.class_name,
+            doc: &cls.doc,
+            constructors: &cls.constructors,
+            methods: &cls.methods,
+            streams: &cls.streams,
+            use_companion_methods: cls.use_companion_methods,
+            has_companion_factories: cls.has_companion_factories(),
+            has_static_methods: cls.has_static_methods(),
+            prefix: &cls.prefix,
+            ffi_free: &cls.ffi_free,
+        };
+        let rendered = template.render().unwrap();
+        assert!(rendered.contains("kotlin.run {\n            val wire = searchResultWire.writer"));
+        assert!(rendered.contains("kotlin.run {\n            val wire = filterWire.writer"));
+        assert!(!rendered.contains("\n        run {\n            val wire = "));
+    }
+
+    #[test]
     fn snapshot_class_with_static_method() {
         let cls = KotlinClass {
             class_name: "Logger".to_string(),

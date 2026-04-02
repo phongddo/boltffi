@@ -29,6 +29,7 @@ public final class DemoTest {
         testVecStrings();
         testOptions();
         testRecordsWithVecs();
+        testConstructorCoverageMatrix();
         testClosures();
         testSyncCallbacks();
         testAsyncCallbacks();
@@ -603,6 +604,127 @@ public final class DemoTest {
         assert ts.label().equals("math") : "echoTaggedScores.label";
         assert ts.scores().length == 2 : "echoTaggedScores.scores.length";
         assert Math.abs(Demo.averageScore(new TaggedScores("x", new double[]{80.0, 100.0})) - 90.0) < 0.0001 : "averageScore";
+
+        System.out.println("  PASS\n");
+    }
+
+    private static void testConstructorCoverageMatrix() {
+        System.out.println("Testing constructor coverage matrix...");
+
+        try (ConstructorCoverageMatrix base = new ConstructorCoverageMatrix()) {
+            assert base.constructorVariant().equals("new") : "ConstructorCoverageMatrix() variant";
+            assert base.summary().equals("default") : "ConstructorCoverageMatrix() summary";
+            assert base.payloadChecksum() == 0 : "ConstructorCoverageMatrix() checksum";
+            assert base.vectorCount() == 0 : "ConstructorCoverageMatrix() vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix scalarMix = new ConstructorCoverageMatrix(7, true, Priority.HIGH)) {
+            assert scalarMix.constructorVariant().equals("with_scalar_mix") : "with_scalar_mix variant";
+            assert scalarMix.summary().equals("version=7;enabled=true;priority=high") : "with_scalar_mix summary";
+            assert scalarMix.payloadChecksum() == 0 : "with_scalar_mix checksum";
+            assert scalarMix.vectorCount() == 0 : "with_scalar_mix vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix stringAndBytes = new ConstructorCoverageMatrix("bolt", new byte[]{1, 2, 3, 4})) {
+            assert stringAndBytes.constructorVariant().equals("with_string_and_bytes") : "with_string_and_bytes variant";
+            assert stringAndBytes.summary().equals("label=bolt;bytes=4") : "with_string_and_bytes summary";
+            assert stringAndBytes.payloadChecksum() == 10 : "with_string_and_bytes checksum";
+            assert stringAndBytes.vectorCount() == 4 : "with_string_and_bytes vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix blittableAndRecord = new ConstructorCoverageMatrix(
+            new Point(1.5, 2.5),
+            new Person("Ali", 31)
+        )) {
+            assert blittableAndRecord.constructorVariant().equals("with_blittable_and_record") : "with_blittable_and_record variant";
+            assert blittableAndRecord.summary().equals("origin=1.5:2.5;person=Ali#31") : "with_blittable_and_record summary";
+            assert blittableAndRecord.payloadChecksum() == 0 : "with_blittable_and_record checksum";
+            assert blittableAndRecord.vectorCount() == 1 : "with_blittable_and_record vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix optionalProfileAndCursor = new ConstructorCoverageMatrix(
+            Optional.of(new UserProfile("Nora", 29, Optional.of("nora@example.com"), Optional.of(9.5))),
+            Optional.of("cursor-7")
+        )) {
+            assert optionalProfileAndCursor.constructorVariant().equals("with_optional_profile_and_cursor") : "with_optional_profile_and_cursor variant";
+            assert optionalProfileAndCursor.summary().equals("profile=Nora#29#nora@example.com#9.5;cursor=cursor-7") : "with_optional_profile_and_cursor summary";
+            assert optionalProfileAndCursor.payloadChecksum() == 0 : "with_optional_profile_and_cursor checksum";
+            assert optionalProfileAndCursor.vectorCount() == 2 : "with_optional_profile_and_cursor vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix vectorsAndPolygon = new ConstructorCoverageMatrix(
+            Arrays.asList("ffi", "swift"),
+            Arrays.asList(new Point(0.0, 0.0), new Point(1.0, 1.0)),
+            new Polygon(Arrays.asList(new Point(0.0, 0.0), new Point(2.0, 0.0), new Point(1.0, 1.0)))
+        )) {
+            assert vectorsAndPolygon.constructorVariant().equals("with_vectors_and_polygon") : "with_vectors_and_polygon variant";
+            assert vectorsAndPolygon.summary().equals("tags=ffi|swift;anchors=2;polygon=3") : "with_vectors_and_polygon summary";
+            assert vectorsAndPolygon.payloadChecksum() == 0 : "with_vectors_and_polygon checksum";
+            assert vectorsAndPolygon.vectorCount() == 7 : "with_vectors_and_polygon vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix collectionRecords = new ConstructorCoverageMatrix(
+            new Team("Platform", Arrays.asList("Ali", "Nora")),
+            new Classroom(Arrays.asList(new Person("Sam", 20), new Person("Lea", 21))),
+            new Polygon(Arrays.asList(new Point(0.0, 0.0), new Point(1.0, 0.0), new Point(1.0, 1.0)))
+        )) {
+            assert collectionRecords.constructorVariant().equals("with_collection_records") : "with_collection_records variant";
+            assert collectionRecords.summary().equals("team=Platform;members=2;students=2;polygon=3") : "with_collection_records summary";
+            assert collectionRecords.payloadChecksum() == 0 : "with_collection_records checksum";
+            assert collectionRecords.vectorCount() == 7 : "with_collection_records vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix enumMix = new ConstructorCoverageMatrix(
+            new Filter.ByTags(Arrays.asList("ffi", "jni")),
+            new Message.Image("https://example.com/image.png", 640, 480),
+            new Task("ship", Priority.CRITICAL, false)
+        )) {
+            assert enumMix.constructorVariant().equals("with_enum_mix") : "with_enum_mix variant";
+            assert enumMix.summary().equals(
+                "filter=tags:ffi|jni;message=image:https://example.com/image.png#640x480;task=ship#critical"
+            ) : "with_enum_mix summary";
+            assert enumMix.payloadChecksum() == 0 : "with_enum_mix checksum";
+            assert enumMix.vectorCount() == 1 : "with_enum_mix vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix everything = new ConstructorCoverageMatrix(
+            new Person("Ali", 31),
+            new Address("Main", "AMS", "1000"),
+            new UserProfile("Nora", 29, Optional.of("nora@example.com"), Optional.of(9.5)),
+            new SearchResult("route", 5, Optional.of("next-9"), Optional.of(7.5)),
+            new byte[]{4, 5, 6},
+            new Filter.ByRange(1.0, 3.0),
+            Arrays.asList("alpha", "beta")
+        )) {
+            assert everything.constructorVariant().equals("with_everything") : "with_everything variant";
+            assert everything.summary().equals(
+                "person=Ali#31;city=AMS;profile=profile=Nora#29#nora@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta"
+            ) : "with_everything summary";
+            assert everything.payloadChecksum() == 15 : "with_everything checksum";
+            assert everything.vectorCount() == 10 : "with_everything vectorCount";
+        }
+
+        try (ConstructorCoverageMatrix fallible = new ConstructorCoverageMatrix(
+            new byte[]{7, 8},
+            new SearchResult("search", 4, Optional.of("cursor-4"), Optional.empty()),
+            new Filter.ByName("ali")
+        )) {
+            assert fallible.constructorVariant().equals("try_with_payload_and_search_result") : "try_with_payload_and_search_result variant";
+            assert fallible.summary().equals("query=search;cursor=cursor-4;filter=name:ali") : "try_with_payload_and_search_result summary";
+            assert fallible.payloadChecksum() == 15 : "try_with_payload_and_search_result checksum";
+            assert fallible.vectorCount() == 6 : "try_with_payload_and_search_result vectorCount";
+        }
+
+        try {
+            new ConstructorCoverageMatrix(
+                new byte[0],
+                new SearchResult("search", 4, Optional.empty(), Optional.empty()),
+                Filter.None.INSTANCE
+            );
+            assert false : "try_with_payload_and_search_result should fail for empty payload";
+        } catch (RuntimeException expected) {
+            assert expected.getMessage().contains("Constructor failed") : "try_with_payload_and_search_result error";
+        }
 
         System.out.println("  PASS\n");
     }

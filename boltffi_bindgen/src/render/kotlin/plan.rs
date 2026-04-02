@@ -560,7 +560,7 @@ impl KotlinWireWriter {
                 size_expr,
                 encode_expr,
             } => format!(
-                "val {binding_name} = WireWriterPool.acquire({size_expr})\n        run {{\n            val wire = {binding_name}.writer\n            {encode_expr}\n        }}"
+                "val {binding_name} = WireWriterPool.acquire({size_expr})\n        kotlin.run {{\n            val wire = {binding_name}.writer\n            {encode_expr}\n        }}"
             ),
             Self::PackedBuffer {
                 binding_name,

@@ -1,12 +1,12 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 1512
+assertion_line: 1669
 expression: template.render().unwrap()
 ---
 
 fun processPoint(point: Point): Point {
     val pointWire = WireWriterPool.acquire(Point.WIRE_SIZE)
-        run {
+        kotlin.run {
             val wire = pointWire.writer
             PointWriter.write(point)
         }

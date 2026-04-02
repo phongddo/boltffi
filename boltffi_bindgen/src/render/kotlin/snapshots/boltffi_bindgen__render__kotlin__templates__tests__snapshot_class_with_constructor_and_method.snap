@@ -1,6 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 1379
+assertion_line: 1536
 expression: template.render().unwrap()
 ---
 class Database private constructor(internal val handle: Long) : AutoCloseable {
@@ -9,7 +9,7 @@ class Database private constructor(internal val handle: Long) : AutoCloseable {
     constructor(path: String) : this(
         kotlin.run {
             val pathWire = WireWriterPool.acquire(BoltFFIWire.sizeString(path))
-        run {
+        kotlin.run {
             val wire = pathWire.writer
             BoltFFIWire.writeString(path)
         }

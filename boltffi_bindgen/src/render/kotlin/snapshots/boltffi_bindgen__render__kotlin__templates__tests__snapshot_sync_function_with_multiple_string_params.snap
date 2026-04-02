@@ -1,17 +1,17 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 1559
+assertion_line: 1716
 expression: template.render().unwrap()
 ---
 
 fun concat(a: String, b: String): String {
     val aWire = WireWriterPool.acquire(BoltFFIWire.sizeString(a))
-        run {
+        kotlin.run {
             val wire = aWire.writer
             BoltFFIWire.writeString(a)
         }
     val bWire = WireWriterPool.acquire(BoltFFIWire.sizeString(b))
-        run {
+        kotlin.run {
             val wire = bWire.writer
             BoltFFIWire.writeString(b)
         }

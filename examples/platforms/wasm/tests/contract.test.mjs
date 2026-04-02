@@ -15,6 +15,8 @@ const unsupportedTopLevelFunctions = new Set();
 const unsupportedTypeMembers = new Set([
   "classes/streams.rs::EventBus::subscribeValues",
   "classes/streams.rs::EventBus::subscribePoints",
+  "classes/streams.rs::EventBus::subscribeValuesBatch",
+  "classes/streams.rs::EventBus::subscribeValuesCallback",
 ]);
 
 const tsKeywords = new Set([

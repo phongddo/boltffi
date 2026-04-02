@@ -1,4 +1,5 @@
 pub mod async_methods;
+pub mod constructor_matrix;
 pub mod constructors;
 pub mod methods;
 pub mod static_methods;
@@ -7,6 +8,7 @@ pub mod thread_safe;
 pub mod unsafe_single_threaded;
 
 pub use async_methods::*;
+pub use constructor_matrix::*;
 pub use constructors::*;
 pub use methods::*;
 pub use static_methods::*;

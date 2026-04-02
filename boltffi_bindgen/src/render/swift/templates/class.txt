@@ -14,11 +14,13 @@
 {%- endif %}
 {%- endfor %}
 {%- if ctor.is_optional() %}
-        guard let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %} else {
+        let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        guard let ptr = ptr else {
             return nil
         }
 {%- elif ctor.is_fallible() %}
-        guard let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %} else {
+        let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        guard let ptr = ptr else {
             throw FfiError(message: takeLastErrorMessage())
         }
 {%- else %}
@@ -51,11 +53,13 @@
 {%- endif %}
 {%- endfor %}
 {%- if ctor.is_optional() %}
-        guard let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %} else {
+        let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        guard let ptr = ptr else {
             return nil
         }
 {%- elif ctor.is_fallible() %}
-        guard let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %} else {
+        let ptr = {% for w in ctor.annotated_closure_wrappers() %}{{ w }} {% endfor %}{{ ctor.call_expr() }}{% for _ in ctor.closure_wrappers() %} }{% endfor %}
+        guard let ptr = ptr else {
             throw FfiError(message: takeLastErrorMessage())
         }
 {%- else %}
