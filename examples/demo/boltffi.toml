@@ -44,3 +44,7 @@ package = "com.boltffi.demo"
 enabled = true
 output = "../platforms/java/src/main/java"
 host_targets = ["current"]
+
+[targets.dart]
+enabled = true
+output = "../platforms/dart/dist"

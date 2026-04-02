@@ -1,0 +1,27 @@
+final class $$Native {
+{%- for cfunc in cfuncs %}
+  @$$ffi.Native<
+    {{ cfunc.return_type.native_type() }} Function(
+{%- for param in cfunc.params %}
+      {{ param.native_type.native_type() }},
+{%- endfor %}
+    )
+  >({%if cfunc.is_leaf %}isLeaf: true{% endif %})
+  external static {{ cfunc.return_type.dart_sub_type() }} {{ cfunc.symbol }}(
+  {%- for param in cfunc.params %}
+    {{ param.native_type.dart_sub_type() }} {{ param.name }},
+  {%- endfor %}
+  );
+{% endfor %}
+  @$$ffi.Native<$$ffi.Void Function(FfiString)>()
+  external static void boltffi_free_string(FfiString s);
+
+  @$$ffi.Native<$$ffi.Void Function(FfiBuf_u8)>()
+  external static void boltffi_free_buf(FfiBuf_u8 buf);
+
+  @$$ffi.Native<FfiStatus Function($$ffi.Pointer<FfiString>)>()
+  external static FfiStatus boltffi_last_error_message($$ffi.Pointer<FfiString> out);
+
+  @$$ffi.Native<$$ffi.Void Function()>()
+  external static void boltffi_clear_last_error();
+}

@@ -1,0 +1,334 @@
+// ignore_for_file: camel_case_types, non_constant_identifier_names, unused_element, unused_local_variable, library_prefixes, library_private_types_in_public_api
+
+import 'dart:convert' as $$convert;
+import 'dart:typed_data' as $$typed_data;
+import 'dart:ffi' as $$ffi;
+
+final class FfiStatus extends $$ffi.Struct {
+  @$$ffi.Int32()
+  external int code;
+}
+
+final class FfiString extends $$ffi.Struct {
+  external $$ffi.Pointer<$$ffi.Uint8> ptr;
+
+  @$$ffi.UintPtr()
+  external int len;
+
+  @$$ffi.UintPtr()
+  external int cap;
+}
+
+final class FfiBuf_u8 extends $$ffi.Struct {
+  external $$ffi.Pointer<$$ffi.Uint8> ptr;
+
+  @$$ffi.UintPtr()
+  external int len;
+
+  @$$ffi.UintPtr()
+  external int cap;
+
+  @$$ffi.UintPtr()
+  external int align;
+}
+
+final class FfiError extends $$ffi.Struct {
+  external FfiString message;
+}
+
+final class BoltFFICallbackHandle extends $$ffi.Struct {
+  @$$ffi.Uint64()
+  external int handle;
+
+  external $$ffi.Pointer<$$ffi.Void> vtable;
+}
+
+final class FfiException implements Exception {
+  final int code;
+  final String message;
+
+  const FfiException(this.code, this.message);
+
+  @override
+  String toString() {
+    return 'FfiException ($code): $message';
+  }
+}
+
+final class WireWriter {
+  $$typed_data.Uint8List _buf;
+
+  int _offset;
+
+  void withByteData(int size, void Function($$typed_data.ByteData) writer) {
+    final nextOffset = _offset + size;
+    final data = $$typed_data.ByteData.sublistView(buf, _offset, nextOffset);
+    writer(data);
+    _offset = nextOffset;
+  }
+
+  WireWriter([int initialCapacity = 256])
+    : _buf = $$typed_data.Uint8List(initialCapacity),
+      _offset = 0;
+
+  $$typed_data.Uint8List get buf => _buf;
+
+  int get len => _offset;
+
+  void ensureCapacity(int additionalBytes) {
+    assert(additionalBytes > 0);
+
+    final nextOffset = _offset + additionalBytes;
+    if (nextOffset <= buf.lengthInBytes) {
+      return;
+    }
+    var newSize = buf.lengthInBytes;
+    while (newSize < nextOffset) {
+      newSize *= 2;
+    }
+    final newBuf = $$typed_data.Uint8List(newSize);
+    newBuf.setRange(0, _offset, buf);
+    _buf = newBuf;
+  }
+
+  void write(int size, void Function($$typed_data.ByteData) writer) {
+    ensureCapacity(size);
+    withByteData(size, writer);
+  }
+
+  void writeU8(int v) => write(1, (b) => b.setUint8(0, v));
+  void writeI8(int v) => write(1, (b) => b.setInt8(0, v));
+  void writeU16(int v) =>
+      write(2, (b) => b.setUint16(0, v, $$typed_data.Endian.little));
+  void writeI16(int v) =>
+      write(2, (b) => b.setInt16(0, v, $$typed_data.Endian.little));
+  void writeU32(int v) =>
+      write(4, (b) => b.setUint32(0, v, $$typed_data.Endian.little));
+  void writeI32(int v) =>
+      write(4, (b) => b.setInt32(0, v, $$typed_data.Endian.little));
+  void writeU64(int v) =>
+      write(8, (b) => b.setUint64(0, v, $$typed_data.Endian.little));
+  void writeI64(int v) =>
+      write(8, (b) => b.setInt64(0, v, $$typed_data.Endian.little));
+  void writeF32(double v) =>
+      write(4, (b) => b.setFloat32(0, v, $$typed_data.Endian.little));
+  void writeF64(double v) =>
+      write(8, (b) => b.setFloat64(0, v, $$typed_data.Endian.little));
+
+  void writeBool(bool v) => writeU8(v ? 1 : 0);
+
+  void writeBytes($$typed_data.Uint8List v) => write(
+    v.lengthInBytes,
+    (b) => b.buffer
+        .asUint8List(b.offsetInBytes, v.lengthInBytes)
+        .setRange(0, v.lengthInBytes, v),
+  );
+
+  void writeString(String v) {
+    final bytes = $$convert.utf8.encode(v);
+    writeU32(bytes.length);
+    writeBytes(bytes);
+  }
+
+  void writeUri(Uri v) => writeString(v.toString());
+
+  void writeDuration(Duration v) {
+    final micros = v.inMicroseconds;
+    final seconds = micros ~/ 1000000;
+    final nanos = (micros % 1000000) * 1000;
+    writeU64(seconds);
+    writeU32(nanos);
+  }
+
+  void writeInstant(DateTime v) {}
+}
+
+class WireReader {
+  static final Finalizer<FfiBuf_u8> _finalizer = Finalizer(
+    (buf) => $$Native.boltffi_free_buf(buf),
+  );
+
+  final FfiBuf_u8 owned;
+  final $$typed_data.Uint8List _buf;
+  int _offset;
+
+  WireReader(this.owned, [this._offset = 0])
+    : _buf = owned.ptr.asTypedList(owned.len) {
+    _finalizer.attach(this, owned, detach: this);
+  }
+
+  void free() {
+    _finalizer.detach(this);
+    $$Native.boltffi_free_buf(owned);
+  }
+
+  T withByteData<T>(int size, T Function($$typed_data.ByteData) reader) {
+    final nextOffset = _offset + size;
+    final data = $$typed_data.ByteData.sublistView(_buf, _offset, nextOffset);
+    final r = reader(data);
+    _offset = nextOffset;
+    return r;
+  }
+
+  void ensureCapacity(int additionalBytes) {
+    if (_offset + additionalBytes > _buf.lengthInBytes) {
+      throw StateError(
+        "Buffer overflow: requested ${_offset + additionalBytes} bytes, but capacity is $_buf.lengthInBytes",
+      );
+    }
+  }
+
+  T read<T>(int size, T Function($$typed_data.ByteData) reader) {
+    ensureCapacity(size);
+    return withByteData(size, reader);
+  }
+
+  int readU8() => read(1, (b) => b.getUint8(0));
+  int readI8() => read(1, (b) => b.getInt8(0));
+  int readU16() => read(2, (b) => b.getUint16(0, $$typed_data.Endian.little));
+  int readI16() => read(2, (b) => b.getInt16(0, $$typed_data.Endian.little));
+  int readU32() => read(4, (b) => b.getUint32(0, $$typed_data.Endian.little));
+  int readI32() => read(4, (b) => b.getInt32(0, $$typed_data.Endian.little));
+  int readU64() => read(8, (b) => b.getUint64(0, $$typed_data.Endian.little));
+  int readI64() => read(8, (b) => b.getInt64(0, $$typed_data.Endian.little));
+  double readF32() => read(4, (b) => b.getFloat32(0, $$typed_data.Endian.little));
+  double readF64() => read(8, (b) => b.getFloat64(0, $$typed_data.Endian.little));
+
+  bool readBool() {
+    final b = readU8();
+
+    return switch (b) {
+      0 => false,
+      1 => true,
+      _ => throw FfiException(-1, "Invalid bool value: $b"),
+    };
+  }
+
+  $$typed_data.Uint8List readUint8List() {
+    final len = readI32();
+    final size = len;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst;
+    });
+  }
+
+  $$typed_data.Int8List readInt8List() {
+    final len = readI32();
+    final size = len;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Int8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst;
+    });
+  }
+
+  $$typed_data.Uint16List readUint16List() {
+    final len = readI32();
+    final size = len * 2;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asUint16List(0, len);
+    });
+  }
+
+  $$typed_data.Int16List readInt16List() {
+    final len = readI32();
+    final size = len * 2;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asInt16List(0, len);
+    });
+  }
+
+  $$typed_data.Uint32List readUint32List() {
+    final len = readI32();
+    final size = len * 4;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asUint32List(0, len);
+    });
+  }
+
+  $$typed_data.Int32List readInt32List() {
+    final len = readI32();
+    final size = len * 4;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asInt32List(0, len);
+    });
+  }
+
+  $$typed_data.Uint64List readUint64List() {
+    final len = readI32();
+    final size = len * 8;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asUint64List(0, len);
+    });
+  }
+
+  $$typed_data.Int64List readInt64List() {
+    final len = readI32();
+    final size = len * 8;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asInt64List(0, len);
+    });
+  }
+
+  $$typed_data.Float32List readFloat32List() {
+    final len = readI32();
+    final size = len * 4;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asFloat32List(0, len);
+    });
+  }
+
+  $$typed_data.Float64List readFloat64List() {
+    final len = readI32();
+    final size = len * 8;
+
+    return read(size, (b) {
+      final dst = $$typed_data.Uint8List(size);
+      dst.setAll(0, b.buffer.asUint8List(b.offsetInBytes, size));
+      return dst.buffer.asFloat64List(0, len);
+    });
+  }
+
+  T? readOptional<T>(T Function(WireReader) readValue) {
+    final tag = readU8();
+
+    return switch (tag) {
+      0 => null,
+      1 => readValue(this),
+      _ => throw FfiException(-1, "Invalid Optional tag: $tag"),
+    };
+  }
+
+  List<T> readList<T>(T Function(WireReader) readValue) {
+    final len = readI32();
+
+    return List.generate(len, (_) => readValue(this));
+  }
+
+  String readString() => $$convert.utf8.decode(readUint8List());
+}
