@@ -55,7 +55,8 @@ pub(super) struct ClassifiedParamTransform {
 #[derive(Clone)]
 pub(super) struct WireEncodedParam {
     pub(super) kind: WireEncodedParamKind,
-    pub(super) rust_type: syn::Type,
+    pub(super) decoded_type: syn::Type,
+    pub(super) passing: WireEncodedPassing,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -63,6 +64,35 @@ pub(super) enum WireEncodedParamKind {
     Required,
     Vec,
     Option,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum WireEncodedPassing {
+    ByValue,
+    SharedRef,
+    MutableRef,
+}
+
+impl WireEncodedParam {
+    pub(super) fn from_type(kind: WireEncodedParamKind, ty: &Type) -> Self {
+        match ty {
+            Type::Reference(reference) if reference.mutability.is_some() => Self {
+                kind,
+                decoded_type: (*reference.elem).clone(),
+                passing: WireEncodedPassing::MutableRef,
+            },
+            Type::Reference(reference) => Self {
+                kind,
+                decoded_type: (*reference.elem).clone(),
+                passing: WireEncodedPassing::SharedRef,
+            },
+            _ => Self {
+                kind,
+                decoded_type: ty.clone(),
+                passing: WireEncodedPassing::ByValue,
+            },
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -203,10 +233,10 @@ impl<'a> ParamTransformClassifier<'a> {
                                 ParamValueStrategy::WireEncoded(WireParamStrategy::Vec),
                                 ParamPassingStrategy::ByValue,
                             ),
-                            transform: ParamTransform::WireEncoded(WireEncodedParam {
-                                kind: WireEncodedParamKind::Vec,
-                                rust_type: ty.clone(),
-                            }),
+                            transform: ParamTransform::WireEncoded(WireEncodedParam::from_type(
+                                WireEncodedParamKind::Vec,
+                                ty,
+                            )),
                         }
                     }
                 }
@@ -232,10 +262,10 @@ impl<'a> ParamTransformClassifier<'a> {
                                 ParamValueStrategy::WireEncoded(WireParamStrategy::Option),
                                 Self::passing_strategy(ty),
                             ),
-                            transform: ParamTransform::WireEncoded(WireEncodedParam {
-                                kind: WireEncodedParamKind::Option,
-                                rust_type: ty.clone(),
-                            }),
+                            transform: ParamTransform::WireEncoded(WireEncodedParam::from_type(
+                                WireEncodedParamKind::Option,
+                                ty,
+                            )),
                         }
                     }
                 }
@@ -268,10 +298,10 @@ impl<'a> ParamTransformClassifier<'a> {
                     ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
                     Self::passing_strategy(ty),
                 ),
-                transform: ParamTransform::WireEncoded(WireEncodedParam {
-                    kind: WireEncodedParamKind::Required,
-                    rust_type: ty.clone(),
-                }),
+                transform: ParamTransform::WireEncoded(WireEncodedParam::from_type(
+                    WireEncodedParamKind::Required,
+                    ty,
+                )),
             };
         }
 
@@ -282,6 +312,19 @@ impl<'a> ParamTransformClassifier<'a> {
                     ParamPassingStrategy::SharedRef,
                 ),
                 transform: ParamTransform::StrRef,
+            };
+        }
+
+        if matches!(ty, Type::Reference(_)) {
+            return ClassifiedParamTransform {
+                contract: ParamContract::new(
+                    ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
+                    Self::passing_strategy(ty),
+                ),
+                transform: ParamTransform::WireEncoded(WireEncodedParam::from_type(
+                    WireEncodedParamKind::Required,
+                    ty,
+                )),
             };
         }
 
@@ -312,10 +355,10 @@ impl<'a> ParamTransformClassifier<'a> {
                         ParamValueStrategy::WireEncoded(WireParamStrategy::SingleValue),
                         Self::passing_strategy(ty),
                     ),
-                    transform: ParamTransform::WireEncoded(WireEncodedParam {
-                        kind: WireEncodedParamKind::Required,
-                        rust_type: ty.clone(),
-                    }),
+                    transform: ParamTransform::WireEncoded(WireEncodedParam::from_type(
+                        WireEncodedParamKind::Required,
+                        ty,
+                    )),
                 },
             };
         }

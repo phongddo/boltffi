@@ -4,7 +4,8 @@ use syn::Ident;
 
 use super::ParamLoweringState;
 use super::transform::{
-    ParamTransform, WireEncodedParam, WireEncodedParamKind, len_ident, ptr_ident,
+    ParamTransform, WireEncodedParam, WireEncodedParamKind, WireEncodedPassing, len_ident,
+    ptr_ident,
 };
 use crate::index::custom_types::{
     CustomTypeRegistry, contains_custom_types, from_wire_expr_owned, wire_type_for,
@@ -100,7 +101,7 @@ impl<'a> ValueParamDecoder<'a> {
         len_name: &Ident,
         requires_unsafe: bool,
     ) -> TokenStream {
-        let rust_type = &wire_param.rust_type;
+        let rust_type = &wire_param.decoded_type;
         let bytes_expr = self.wire_bytes_expression(ptr_name, len_name, requires_unsafe);
         let on_wire_record_error = self.on_wire_record_error;
 
@@ -500,8 +501,35 @@ impl<'a> ValueParamDecoder<'a> {
         name: &Ident,
         wire_param: &WireEncodedParam,
     ) {
-        self.push_wire_encoded_param(&mut acc.ffi_params, &mut acc.setup, name, wire_param, false);
-        acc.call_args.push(quote! { #name });
+        match wire_param.passing {
+            WireEncodedPassing::ByValue => {
+                self.push_wire_encoded_param(
+                    &mut acc.ffi_params,
+                    &mut acc.setup,
+                    name,
+                    wire_param,
+                    false,
+                );
+                acc.call_args.push(quote! { #name });
+            }
+            WireEncodedPassing::SharedRef | WireEncodedPassing::MutableRef => {
+                let storage_name = Ident::new(&format!("{}_storage", name), name.span());
+                self.push_wire_encoded_param(
+                    &mut acc.ffi_params,
+                    &mut acc.setup,
+                    &storage_name,
+                    wire_param,
+                    false,
+                );
+                let binding = match wire_param.passing {
+                    WireEncodedPassing::SharedRef => quote! { let #name = &#storage_name; },
+                    WireEncodedPassing::MutableRef => quote! { let #name = &mut #storage_name; },
+                    WireEncodedPassing::ByValue => unreachable!(),
+                };
+                acc.setup.push(binding);
+                acc.call_args.push(quote! { #name });
+            }
+        }
     }
 
     fn lower_async_wire_encoded_param(
@@ -510,9 +538,37 @@ impl<'a> ValueParamDecoder<'a> {
         name: &Ident,
         wire_param: &WireEncodedParam,
     ) {
-        self.push_wire_encoded_param(&mut acc.ffi_params, &mut acc.setup, name, wire_param, true);
-        acc.move_vars.push(name.clone());
-        acc.call_args.push(quote! { #name });
+        match wire_param.passing {
+            WireEncodedPassing::ByValue => {
+                self.push_wire_encoded_param(
+                    &mut acc.ffi_params,
+                    &mut acc.setup,
+                    name,
+                    wire_param,
+                    true,
+                );
+                acc.move_vars.push(name.clone());
+                acc.call_args.push(quote! { #name });
+            }
+            WireEncodedPassing::SharedRef | WireEncodedPassing::MutableRef => {
+                let storage_name = Ident::new(&format!("{}_storage", name), name.span());
+                self.push_wire_encoded_param(
+                    &mut acc.ffi_params,
+                    &mut acc.setup,
+                    &storage_name,
+                    wire_param,
+                    true,
+                );
+                let binding = match wire_param.passing {
+                    WireEncodedPassing::SharedRef => quote! { let #name = &#storage_name; },
+                    WireEncodedPassing::MutableRef => quote! { let #name = &mut #storage_name; },
+                    WireEncodedPassing::ByValue => unreachable!(),
+                };
+                acc.thread_setup.push(binding);
+                acc.move_vars.push(storage_name);
+                acc.call_args.push(quote! { #name });
+            }
+        }
     }
 
     fn lower_sync_passable_param(
@@ -614,7 +670,8 @@ impl<'a> SyncValueParamLowerer<'a> {
             {
                 let wire_param = WireEncodedParam {
                     kind: WireEncodedParamKind::Required,
-                    rust_type: rust_type.clone(),
+                    decoded_type: rust_type.clone(),
+                    passing: WireEncodedPassing::ByValue,
                 };
                 self.decoder
                     .lower_sync_wire_encoded_param(acc, name, &wire_param);
@@ -682,7 +739,8 @@ impl<'a> AsyncValueParamLowerer<'a> {
             {
                 let wire_param = WireEncodedParam {
                     kind: WireEncodedParamKind::Required,
-                    rust_type: rust_type.clone(),
+                    decoded_type: rust_type.clone(),
+                    passing: WireEncodedPassing::ByValue,
                 };
                 self.decoder
                     .lower_async_wire_encoded_param(acc, name, &wire_param);

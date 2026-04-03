@@ -634,20 +634,20 @@ public final class DemoTest {
 
         try (ConstructorCoverageMatrix blittableAndRecord = new ConstructorCoverageMatrix(
             new Point(1.5, 2.5),
-            new Person("Ali", 31)
+            new Person("Alice", 31)
         )) {
             assert blittableAndRecord.constructorVariant().equals("with_blittable_and_record") : "with_blittable_and_record variant";
-            assert blittableAndRecord.summary().equals("origin=1.5:2.5;person=Ali#31") : "with_blittable_and_record summary";
+            assert blittableAndRecord.summary().equals("origin=1.5:2.5;person=Alice#31") : "with_blittable_and_record summary";
             assert blittableAndRecord.payloadChecksum() == 0 : "with_blittable_and_record checksum";
             assert blittableAndRecord.vectorCount() == 1 : "with_blittable_and_record vectorCount";
         }
 
         try (ConstructorCoverageMatrix optionalProfileAndCursor = new ConstructorCoverageMatrix(
-            Optional.of(new UserProfile("Nora", 29, Optional.of("nora@example.com"), Optional.of(9.5))),
+            Optional.of(new UserProfile("John", 29, Optional.of("john@example.com"), Optional.of(9.5))),
             Optional.of("cursor-7")
         )) {
             assert optionalProfileAndCursor.constructorVariant().equals("with_optional_profile_and_cursor") : "with_optional_profile_and_cursor variant";
-            assert optionalProfileAndCursor.summary().equals("profile=Nora#29#nora@example.com#9.5;cursor=cursor-7") : "with_optional_profile_and_cursor summary";
+            assert optionalProfileAndCursor.summary().equals("profile=John#29#john@example.com#9.5;cursor=cursor-7") : "with_optional_profile_and_cursor summary";
             assert optionalProfileAndCursor.payloadChecksum() == 0 : "with_optional_profile_and_cursor checksum";
             assert optionalProfileAndCursor.vectorCount() == 2 : "with_optional_profile_and_cursor vectorCount";
         }
@@ -664,8 +664,8 @@ public final class DemoTest {
         }
 
         try (ConstructorCoverageMatrix collectionRecords = new ConstructorCoverageMatrix(
-            new Team("Platform", Arrays.asList("Ali", "Nora")),
-            new Classroom(Arrays.asList(new Person("Sam", 20), new Person("Lea", 21))),
+            new Team("Platform", Arrays.asList("Alice", "John")),
+            new Classroom(Arrays.asList(new Person("Alice", 20), new Person("John", 21))),
             new Polygon(Arrays.asList(new Point(0.0, 0.0), new Point(1.0, 0.0), new Point(1.0, 1.0)))
         )) {
             assert collectionRecords.constructorVariant().equals("with_collection_records") : "with_collection_records variant";
@@ -688,9 +688,9 @@ public final class DemoTest {
         }
 
         try (ConstructorCoverageMatrix everything = new ConstructorCoverageMatrix(
-            new Person("Ali", 31),
+            new Person("Alice", 31),
             new Address("Main", "AMS", "1000"),
-            new UserProfile("Nora", 29, Optional.of("nora@example.com"), Optional.of(9.5)),
+            new UserProfile("John", 29, Optional.of("john@example.com"), Optional.of(9.5)),
             new SearchResult("route", 5, Optional.of("next-9"), Optional.of(7.5)),
             new byte[]{4, 5, 6},
             new Filter.ByRange(1.0, 3.0),
@@ -698,10 +698,17 @@ public final class DemoTest {
         )) {
             assert everything.constructorVariant().equals("with_everything") : "with_everything variant";
             assert everything.summary().equals(
-                "person=Ali#31;city=AMS;profile=profile=Nora#29#nora@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta"
+                "person=Alice#31;city=AMS;profile=profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0;tags=alpha|beta"
             ) : "with_everything summary";
             assert everything.payloadChecksum() == 15 : "with_everything checksum";
             assert everything.vectorCount() == 10 : "with_everything vectorCount";
+            assert everything.summarizeBorrowedInputs(
+                new UserProfile("John", 29, Optional.of("john@example.com"), Optional.of(9.5)),
+                new SearchResult("route", 5, Optional.of("next-9"), Optional.of(7.5)),
+                new Filter.ByRange(1.0, 3.0)
+            ).equals(
+                "profile=John#29#john@example.com#9.5;query=route;filter=range:1.0-3.0"
+            ) : "summarizeBorrowedInputs";
         }
 
         try (ConstructorCoverageMatrix fallible = new ConstructorCoverageMatrix(
