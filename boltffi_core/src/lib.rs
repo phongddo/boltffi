@@ -22,7 +22,9 @@ pub use boltffi_macros::{
 };
 #[cfg(target_arch = "wasm32")]
 pub use callback::WasmCallbackOwner;
-pub use callback::{CallbackForeignType, CallbackHandle, FromCallbackHandle};
+pub use callback::{
+    ArcFromCallbackHandle, BoxFromCallbackHandle, CallbackForeignType, CallbackHandle,
+};
 pub use custom_ffi::CustomFfiConvertible;
 pub use handle::HandleBox;
 pub use passable::{Passable, VecTransport, WirePassable};
@@ -54,7 +56,7 @@ pub use wasm::WASM_ABI_VERSION;
 #[cfg(target_arch = "wasm32")]
 pub use wasm::WasmCallbackOutBuf;
 #[cfg(target_arch = "wasm32")]
-pub use wasm::write_return_slot;
+pub use wasm::{take_packed_utf8_string, write_return_slot};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UnexpectedFfiCallbackError(pub String);
@@ -87,25 +89,6 @@ impl std::fmt::Display for CustomTypeConversionError {
 }
 
 impl std::error::Error for CustomTypeConversionError {}
-
-pub const VERSION_MAJOR: u32 = 0;
-pub const VERSION_MINOR: u32 = 1;
-pub const VERSION_PATCH: u32 = 0;
-
-#[unsafe(no_mangle)]
-pub extern "C" fn boltffi_version_major() -> u32 {
-    VERSION_MAJOR
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn boltffi_version_minor() -> u32 {
-    VERSION_MINOR
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn boltffi_version_patch() -> u32 {
-    VERSION_PATCH
-}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn boltffi_free_string(string: FfiString) {

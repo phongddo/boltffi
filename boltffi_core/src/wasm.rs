@@ -137,6 +137,18 @@ pub fn return_slot_addr() -> u32 {
 }
 
 #[cfg(target_arch = "wasm32")]
+pub unsafe fn take_packed_utf8_string(packed: u64) -> String {
+    if packed == 0 {
+        return String::new();
+    }
+
+    let pointer = (packed as u32) as usize;
+    let length = ((packed >> 32) as u32) as usize;
+    let bytes = unsafe { Vec::from_raw_parts(pointer as *mut u8, length, length) };
+    unsafe { String::from_utf8_unchecked(bytes) }
+}
+
+#[cfg(target_arch = "wasm32")]
 mod exports {
     #[unsafe(no_mangle)]
     pub extern "C" fn boltffi_wasm_abi_version() -> u32 {
