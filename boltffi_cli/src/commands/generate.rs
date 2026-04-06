@@ -94,6 +94,17 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
     }
 }
 
+pub fn run_generate_java_with_output_from_source_dir(
+    config: &Config,
+    output: Option<PathBuf>,
+    experimental: bool,
+    source_directory: &Path,
+    crate_name: &str,
+) -> Result<()> {
+    require_experimental_target(config, Target::Java, experimental)?;
+    generate_java_from_source_directory(config, output, source_directory, crate_name)
+}
+
 fn convert_type_mappings(
     config_mappings: &std::collections::HashMap<String, crate::config::TypeMapping>,
 ) -> TypeMappings {
@@ -327,6 +338,18 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
 }
 
 fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
+    let crate_dir = std::env::current_dir()
+        .and_then(|p| p.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    generate_java_from_source_directory(config, output, &crate_dir, config.library_name())
+}
+
+fn generate_java_from_source_directory(
+    config: &Config,
+    output: Option<PathBuf>,
+    source_directory: &Path,
+    crate_name: &str,
+) -> Result<()> {
     let jvm_enabled = config.is_java_jvm_enabled();
     let android_enabled = config.is_java_android_enabled();
 
@@ -363,11 +386,6 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
         source,
     })?;
 
-    let crate_dir = std::env::current_dir()
-        .and_then(|p| p.canonicalize())
-        .unwrap_or_else(|_| PathBuf::from("."));
-    let crate_name = config.library_name();
-
     let java_pointer_width_bits = match java_generation_mode(
         &output_dir,
         &configured_jvm_output,
@@ -378,7 +396,7 @@ fn generate_java(config: &Config, output: Option<PathBuf>) -> Result<()> {
         JavaGenerationMode::Jvm => host_pointer_width_bits(),
         JavaGenerationMode::Android => None,
     };
-    let mut module = scan_crate(&crate_dir, crate_name, java_pointer_width_bits)?;
+    let mut module = scan_crate(source_directory, crate_name, java_pointer_width_bits)?;
 
     let contract = ir::build_contract(&mut module);
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();

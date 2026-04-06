@@ -39,11 +39,10 @@ Astrolabe validation:
 - Later phase: add base + overlay config support, for example boltffi.toml plus
   boltffi.ci.toml, with deep-merge semantics.
 
-## Phase 1: Android target selection, aliases, and strict --no-build
+## Phase 1: Android target selection and strict --no-build
 
 - Scope: Android only.
-- Add Android architecture config parsing, validation, defaults, and alias normalization in
-  boltffi_cli/src/config.rs.
+- Add Android architecture config parsing, validation, and defaults in boltffi_cli/src/config.rs.
 - Add explicit Android target resolution helpers in boltffi_cli/src/target.rs.
 - Refactor Android build, pack, check, and doctor flows to use resolved Android targets instead
   of ALL_ANDROID.
@@ -132,6 +131,8 @@ Astrolabe validation:
 
 - Scope: support the Astrolabe-style release case where one host emits multiple desktop native
   outputs.
+- Java `pack --no-build` remains unsupported in Phase 4. This phase expands only the normal
+  build/package flow for JVM targets.
 - Extend targets.java.jvm.host_targets from “current host only” to “desired host outputs”.
 - Long-term JVM host target ID set:
     - current
@@ -151,6 +152,16 @@ Astrolabe validation:
 - Resolve current to the actual host target, then dedupe.
 - Add a desktop toolchain abstraction for JVM native linking, similar in spirit to Android NDK
   handling but separate from it.
+- All JVM build, metadata, and artifact-probe steps must resolve against the same effective Cargo
+  context:
+    - selected package
+    - manifest path
+    - toolchain selector
+    - target dir
+    - explicit target triple
+- Windows JVM artifact naming and native-link probing must be derived from the selected build
+  toolchain and reported Cargo outputs, not from the boltffi binary's own compile-time
+  `target_env`.
 - Explicitly support the known migration case: macOS host packaging linux-x86_64 when the Linux
   cross-toolchain is installed and configured.
 - Validate toolchain availability before build/link:
@@ -162,6 +173,7 @@ Astrolabe validation:
     - build/package every configured and toolchain-supported host target
     - fail early with a precise missing-toolchain error for unsupported configured targets
     - do not silently skip configured targets
+    - unsupported Java modes should be rejected before any partial packaging work starts
 - Output layout:
     - keep one directory per host target under dist/java/native/<host-target>/
     - make this layout stable so external Gradle packaging can collect it into astrolabe-
@@ -219,9 +231,8 @@ Astrolabe validation:
     - current-host staticlib packaging works on macOS, Linux x86_64, Linux aarch64, and
       Windows x86_64
     - cdylib fallback remains compatible
-    - pack java --no-build with staticlib succeeds when BoltFFI-captured native link metadata is
-      present
-    - pack java --no-build with staticlib fails clearly when that metadata is absent
+    - pack java --no-build fails clearly as unsupported in Phase 3 and remains unsupported in
+      Phase 4 unless the plan is updated explicitly
     - cross-host macOS-to-Linux packaging works when the Linux toolchain is configured
     - missing cross toolchain yields a clear failure
 - Reporting tests:

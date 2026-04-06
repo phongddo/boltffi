@@ -357,10 +357,25 @@ min_version = 8  # or 16, 17, 21
 
 [targets.java.jvm]
 enabled = true
-host_targets = ["current"]
+host_targets = ["current", "linux-x86_64"]
 ```
 
-`host_targets` defaults to `["current"]`. In Phase 3, `boltffi pack java` only supports packaging the current host target. `boltffi pack java --no-build` is intentionally unsupported; rerun without `--no-build`.
+`host_targets` defaults to `["current"]`. BoltFFI resolves `current` to the active machine target, dedupes it against explicit entries, and writes one native output per resolved host target under `dist/java/native/<host-target>/`. `boltffi pack java --no-build` is still intentionally unsupported; rerun without `--no-build`.
+
+Current Phase 4 support is intentionally narrow:
+
+- Current-host packaging works on `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, and `windows-x86_64`
+- Cross-host packaging is supported for the initial parity set, including the macOS release case of `linux-x86_64`
+- Cross-host targets must be fully configured up front; BoltFFI fails early instead of silently skipping them
+
+For the macOS to Linux desktop case, install the Rust target and provide a Linux linker that Cargo can use, for example via `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` or `BOLTFFI_JAVA_LINKER_X86_64_UNKNOWN_LINUX_GNU`.
+
+Cross-host JNI compilation also needs target-appropriate JNI headers. If the active `JAVA_HOME` does not contain the target platform header directory, point BoltFFI at a target-specific JDK or header directory:
+
+- `BOLTFFI_JAVA_HOME_X86_64_UNKNOWN_LINUX_GNU=/path/to/linux-jdk`
+- or `BOLTFFI_JAVA_INCLUDE_X86_64_UNKNOWN_LINUX_GNU=/path/to/linux-jdk/include/linux`
+
+Do not pass Cargo `--target` through `--cargo-arg` for `pack java`; BoltFFI resolves JVM targets from `targets.java.jvm.host_targets`.
 
 The `min_version` controls which language features the generated code uses:
 

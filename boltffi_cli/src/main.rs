@@ -3,6 +3,7 @@ mod build;
 mod check;
 mod commands;
 mod config;
+mod desktop;
 mod error;
 mod pack;
 mod reporter;
@@ -18,11 +19,11 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackWasmOptions,
+    PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
-use config::Config;
+use config::{Config, Target};
 use error::{CliError, Result};
 
 #[derive(Parser)]
@@ -597,6 +598,13 @@ fn run_release(
         println!("Environment check failed. Run 'boltffi check --fix' to install missing targets.");
         return Ok(());
     }
+
+    if release_requires_java_environment_validation(config, platform) {
+        if let Err(error) = check_java_packaging_prereqs(config, true, &cargo_args) {
+            println!("JVM packaging preflight failed: {error}");
+            return Err(error);
+        }
+    }
     println!();
 
     println!("[2/4] Building...");
@@ -621,102 +629,15 @@ fn run_release(
         GenerateOptions {
             target: GenerateTarget::All,
             output: None,
-            experimental: true,
+            experimental: false,
         },
     )?;
     println!();
 
     println!("[4/4] Packaging...");
 
-    match platform {
-        Some(BuildPlatformArg::Apple) => {
-            if config.is_apple_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Apple(PackAppleOptions {
-                        release: true,
-                        version: None,
-                        regenerate: false,
-                        no_build: true,
-                        spm_only: false,
-                        xcframework_only: false,
-                        layout: None,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-        }
-        Some(BuildPlatformArg::Android) => {
-            if config.is_android_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Android(PackAndroidOptions {
-                        release: true,
-                        regenerate: false,
-                        no_build: true,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-        }
-        Some(BuildPlatformArg::Wasm) => {
-            if config.is_wasm_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Wasm(PackWasmOptions {
-                        release: true,
-                        regenerate: false,
-                        no_build: true,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-        }
-        Some(BuildPlatformArg::All) | None => {
-            if config.is_apple_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Apple(PackAppleOptions {
-                        release: true,
-                        version: None,
-                        regenerate: false,
-                        no_build: true,
-                        spm_only: false,
-                        xcframework_only: false,
-                        layout: None,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-            if config.is_android_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Android(PackAndroidOptions {
-                        release: true,
-                        regenerate: false,
-                        no_build: true,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-            if config.is_wasm_enabled() {
-                run_pack(
-                    config,
-                    PackCommand::Wasm(PackWasmOptions {
-                        release: true,
-                        regenerate: false,
-                        no_build: true,
-                        cargo_args: cargo_args.clone(),
-                    }),
-                    reporter,
-                )?;
-            }
-        }
+    for command in release_pack_commands(config, platform, &cargo_args) {
+        run_pack(config, command, reporter)?;
     }
 
     println!();
@@ -725,12 +646,108 @@ fn run_release(
     Ok(())
 }
 
+fn release_pack_commands(
+    config: &Config,
+    platform: Option<BuildPlatformArg>,
+    cargo_args: &[String],
+) -> Vec<PackCommand> {
+    let mut commands = Vec::new();
+
+    match platform {
+        Some(BuildPlatformArg::Apple) => {
+            if config.is_apple_enabled() {
+                commands.push(PackCommand::Apple(PackAppleOptions {
+                    release: true,
+                    version: None,
+                    regenerate: false,
+                    no_build: true,
+                    spm_only: false,
+                    xcframework_only: false,
+                    layout: None,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+        }
+        Some(BuildPlatformArg::Android) => {
+            if config.is_android_enabled() {
+                commands.push(PackCommand::Android(PackAndroidOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+        }
+        Some(BuildPlatformArg::Wasm) => {
+            if config.is_wasm_enabled() {
+                commands.push(PackCommand::Wasm(PackWasmOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+        }
+        Some(BuildPlatformArg::All) | None => {
+            if config.is_apple_enabled() {
+                commands.push(PackCommand::Apple(PackAppleOptions {
+                    release: true,
+                    version: None,
+                    regenerate: false,
+                    no_build: true,
+                    spm_only: false,
+                    xcframework_only: false,
+                    layout: None,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+            if config.is_android_enabled() {
+                commands.push(PackCommand::Android(PackAndroidOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+            if config.is_wasm_enabled() {
+                commands.push(PackCommand::Wasm(PackWasmOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: true,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+            if config.should_process(Target::Java, false) {
+                commands.push(PackCommand::Java(PackJavaOptions {
+                    release: true,
+                    regenerate: true,
+                    no_build: false,
+                    experimental: false,
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
+        }
+    }
+
+    commands
+}
+
+fn release_requires_java_environment_validation(
+    config: &Config,
+    platform: Option<BuildPlatformArg>,
+) -> bool {
+    matches!(platform, Some(BuildPlatformArg::All) | None)
+        && config.should_process(Target::Java, false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
-        configured_wasm_target_triple_for_diagnostics, resolve_doctor_config,
+        BuildPlatformArg, configured_android_targets_for_diagnostics,
+        configured_apple_targets_for_diagnostics, configured_wasm_target_triple_for_diagnostics,
+        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
     };
+    use crate::commands::pack::PackCommand;
     use crate::target::RustTarget;
     use crate::{config::Config, error::CliError};
 
@@ -810,5 +827,153 @@ triple = "wasm32-wasip1"
         assert!(resolved.warning.as_deref().is_some_and(|warning| {
             warning.contains("using default Apple/Android/WASM target checks")
         }));
+    }
+
+    #[test]
+    fn release_all_includes_java_packaging_without_no_build() {
+        let config = parse_config(
+            r#"
+experimental = ["java"]
+
+[package]
+name = "mylib"
+
+[targets.apple]
+enabled = true
+
+[targets.android]
+enabled = true
+
+[targets.wasm]
+enabled = true
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert_eq!(commands.len(), 4);
+        assert!(matches!(
+            &commands[0],
+            PackCommand::Apple(options) if options.no_build
+        ));
+        assert!(matches!(
+            &commands[1],
+            PackCommand::Android(options) if options.no_build
+        ));
+        assert!(matches!(
+            &commands[2],
+            PackCommand::Wasm(options) if options.no_build
+        ));
+        assert!(matches!(
+            &commands[3],
+            PackCommand::Java(options)
+                if !options.no_build
+                    && options.release
+                    && options.regenerate
+                    && !options.experimental
+        ));
+    }
+
+    #[test]
+    fn release_platform_filter_does_not_add_java_for_non_all_platforms() {
+        let config = parse_config(
+            r#"
+experimental = ["java"]
+
+[package]
+name = "mylib"
+
+[targets.apple]
+enabled = true
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::Apple), &[]);
+
+        assert_eq!(commands.len(), 1);
+        assert!(matches!(
+            &commands[0],
+            PackCommand::Apple(options) if options.no_build
+        ));
+    }
+
+    #[test]
+    fn release_all_skips_java_when_experimental_gate_is_not_enabled() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(
+            !commands
+                .iter()
+                .any(|command| matches!(command, PackCommand::Java(_)))
+        );
+        assert!(!release_requires_java_environment_validation(
+            &config,
+            Some(BuildPlatformArg::All)
+        ));
+    }
+
+    #[test]
+    fn release_all_requires_java_environment_validation_when_enabled() {
+        let config = parse_config(
+            r#"
+experimental = ["java"]
+
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        assert!(release_requires_java_environment_validation(
+            &config,
+            Some(BuildPlatformArg::All)
+        ));
+        assert!(release_requires_java_environment_validation(&config, None));
+    }
+
+    #[test]
+    fn release_platform_filter_skips_java_environment_validation_for_non_all_platforms() {
+        let config = parse_config(
+            r#"
+experimental = ["java"]
+
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        assert!(!release_requires_java_environment_validation(
+            &config,
+            Some(BuildPlatformArg::Apple)
+        ));
+        assert!(!release_requires_java_environment_validation(
+            &config,
+            Some(BuildPlatformArg::Android)
+        ));
+        assert!(!release_requires_java_environment_validation(
+            &config,
+            Some(BuildPlatformArg::Wasm)
+        ));
     }
 }

@@ -164,14 +164,6 @@ impl JavaHostTarget {
             }
         });
 
-        if let Some(invalid_target) = resolved.iter().find(|target| **target != current_host) {
-            return Err(format!(
-                "targets.java.jvm.host_targets may only resolve to the current host in Phase 3; '{}' does not match '{}'",
-                invalid_target.canonical_name(),
-                current_host.canonical_name()
-            ));
-        }
-
         Ok(resolved)
     }
 
@@ -228,7 +220,7 @@ impl JavaHostTarget {
     }
 
     fn unsupported_host_message() -> String {
-        "current-host JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64".to_string()
+        "JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64 hosts".to_string()
     }
 }
 
@@ -551,7 +543,7 @@ mod tests {
     }
 
     #[test]
-    fn rejects_cross_host_java_packaging_in_phase_3() {
+    fn allows_explicit_cross_host_java_targets_after_resolution() {
         let current_host = JavaHostTarget::current().expect("supported test host");
         let explicit_other_host = [
             JavaHostTarget::DarwinArm64,
@@ -564,12 +556,10 @@ mod tests {
         .find(|target| *target != current_host)
         .expect("alternate host target");
 
-        let error =
-            resolve_java_host_targets(&[explicit_other_host]).expect_err("cross-host error");
+        let resolved = resolve_java_host_targets(&[JavaHostTarget::Current, explicit_other_host])
+            .expect("resolved host targets");
 
-        assert!(error.contains(
-            "targets.java.jvm.host_targets may only resolve to the current host in Phase 3"
-        ));
+        assert_eq!(resolved, vec![current_host, explicit_other_host]);
     }
 
     #[test]

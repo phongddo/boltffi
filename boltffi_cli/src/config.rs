@@ -38,6 +38,7 @@ pub enum Experimental {
 
 impl Experimental {
     pub const ALL: &'static [Experimental] = &[
+        Experimental::WholeTarget(Target::Java),
         Experimental::Feature {
             target: Target::TypeScript,
             name: "async_streams",
@@ -1642,6 +1643,39 @@ host_targets = ["current", "{current_host_value}"]
                 .java_jvm_host_targets()
                 .expect("resolved current host"),
             vec![current_host]
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_cross_host_java_targets() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let explicit_other_host = [
+            JavaHostTarget::DarwinArm64,
+            JavaHostTarget::DarwinX86_64,
+            JavaHostTarget::LinuxX86_64,
+            JavaHostTarget::LinuxAarch64,
+            JavaHostTarget::WindowsX86_64,
+        ]
+        .into_iter()
+        .find(|target| *target != current_host)
+        .expect("alternate host target");
+        let config = parse_config(&format!(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+host_targets = ["current", "{}"]
+"#,
+            explicit_other_host.canonical_name()
+        ));
+
+        assert_eq!(
+            config
+                .java_jvm_host_targets()
+                .expect("resolved host targets"),
+            vec![current_host, explicit_other_host]
         );
     }
 
