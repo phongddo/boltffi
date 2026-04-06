@@ -408,7 +408,7 @@ dist/java/
 ### Using in a Project
 
 1. Copy the Java sources from `dist/java/com/...` into your source tree
-2. Place the JNI shared library where `System.loadLibrary` can find it, either from the flat compatibility copy or from `dist/java/native/<host-target>/`
+2. Bundle the matching `dist/java/native/<host-target>/lib*_jni.*` native library in your JAR resources. Generated desktop bindings will extract and `System.load(...)` bundled natives automatically. If you do not bundle the native library, place it where `System.loadLibrary` can find it.
 
 ```java
 import com.example.mylib.*;
@@ -427,6 +427,8 @@ dependencies {
 ```
 
 Set the library path in your run configuration:
+
+If you are not bundling native libraries into the JAR, you can still point tests at an external native directory:
 
 ```kotlin
 tasks.test {

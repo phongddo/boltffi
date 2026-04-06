@@ -300,6 +300,7 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
         library_name: config
             .android_kotlin_library_name()
             .map(|name| name.to_string()),
+        desktop_loader: true,
     };
 
     let type_mappings = convert_type_mappings(config.kotlin_type_mappings());
@@ -386,13 +387,14 @@ fn generate_java_from_source_directory(
         source,
     })?;
 
-    let java_pointer_width_bits = match java_generation_mode(
+    let generation_mode = java_generation_mode(
         &output_dir,
         &configured_jvm_output,
         &configured_android_output,
         jvm_enabled,
         android_enabled,
-    ) {
+    );
+    let java_pointer_width_bits = match generation_mode {
         JavaGenerationMode::Jvm => host_pointer_width_bits(),
         JavaGenerationMode::Android => None,
     };
@@ -404,6 +406,7 @@ fn generate_java_from_source_directory(
     let java_options = render::java::JavaOptions {
         library_name: Some(crate_name.to_string()),
         min_java_version: render::java::JavaVersion(config.java_min_version().unwrap_or(8)),
+        desktop_loader: matches!(generation_mode, JavaGenerationMode::Jvm),
     };
 
     let java_output = render::java::JavaEmitter::emit(

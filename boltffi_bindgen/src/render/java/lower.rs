@@ -270,6 +270,7 @@ impl<'a> JavaLowerer<'a> {
             package_name: self.package_name.clone(),
             class_name: NamingConvention::class_name(&self.module_name),
             lib_name,
+            desktop_loader: self.options.desktop_loader,
             java_version: self.options.min_java_version,
             async_mode: JavaAsyncMode::from_version(self.options.min_java_version),
             prefix,
@@ -3324,6 +3325,7 @@ mod tests {
         let options = JavaOptions {
             library_name: None,
             min_java_version: version,
+            desktop_loader: true,
         };
         JavaLowerer::new(
             contract,

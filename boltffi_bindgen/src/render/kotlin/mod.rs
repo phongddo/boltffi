@@ -31,4 +31,5 @@ pub struct KotlinOptions {
     pub api_style: KotlinApiStyle,
     pub module_object_name: Option<String>,
     pub library_name: Option<String>,
+    pub desktop_loader: bool,
 }

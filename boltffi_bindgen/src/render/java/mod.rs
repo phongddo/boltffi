@@ -10,10 +10,21 @@ pub use lower::JavaLowerer;
 pub use names::NamingConvention;
 pub use plan::*;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct JavaOptions {
     pub library_name: Option<String>,
     pub min_java_version: JavaVersion,
+    pub desktop_loader: bool,
+}
+
+impl Default for JavaOptions {
+    fn default() -> Self {
+        Self {
+            library_name: None,
+            min_java_version: JavaVersion::default(),
+            desktop_loader: true,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

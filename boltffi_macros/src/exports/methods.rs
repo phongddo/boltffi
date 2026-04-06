@@ -1888,6 +1888,8 @@ mod tests {
         assert!(generated.contains("profile_storage_len : usize"));
         assert!(generated.contains("let profile_storage : UserProfile"));
         assert!(generated.contains("let profile = & profile_storage"));
-        assert!(generated.contains("let result : Vec < Summary > = (* handle) . summarize (profile) ;"));
+        assert!(
+            generated.contains("let result : Vec < Summary > = (* handle) . summarize (profile) ;")
+        );
     }
 }

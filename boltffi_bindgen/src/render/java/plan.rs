@@ -38,6 +38,7 @@ pub struct JavaModule {
     pub package_name: String,
     pub class_name: String,
     pub lib_name: String,
+    pub desktop_loader: bool,
     pub java_version: JavaVersion,
     pub async_mode: JavaAsyncMode,
     pub prefix: String,
