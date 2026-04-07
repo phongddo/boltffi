@@ -35,6 +35,10 @@ private object {{ handle_map_name }} {
 }
 
 object {{ callbacks_object }} {
+{%- if !async_methods.is_empty() %}
+    private val pendingAsyncCallbacks = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+{%- endif %}
+
     @JvmStatic
     fun free(handle: Long) {
         {{ handle_map_name }}.remove(handle)
@@ -57,16 +61,42 @@ object {{ callbacks_object }} {
 
     @JvmStatic
     fun {{ method.ffi_name }}(handle: Long{% for param in method.params %}, {{ param.name }}: {{ param.jni_type }}{% endfor %}, callbackPtr: Long, callbackData: Long) {
-        val impl = {{ handle_map_name }}.get(handle) ?: error("{{ handle_map_name }}: invalid handle $handle")
-        {%- for param in method.params %}
-        val {{ param.name }}Decoded = {{ param.conversion }}
-        {%- endfor %}
-        BoltFFIScope.launch {
-            {% match method.return_info %}{% when Some with (ret) %}{% match ret.error_type %}{% when Some with (err_ty) %}val result: BoltFFIResult<{{ ret.kotlin_type }}, {{ err_ty }}> = try { BoltFFIResult.Ok(impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})) } catch (e: {{ err_ty }}) { BoltFFIResult.Err(e) }
-            {% match ret.to_jni_result %}{% when Some with (result_encode) %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ result_encode }}){% when None %}Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}val result = impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
-            Native.{{ method.invoker_name }}(callbackPtr, callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
-            Native.{{ method.invoker_name }}(callbackPtr, callbackData){% endmatch %}
+        try {
+            val impl = {{ handle_map_name }}.get(handle) ?: throw IllegalStateException("{{ handle_map_name }}: invalid handle $handle")
+            {%- for param in method.params %}
+            val {{ param.name }}Decoded = {{ param.conversion }}
+            {%- endfor %}
+            pendingAsyncCallbacks[callbackData] = callbackPtr
+            try {
+                BoltFFIScope.launch {
+                    try {
+                        {% match method.return_info %}{% when Some with (ret) %}{% match ret.error_type %}{% when Some with (err_ty) %}val result: BoltFFIResult<{{ ret.kotlin_type }}, {{ err_ty }}> = try { BoltFFIResult.Ok(impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})) } catch (e: {{ err_ty }}) { BoltFFIResult.Err(e) }
+                        {% match ret.to_jni_result %}{% when Some with (result_encode) %}{{ method.complete_name }}(callbackData, result{{ result_encode }}){% when None %}{{ method.complete_name }}(callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}val result = impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
+                        {{ method.complete_name }}(callbackData, result{{ ret.to_jni }}){% endmatch %}{% when None %}impl.{{ method.name }}({% for param in method.params %}{{ param.name }}Decoded{% if !loop.last %}, {% endif %}{% endfor %})
+                        {{ method.complete_name }}(callbackData){% endmatch %}
+                    } catch (t: Throwable) {
+                        {{ method.fail_name }}(callbackData)
+                    }
+                }
+            } catch (t: Throwable) {
+                pendingAsyncCallbacks.remove(callbackData)
+                Native.{{ method.invoker_name }}Failure(callbackPtr, callbackData)
+            }
+        } catch (t: Throwable) {
+            Native.{{ method.invoker_name }}Failure(callbackPtr, callbackData)
         }
+    }
+
+    @JvmStatic
+    fun {{ method.complete_name }}(callbackData: Long{% match method.return_info %}{% when Some with (ret) %}, result: {{ ret.jni_type }}{% when None %}{% endmatch %}) {
+        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return
+        Native.{{ method.invoker_name }}(callbackPtr, callbackData{% match method.return_info %}{% when Some with (_) %}, result{% when None %}{% endmatch %})
+    }
+
+    @JvmStatic
+    fun {{ method.fail_name }}(callbackData: Long) {
+        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return
+        Native.{{ method.invoker_name }}Failure(callbackPtr, callbackData)
     }
 {%- endfor %}
 }

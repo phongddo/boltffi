@@ -2,7 +2,6 @@ use std::process::Command;
 
 use crate::android::AndroidNdk;
 use crate::error::{CliError, Result};
-use crate::target::RustTarget;
 
 #[derive(Debug)]
 pub struct EnvironmentCheck {
@@ -21,14 +20,6 @@ pub struct ToolsCheck {
 }
 
 impl EnvironmentCheck {
-    pub fn run(required_targets: &[RustTarget]) -> Self {
-        let required_triples = required_targets
-            .iter()
-            .map(|target| target.triple().to_string())
-            .collect::<Vec<_>>();
-        Self::run_with_required_triples(&required_triples)
-    }
-
     pub fn run_with_required_triples(required_triples: &[String]) -> Self {
         let rust_version = get_rust_version();
         let installed_targets = get_installed_targets();
@@ -56,10 +47,6 @@ impl EnvironmentCheck {
             missing_targets,
             tools,
         }
-    }
-
-    pub fn is_ready_for_apple(&self) -> bool {
-        self.tools.xcode_cli && self.tools.lipo && self.tools.xcodebuild
     }
 
     pub fn is_ready_for_android(&self) -> bool {

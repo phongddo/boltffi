@@ -1,22 +1,31 @@
 use std::path::PathBuf;
 
 use crate::check::EnvironmentCheck;
+use crate::commands::check::apple_targets_require_lipo;
 use crate::config::Config;
 use crate::error::Result;
 use crate::target::RustTarget;
 
 pub struct DoctorOptions {
     pub apple: bool,
+    pub apple_targets: Vec<RustTarget>,
     pub android: bool,
+    pub android_targets: Vec<RustTarget>,
     pub wasm: bool,
+    pub wasm_target_triple: Option<String>,
+    pub config_warning: Option<String>,
 }
 
 pub fn run_doctor(options: DoctorOptions) -> Result<()> {
-    let required_targets = required_targets(&options);
-    let check = EnvironmentCheck::run(&required_targets);
+    let required_triples = required_target_triples(&options);
+    let check = EnvironmentCheck::run_with_required_triples(&required_triples);
 
     println!("boltffi doctor");
     println!();
+    if let Some(warning) = options.config_warning.as_deref() {
+        println!("Warning: {}", warning);
+        println!();
+    }
     print_environment(&check, &options);
     println!();
     print_config_summary();
@@ -24,24 +33,30 @@ pub fn run_doctor(options: DoctorOptions) -> Result<()> {
     Ok(())
 }
 
-fn required_targets(options: &DoctorOptions) -> Vec<RustTarget> {
+fn required_target_triples(options: &DoctorOptions) -> Vec<String> {
     let apple_targets = options
         .apple
-        .then(|| RustTarget::ALL_IOS.iter().cloned())
+        .then(|| options.apple_targets.iter().copied())
         .into_iter()
-        .flatten();
+        .flatten()
+        .map(|target| target.triple().to_string());
 
     let android_targets = options
         .android
-        .then(|| RustTarget::ALL_ANDROID.iter().cloned())
+        .then(|| options.android_targets.iter().copied())
         .into_iter()
-        .flatten();
+        .flatten()
+        .map(|target| target.triple().to_string());
 
     let wasm_targets = options
         .wasm
-        .then(|| RustTarget::ALL_WASM.iter().cloned())
-        .into_iter()
-        .flatten();
+        .then(|| {
+            options
+                .wasm_target_triple
+                .clone()
+                .unwrap_or_else(|| RustTarget::WASM32_UNKNOWN_UNKNOWN.triple().to_string())
+        })
+        .into_iter();
 
     apple_targets
         .chain(android_targets)
@@ -50,6 +65,11 @@ fn required_targets(options: &DoctorOptions) -> Vec<RustTarget> {
 }
 
 fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
+    let apple_tooling_ready = !options.apple
+        || (check.tools.xcode_cli
+            && check.tools.xcodebuild
+            && (!apple_targets_require_lipo(&options.apple_targets) || check.tools.lipo));
+
     match &check.rust_version {
         Some(version) => println!("Rust: {}", version),
         None => println!("Rust: missing"),
@@ -63,11 +83,23 @@ fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
         .for_each(|triple| println!("  - {}", triple));
 
     println!();
-    println!("Apple tooling: {}", readiness(check.is_ready_for_apple()));
+    println!("Apple tooling: {}", readiness(apple_tooling_ready));
     if options.apple {
+        let requires_lipo = apple_targets_require_lipo(&options.apple_targets);
+        options.apple_targets.iter().for_each(|target| {
+            let installed = check
+                .installed_targets
+                .iter()
+                .any(|triple| triple == target.triple());
+            println!("  target {}: {}", target.triple(), readiness(installed));
+        });
         println!("  xcode-select: {}", readiness(check.tools.xcode_cli));
         println!("  xcodebuild: {}", readiness(check.tools.xcodebuild));
-        println!("  lipo: {}", readiness(check.tools.lipo));
+        if requires_lipo {
+            println!("  lipo: {}", readiness(check.tools.lipo));
+        } else {
+            println!("  lipo: ok (not required for configured slices)");
+        }
     }
 
     println!();
@@ -76,6 +108,13 @@ fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
         readiness(check.is_ready_for_android())
     );
     if options.android {
+        options.android_targets.iter().for_each(|target| {
+            let installed = check
+                .installed_targets
+                .iter()
+                .any(|triple| triple == target.triple());
+            println!("  target {}: {}", target.triple(), readiness(installed));
+        });
         match &check.tools.android_ndk {
             Some(path) => println!("  ndk: {}", path),
             None => println!("  ndk: missing (set ANDROID_NDK_HOME)"),
@@ -83,15 +122,20 @@ fn print_environment(check: &EnvironmentCheck, options: &DoctorOptions) {
     }
 
     if options.wasm {
+        let wasm_target = options
+            .wasm_target_triple
+            .as_deref()
+            .unwrap_or(RustTarget::WASM32_UNKNOWN_UNKNOWN.triple());
         println!();
         println!(
-            "WASM target {}",
+            "WASM target {} ({})",
             readiness(
                 check
                     .installed_targets
                     .iter()
-                    .any(|target| target == RustTarget::WASM32_UNKNOWN_UNKNOWN.triple())
-            )
+                    .any(|target| target == wasm_target)
+            ),
+            wasm_target
         );
     }
 }
@@ -111,6 +155,42 @@ fn print_config_summary() {
             println!(
                 "  targets.apple.output: {}",
                 config.apple_output().display()
+            );
+            println!(
+                "  targets.apple.include_macos: {}",
+                config.apple_include_macos()
+            );
+            println!(
+                "  targets.apple.ios_architectures: {}",
+                config
+                    .apple_ios_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.apple.simulator_architectures: {}",
+                config
+                    .apple_simulator_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.apple.macos_architectures: {}{}",
+                config
+                    .apple_macos_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                if config.apple_include_macos() {
+                    ""
+                } else {
+                    " (ignored unless include_macos = true)"
+                }
             );
             println!(
                 "  targets.apple.swift.output: {}",
@@ -144,6 +224,15 @@ fn print_config_summary() {
                 "  targets.android.pack.output: {}",
                 config.android_pack_output().display()
             );
+            println!(
+                "  targets.android.architectures: {}",
+                config
+                    .android_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             println!("  targets.wasm.output: {}", config.wasm_output().display());
             println!(
                 "  targets.wasm.typescript.output: {}",
@@ -162,4 +251,46 @@ fn print_config_summary() {
 
 fn readiness(is_ready: bool) -> &'static str {
     if is_ready { "ok" } else { "missing" }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DoctorOptions, required_target_triples};
+    use crate::target::RustTarget;
+
+    #[test]
+    fn uses_configured_wasm_target_triple() {
+        let options = DoctorOptions {
+            apple: false,
+            apple_targets: Vec::new(),
+            android: false,
+            android_targets: Vec::new(),
+            wasm: true,
+            wasm_target_triple: Some("wasm32-wasip1".to_string()),
+            config_warning: None,
+        };
+
+        assert_eq!(
+            required_target_triples(&options),
+            vec!["wasm32-wasip1".to_string()]
+        );
+    }
+
+    #[test]
+    fn defaults_wasm_target_triple_when_not_configured() {
+        let options = DoctorOptions {
+            apple: false,
+            apple_targets: Vec::new(),
+            android: false,
+            android_targets: Vec::new(),
+            wasm: true,
+            wasm_target_triple: None,
+            config_warning: None,
+        };
+
+        assert_eq!(
+            required_target_triples(&options),
+            vec![RustTarget::WASM32_UNKNOWN_UNKNOWN.triple().to_string()]
+        );
+    }
 }

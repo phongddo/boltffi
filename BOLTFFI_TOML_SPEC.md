@@ -69,6 +69,13 @@ All platform-specific configuration lives under `[targets.*]`. Each target can b
   - Default: `16.0`
 - `include_macos` (bool): Whether `boltffi pack apple` also builds macOS targets.
   - Default: `false`
+- `ios_architectures` (`["arm64"]`, optional): iOS device slices to build/package.
+  - Default: `["arm64"]`
+- `simulator_architectures` (`["arm64", "x86_64"]`, optional): iOS Simulator slices to build/package.
+  - Default: `["arm64", "x86_64"]`
+- `macos_architectures` (`["arm64", "x86_64"]`, optional): macOS slices to build/package when `include_macos = true`.
+  - Default: `["arm64", "x86_64"]`
+  - Ignored unless `include_macos = true`
 
 ### `[targets.apple.swift]` (optional)
 
@@ -141,6 +148,13 @@ Uuid = { type = "UUID", conversion = "uuid_string" }
 - `min_sdk` (integer): Android minSdkVersion used for packaging.
   - Default: `24`
 - `ndk_version` (string, optional): NDK version hint (used by environment checks).
+- `architectures` (array of strings, optional): Android ABIs to build and package.
+  - Supported canonical values: `arm64`, `armv7`, `x86_64`, `x86`
+  - Default: all four Android architectures above, in that order
+  - Behavior: `boltffi build android`, `boltffi check`, `boltffi doctor`, and
+    `boltffi pack android` all resolve against this configured list.
+  - `boltffi pack android --no-build` requires one prebuilt Rust static library per configured
+    architecture and ignores stale artifacts for unconfigured ABIs.
 
 ### `[targets.android.kotlin]` (optional)
 
@@ -194,8 +208,15 @@ Desktop JVM target configuration.
 
 - `enabled` (bool): Whether JVM target is active.
   - Default: `false`
-- `output` (path): Output directory for Java sources and JNI glue.
+- `output` (path): Output directory for Java sources, JNI glue, and host native outputs.
   - Default: `dist/java`
+- `host_targets` (array of strings, optional): Desired desktop native outputs.
+  - Supported canonical values: `current`, `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, `windows-x86_64`
+  - Supported aliases: `darwin-aarch64`, `darwin-x86-64`, `linux-x86-64`, `linux-arm64`, `windows-x86-64`
+  - Default: `["current"]`
+  - Phase 3 behavior: all configured values must resolve to the current host target after `current` expansion and deduping
+  - Packaging layout: `boltffi pack java` writes the JNI library to `dist/java/native/<host-target>/` and also keeps a flat current-host `_jni` copy in `dist/java/`
+  - `boltffi pack java --no-build` is unsupported in Phase 3; rerun without `--no-build`
 
 ### `[targets.java.android]` (optional)
 

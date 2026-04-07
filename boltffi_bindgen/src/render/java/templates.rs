@@ -175,6 +175,7 @@ mod tests {
             package_name: "com.test".to_string(),
             class_name: "Test".to_string(),
             lib_name: "test".to_string(),
+            desktop_loader: true,
             java_version: JavaVersion::JAVA_17,
             async_mode: JavaAsyncMode::CompletableFuture,
             prefix: "boltffi".to_string(),
@@ -378,10 +379,53 @@ mod tests {
             .render()
             .expect("native template should render");
 
+        assert!(source.contains("loadDesktopLibraries(preferredLibrary, fallbackLibrary);"));
+        assert!(source.contains(
+            "UnsatisfiedLinkError preferredFailure = tryLoadDesktopLibrary(preferredLibrary);"
+        ));
+        assert!(source.contains("if (tryLoadOptionalDesktopLibrary(fallbackLibrary)) {"));
+        assert!(source.contains(
+            "private static UnsatisfiedLinkError tryLoadDesktopLibrary(String libraryName) {"
+        ));
+        assert!(
+            source.contains(
+                "private static boolean loadExternalLibraryIfPresent(String libraryName) {"
+            )
+        );
+        assert!(source.contains("System.load(extracted.getAbsolutePath());"));
+        assert!(source.contains("bundledLibraryResourceCandidates"));
+        assert!(!source.contains("java.nio.file"));
         assert!(source.contains("static native void boltffi_counter_free(long handle);"));
         assert!(source.contains("static native long boltffi_counter_new();"));
         assert!(source.contains("static native int boltffi_counter_global_count();"));
         assert!(source.contains("static native int boltffi_counter_get(long handle);"));
+    }
+
+    #[test]
+    fn native_template_accepts_linux_amd64_for_bundled_desktop_loading() {
+        let source = NativeTemplate {
+            module: &java_module(vec![]),
+        }
+        .render()
+        .expect("native template should render");
+
+        assert!(source.contains(
+            "if (osName.contains(\"linux\") && (osArch.equals(\"x86_64\") || osArch.equals(\"amd64\")))"
+        ));
+    }
+
+    #[test]
+    fn native_template_omits_desktop_loader_for_android_bindings() {
+        let mut module = java_module(vec![]);
+        module.desktop_loader = false;
+
+        let source = NativeTemplate { module: &module }
+            .render()
+            .expect("native template should render");
+
+        assert!(source.contains("System.loadLibrary(fallbackLibrary);"));
+        assert!(!source.contains("loadDesktopLibraries(preferredLibrary, fallbackLibrary);"));
+        assert!(!source.contains("bundledLibraryResourceCandidates"));
     }
 
     #[test]

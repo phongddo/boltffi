@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -18,7 +19,212 @@ pub enum Architecture {
     Wasm32,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AppleIosArchitecture {
+    #[serde(rename = "arm64")]
+    Arm64,
+}
+
+impl AppleIosArchitecture {
+    pub const ALL: &'static [Self] = &[Self::Arm64];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Arm64 => "arm64",
+        }
+    }
+
+    pub const fn rust_target(self) -> RustTarget {
+        match self {
+            Self::Arm64 => RustTarget::IOS_ARM64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AppleArchitecture {
+    #[serde(rename = "arm64")]
+    Arm64,
+    #[serde(rename = "x86_64")]
+    X86_64,
+}
+
+impl AppleArchitecture {
+    pub const ALL: &'static [Self] = &[Self::Arm64, Self::X86_64];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Arm64 => "arm64",
+            Self::X86_64 => "x86_64",
+        }
+    }
+
+    pub const fn simulator_rust_target(self) -> RustTarget {
+        match self {
+            Self::Arm64 => RustTarget::IOS_SIM_ARM64,
+            Self::X86_64 => RustTarget::IOS_SIM_X86_64,
+        }
+    }
+
+    pub const fn macos_rust_target(self) -> RustTarget {
+        match self {
+            Self::Arm64 => RustTarget::MACOS_ARM64,
+            Self::X86_64 => RustTarget::MACOS_X86_64,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum AndroidArchitecture {
+    #[serde(rename = "arm64")]
+    Arm64,
+    #[serde(rename = "armv7")]
+    Armv7,
+    #[serde(rename = "x86_64")]
+    X86_64,
+    #[serde(rename = "x86")]
+    X86,
+}
+
+impl AndroidArchitecture {
+    pub const ALL: &'static [Self] = &[Self::Arm64, Self::Armv7, Self::X86_64, Self::X86];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Arm64 => "arm64",
+            Self::Armv7 => "armv7",
+            Self::X86_64 => "x86_64",
+            Self::X86 => "x86",
+        }
+    }
+
+    pub const fn rust_target(self) -> RustTarget {
+        match self {
+            Self::Arm64 => RustTarget::ANDROID_ARM64,
+            Self::Armv7 => RustTarget::ANDROID_ARMV7,
+            Self::X86_64 => RustTarget::ANDROID_X86_64,
+            Self::X86 => RustTarget::ANDROID_X86,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum JavaHostTarget {
+    #[serde(rename = "current")]
+    Current,
+    #[serde(rename = "darwin-arm64", alias = "darwin-aarch64")]
+    DarwinArm64,
+    #[serde(rename = "darwin-x86_64", alias = "darwin-x86-64")]
+    DarwinX86_64,
+    #[serde(rename = "linux-x86_64", alias = "linux-x86-64")]
+    LinuxX86_64,
+    #[serde(rename = "linux-aarch64", alias = "linux-arm64")]
+    LinuxAarch64,
+    #[serde(rename = "windows-x86_64", alias = "windows-x86-64")]
+    WindowsX86_64,
+}
+
+impl JavaHostTarget {
+    pub const DEFAULTS: &'static [Self] = &[Self::Current];
+
+    pub const fn canonical_name(self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::DarwinArm64 => "darwin-arm64",
+            Self::DarwinX86_64 => "darwin-x86_64",
+            Self::LinuxX86_64 => "linux-x86_64",
+            Self::LinuxAarch64 => "linux-aarch64",
+            Self::WindowsX86_64 => "windows-x86_64",
+        }
+    }
+
+    pub fn current() -> Option<Self> {
+        match (std::env::consts::OS, std::env::consts::ARCH) {
+            ("macos", "aarch64") => Some(Self::DarwinArm64),
+            ("macos", "x86_64") => Some(Self::DarwinX86_64),
+            ("linux", "x86_64") => Some(Self::LinuxX86_64),
+            ("linux", "aarch64") => Some(Self::LinuxAarch64),
+            ("windows", "x86_64") => Some(Self::WindowsX86_64),
+            _ => None,
+        }
+    }
+
+    pub fn resolve_requested(targets: &[Self]) -> Result<Vec<Self>, String> {
+        let current_host = Self::current().ok_or_else(Self::unsupported_host_message)?;
+        let mut resolved = Vec::new();
+
+        targets.iter().copied().for_each(|target| {
+            let target = match target {
+                Self::Current => current_host,
+                explicit => explicit,
+            };
+
+            if !resolved.contains(&target) {
+                resolved.push(target);
+            }
+        });
+
+        Ok(resolved)
+    }
+
+    pub fn shared_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}.dll"),
+            Self::Current => unreachable!("resolved host target required"),
+        }
+    }
+
+    pub fn static_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 | Self::LinuxX86_64 | Self::LinuxAarch64 => {
+                format!("lib{artifact_name}.a")
+            }
+            Self::WindowsX86_64 => {
+                if cfg!(all(target_os = "windows", target_env = "gnu")) {
+                    format!("lib{artifact_name}.a")
+                } else {
+                    format!("{artifact_name}.lib")
+                }
+            }
+            Self::Current => unreachable!("resolved host target required"),
+        }
+    }
+
+    pub fn jni_library_filename(self, artifact_name: &str) -> String {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => format!("lib{artifact_name}_jni.dylib"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => format!("lib{artifact_name}_jni.so"),
+            Self::WindowsX86_64 => format!("{artifact_name}_jni.dll"),
+            Self::Current => unreachable!("resolved host target required"),
+        }
+    }
+
+    pub fn jni_platform(self) -> &'static str {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => "darwin",
+            Self::LinuxX86_64 | Self::LinuxAarch64 => "linux",
+            Self::WindowsX86_64 => "win32",
+            Self::Current => unreachable!("resolved host target required"),
+        }
+    }
+
+    pub fn rpath_flag(self) -> Option<&'static str> {
+        match self {
+            Self::DarwinArm64 | Self::DarwinX86_64 => Some("-Wl,-rpath,@loader_path"),
+            Self::LinuxX86_64 | Self::LinuxAarch64 => Some("-Wl,-rpath,$ORIGIN"),
+            Self::WindowsX86_64 => None,
+            Self::Current => unreachable!("resolved host target required"),
+        }
+    }
+
+    fn unsupported_host_message() -> String {
+        "JVM packaging is only supported on darwin-arm64, darwin-x86_64, linux-x86_64, linux-aarch64, and windows-x86_64 hosts".to_string()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct RustTarget {
     triple: &'static str,
     platform: Platform,
@@ -98,7 +304,9 @@ impl RustTarget {
         Self::ANDROID_X86,
     ];
 
-    pub const ALL_WASM: &'static [Self] = &[Self::WASM32_UNKNOWN_UNKNOWN];
+    pub const fn from_android_architecture(architecture: AndroidArchitecture) -> Self {
+        architecture.rust_target()
+    }
 
     pub fn triple(&self) -> &'static str {
         self.triple
@@ -136,6 +344,44 @@ impl RustTarget {
     }
 }
 
+pub fn resolve_android_targets(architectures: &[AndroidArchitecture]) -> Vec<RustTarget> {
+    architectures
+        .iter()
+        .copied()
+        .map(RustTarget::from_android_architecture)
+        .collect()
+}
+
+pub fn resolve_apple_ios_targets(architectures: &[AppleIosArchitecture]) -> Vec<RustTarget> {
+    architectures
+        .iter()
+        .copied()
+        .map(AppleIosArchitecture::rust_target)
+        .collect()
+}
+
+pub fn resolve_apple_simulator_targets(architectures: &[AppleArchitecture]) -> Vec<RustTarget> {
+    architectures
+        .iter()
+        .copied()
+        .map(AppleArchitecture::simulator_rust_target)
+        .collect()
+}
+
+pub fn resolve_apple_macos_targets(architectures: &[AppleArchitecture]) -> Vec<RustTarget> {
+    architectures
+        .iter()
+        .copied()
+        .map(AppleArchitecture::macos_rust_target)
+        .collect()
+}
+
+pub fn resolve_java_host_targets(
+    targets: &[JavaHostTarget],
+) -> Result<Vec<JavaHostTarget>, String> {
+    JavaHostTarget::resolve_requested(targets)
+}
+
 impl Platform {
     pub fn is_apple(&self) -> bool {
         matches!(
@@ -164,23 +410,19 @@ pub struct BuiltLibrary {
 }
 
 impl BuiltLibrary {
-    pub fn discover_for_profile(
+    pub fn discover_for_targets(
         target_dir: &Path,
         lib_name: &str,
         profile_directory_name: &str,
+        targets: &[RustTarget],
     ) -> Vec<Self> {
-        let all_targets = RustTarget::ALL_IOS
+        targets
             .iter()
-            .chain(RustTarget::ALL_MACOS)
-            .chain(RustTarget::ALL_ANDROID)
-            .chain(RustTarget::ALL_WASM);
-
-        all_targets
             .filter_map(|target| {
                 let path =
                     target.library_path_for_profile(target_dir, lib_name, profile_directory_name);
-                path.exists().then(|| BuiltLibrary {
-                    target: target.clone(),
+                path.exists().then_some(BuiltLibrary {
+                    target: *target,
                     path,
                 })
             })
@@ -190,8 +432,14 @@ impl BuiltLibrary {
 
 #[cfg(test)]
 mod tests {
-    use super::{Platform, RustTarget};
+    use super::{
+        AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, BuiltLibrary, JavaHostTarget,
+        Platform, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
+        resolve_apple_macos_targets, resolve_apple_simulator_targets, resolve_java_host_targets,
+    };
+    use std::fs;
     use std::path::Path;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn apple_targets_use_static_libraries() {
@@ -212,5 +460,138 @@ mod tests {
 
         assert_eq!(RustTarget::ANDROID_ARM64.platform(), Platform::Android);
         assert!(library_path.ends_with("target/aarch64-linux-android/debug/libdemo.a"));
+    }
+
+    #[test]
+    fn resolves_android_architectures_to_targets() {
+        let targets = resolve_android_targets(&[
+            AndroidArchitecture::Arm64,
+            AndroidArchitecture::Armv7,
+            AndroidArchitecture::X86_64,
+        ]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-linux-android",
+                "armv7-linux-androideabi",
+                "x86_64-linux-android",
+            ]
+        );
+    }
+
+    #[test]
+    fn resolves_apple_ios_architectures_to_targets() {
+        let targets = resolve_apple_ios_targets(&[AppleIosArchitecture::Arm64]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec!["aarch64-apple-ios"]
+        );
+    }
+
+    #[test]
+    fn resolves_apple_simulator_architectures_to_targets() {
+        let targets =
+            resolve_apple_simulator_targets(&[AppleArchitecture::Arm64, AppleArchitecture::X86_64]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec!["aarch64-apple-ios-sim", "x86_64-apple-ios"]
+        );
+    }
+
+    #[test]
+    fn resolves_apple_macos_architectures_to_targets() {
+        let targets =
+            resolve_apple_macos_targets(&[AppleArchitecture::Arm64, AppleArchitecture::X86_64]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec!["aarch64-apple-darwin", "x86_64-apple-darwin"]
+        );
+    }
+
+    #[test]
+    fn resolves_current_java_host_target() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let resolved = resolve_java_host_targets(&[JavaHostTarget::Current])
+            .expect("expected current host resolution");
+
+        assert_eq!(resolved, vec![current_host]);
+    }
+
+    #[test]
+    fn dedupes_current_against_explicit_java_host_target() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let resolved = resolve_java_host_targets(&[JavaHostTarget::Current, current_host])
+            .expect("expected deduped host targets");
+
+        assert_eq!(resolved, vec![current_host]);
+    }
+
+    #[test]
+    fn allows_explicit_cross_host_java_targets_after_resolution() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let explicit_other_host = [
+            JavaHostTarget::DarwinArm64,
+            JavaHostTarget::DarwinX86_64,
+            JavaHostTarget::LinuxX86_64,
+            JavaHostTarget::LinuxAarch64,
+            JavaHostTarget::WindowsX86_64,
+        ]
+        .into_iter()
+        .find(|target| *target != current_host)
+        .expect("alternate host target");
+
+        let resolved = resolve_java_host_targets(&[JavaHostTarget::Current, explicit_other_host])
+            .expect("resolved host targets");
+
+        assert_eq!(resolved, vec![current_host, explicit_other_host]);
+    }
+
+    #[test]
+    fn discovers_only_requested_targets() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let temp_root = std::env::temp_dir().join(format!("boltffi-target-test-{unique}"));
+        let arm64_path =
+            RustTarget::ANDROID_ARM64.library_path_for_profile(&temp_root, "demo", "debug");
+        let x86_path =
+            RustTarget::ANDROID_X86.library_path_for_profile(&temp_root, "demo", "debug");
+
+        fs::create_dir_all(arm64_path.parent().expect("arm64 parent")).expect("create arm64 dir");
+        fs::create_dir_all(x86_path.parent().expect("x86 parent")).expect("create x86 dir");
+        fs::write(&arm64_path, []).expect("write arm64 artifact");
+        fs::write(&x86_path, []).expect("write x86 artifact");
+
+        let discovered = BuiltLibrary::discover_for_targets(
+            &temp_root,
+            "demo",
+            "debug",
+            &[RustTarget::ANDROID_ARM64],
+        );
+
+        assert_eq!(discovered.len(), 1);
+        assert_eq!(
+            discovered[0].target.triple(),
+            RustTarget::ANDROID_ARM64.triple()
+        );
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp target dir");
     }
 }

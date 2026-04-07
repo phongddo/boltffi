@@ -43,7 +43,14 @@ if [[ ! -f "$demo_test_source" ]]; then
   exit 1
 fi
 
-if [[ ! -f "$native_lib_dir/libdemo_jni.dylib" && ! -f "$native_lib_dir/libdemo_jni.so" && ! -f "$native_lib_dir/demo_jni.dll" ]]; then
+if [[ ! -f "$native_lib_dir/libdemo_jni.dylib" \
+   && ! -f "$native_lib_dir/libdemo_jni.so" \
+   && ! -f "$native_lib_dir/demo_jni.dll" \
+   && ! -f "$native_lib_dir/native/darwin-arm64/libdemo_jni.dylib" \
+   && ! -f "$native_lib_dir/native/darwin-x86_64/libdemo_jni.dylib" \
+   && ! -f "$native_lib_dir/native/linux-x86_64/libdemo_jni.so" \
+   && ! -f "$native_lib_dir/native/linux-aarch64/libdemo_jni.so" \
+   && ! -f "$native_lib_dir/native/windows-x86_64/demo_jni.dll" ]]; then
   echo "Missing JNI demo library in $native_lib_dir" >&2
   echo "Build/pack the Java demo JNI artifacts first." >&2
   exit 1

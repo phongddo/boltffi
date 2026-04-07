@@ -42,7 +42,7 @@ impl SourceTree {
 
     pub(crate) fn rust_files(&self) -> syn::Result<Vec<SourceFile>> {
         let mut rust_files = Vec::new();
-        self.collect_rust_files(&self.src_root, &mut rust_files)?;
+        Self::collect_rust_files(&self.src_root, &mut rust_files)?;
         Ok(rust_files
             .into_iter()
             .map(|path| SourceFile { path })
@@ -61,11 +61,7 @@ impl SourceTree {
             .collect()
     }
 
-    fn collect_rust_files(
-        &self,
-        directory: &Path,
-        rust_files: &mut Vec<PathBuf>,
-    ) -> syn::Result<()> {
+    fn collect_rust_files(directory: &Path, rust_files: &mut Vec<PathBuf>) -> syn::Result<()> {
         let entries = fs::read_dir(directory).map_err(|error| {
             syn::Error::new(
                 Span::call_site(),
@@ -78,7 +74,7 @@ impl SourceTree {
             .map(|entry| entry.path())
             .try_for_each(|path| {
                 if path.is_dir() {
-                    return self.collect_rust_files(&path, rust_files);
+                    return Self::collect_rust_files(&path, rust_files);
                 }
 
                 path.extension()

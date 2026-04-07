@@ -12,6 +12,12 @@ pub enum CliError {
     #[error("no built libraries found for {platform}")]
     NoLibrariesFound { platform: String },
 
+    #[error("missing built libraries for {platform}: {targets:?}")]
+    MissingBuiltLibraries {
+        platform: String,
+        targets: Vec<String>,
+    },
+
     #[error("command failed: {command}")]
     CommandFailed {
         command: String,

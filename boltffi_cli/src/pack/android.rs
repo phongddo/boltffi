@@ -4,7 +4,7 @@ use std::process::Command;
 use crate::android::AndroidToolchain;
 use crate::config::Config;
 use crate::error::{CliError, Result};
-use crate::target::{BuiltLibrary, Platform};
+use crate::target::{BuiltLibrary, Platform, RustTarget};
 
 pub struct AndroidPackager<'a> {
     config: &'a Config,
@@ -62,7 +62,39 @@ impl<'a> AndroidPackager<'a> {
             )?;
         }
 
+        self.remove_stale_packaged_libraries(&jnilibs_path, &android_libs)?;
+
         Ok(AndroidOutput)
+    }
+
+    fn remove_stale_packaged_libraries(
+        &self,
+        jnilibs_path: &Path,
+        android_libs: &[&BuiltLibrary],
+    ) -> Result<()> {
+        let packaged_triples: std::collections::HashSet<_> = android_libs
+            .iter()
+            .map(|library| library.target.triple())
+            .collect();
+        let lib_file_name = format!("lib{}.so", self.config.library_name());
+
+        for target in RustTarget::ALL_ANDROID {
+            if packaged_triples.contains(target.triple()) {
+                continue;
+            }
+
+            let stale_output = jnilibs_path
+                .join(target.architecture().android_abi())
+                .join(&lib_file_name);
+            if stale_output.exists() {
+                std::fs::remove_file(&stale_output).map_err(|source| CliError::CommandFailed {
+                    command: format!("remove stale android library {}", stale_output.display()),
+                    status: source.raw_os_error(),
+                })?;
+            }
+        }
+
+        Ok(())
     }
 
     fn filter_android_libraries(&self) -> Vec<&BuiltLibrary> {
@@ -158,4 +190,67 @@ fn run_command(mut command: Command) -> Result<()> {
             command: command_string,
             status: status.code(),
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AndroidPackager;
+    use crate::config::Config;
+    use crate::target::{BuiltLibrary, RustTarget};
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn parse_config(input: &str) -> Config {
+        let parsed: Config = toml::from_str(input).expect("toml parse failed");
+        parsed.validate().expect("config validation failed");
+        parsed
+    }
+
+    #[test]
+    fn stale_cleanup_removes_only_boltffi_library_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        let root = std::env::temp_dir().join(format!("boltffi-android-packager-test-{unique}"));
+        let pack_output = root.join("jniLibs");
+        let config = parse_config(&format!(
+            r#"
+[package]
+name = "demo"
+
+[targets.android.pack]
+output = "{}"
+"#,
+            pack_output.display()
+        ));
+
+        let stale_abi_dir = pack_output.join("x86");
+        fs::create_dir_all(&stale_abi_dir).expect("create stale abi dir");
+        let stale_boltffi = stale_abi_dir.join("libdemo.so");
+        let unrelated = stale_abi_dir.join("libdependency.so");
+        fs::write(&stale_boltffi, []).expect("write stale boltffi lib");
+        fs::write(&unrelated, []).expect("write unrelated lib");
+
+        let arm64_abi_dir = pack_output.join("arm64-v8a");
+        fs::create_dir_all(&arm64_abi_dir).expect("create configured abi dir");
+        let packager = AndroidPackager::new(
+            &config,
+            vec![BuiltLibrary {
+                target: RustTarget::ANDROID_ARM64,
+                path: root.join("libdemo.a"),
+            }],
+            false,
+        );
+        let android_libs = packager.filter_android_libraries();
+
+        packager
+            .remove_stale_packaged_libraries(&pack_output, &android_libs)
+            .expect("cleanup succeeds");
+
+        assert!(!stale_boltffi.exists());
+        assert!(unrelated.exists());
+
+        fs::remove_dir_all(&root).expect("cleanup temp dir");
+    }
 }

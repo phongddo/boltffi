@@ -156,32 +156,8 @@ impl<'a> Builder<'a> {
             .collect()
     }
 
-    pub fn build_ios(&self) -> Result<Vec<BuildResult>> {
-        self.build_targets(RustTarget::ALL_IOS)
-    }
-
-    pub fn build_android(&self) -> Result<Vec<BuildResult>> {
-        self.build_targets(RustTarget::ALL_ANDROID)
-    }
-
-    pub fn build_macos(&self) -> Result<Vec<BuildResult>> {
-        self.build_targets(RustTarget::ALL_MACOS)
-    }
-
-    pub fn build_host(&self) -> Result<BuildResult> {
-        let command_args = self.cargo_build_command_args();
-        let mut command = Command::new("cargo");
-        self.apply_cargo_build_prefix(&mut command, &command_args);
-
-        self.apply_common_build_args(&mut command);
-        command.args(&command_args.command_args);
-
-        let success = run_command_streaming(&mut command, self.options.on_output.as_ref());
-
-        Ok(BuildResult {
-            triple: "host".to_string(),
-            success,
-        })
+    pub fn build_android(&self, targets: &[RustTarget]) -> Result<Vec<BuildResult>> {
+        self.build_targets(targets)
     }
 
     pub fn build_wasm_with_triple(&self, triple: &str) -> Result<Vec<BuildResult>> {
@@ -260,7 +236,7 @@ impl<'a> Builder<'a> {
     }
 }
 
-fn run_command_streaming(cmd: &mut Command, on_output: Option<&OutputCallback>) -> bool {
+pub(crate) fn run_command_streaming(cmd: &mut Command, on_output: Option<&OutputCallback>) -> bool {
     cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
 
     let mut child = match cmd.spawn() {

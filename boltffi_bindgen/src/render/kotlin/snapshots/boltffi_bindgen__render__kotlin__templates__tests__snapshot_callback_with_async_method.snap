@@ -1,7 +1,7 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
-assertion_line: 1112
-expression: template.render().unwrap()
+assertion_line: 1386
+expression: rendered
 ---
 /**
  * ### Thread Safety
@@ -35,6 +35,8 @@ private object AsyncHandlerMap {
 }
 
 object AsyncHandlerCallbacks {
+    private val pendingAsyncCallbacks = java.util.concurrent.ConcurrentHashMap<Long, Long>()
+
     @JvmStatic
     fun free(handle: Long) {
         AsyncHandlerMap.remove(handle)
@@ -47,12 +49,38 @@ object AsyncHandlerCallbacks {
 
     @JvmStatic
     fun on_complete(handle: Long, result: String, callbackPtr: Long, callbackData: Long) {
-        val impl = AsyncHandlerMap.get(handle) ?: error("AsyncHandlerMap: invalid handle $handle")
-        val resultDecoded = result
-        BoltFFIScope.launch {
-            impl.onComplete(resultDecoded)
-            Native.invokeOnComplete(callbackPtr, callbackData)
+        try {
+            val impl = AsyncHandlerMap.get(handle) ?: throw IllegalStateException("AsyncHandlerMap: invalid handle $handle")
+            val resultDecoded = result
+            pendingAsyncCallbacks[callbackData] = callbackPtr
+            try {
+                BoltFFIScope.launch {
+                    try {
+                        impl.onComplete(resultDecoded)
+                        completeOnComplete(callbackData)
+                    } catch (t: Throwable) {
+                        failOnComplete(callbackData)
+                    }
+                }
+            } catch (t: Throwable) {
+                pendingAsyncCallbacks.remove(callbackData)
+                Native.invokeOnCompleteFailure(callbackPtr, callbackData)
+            }
+        } catch (t: Throwable) {
+            Native.invokeOnCompleteFailure(callbackPtr, callbackData)
         }
+    }
+
+    @JvmStatic
+    fun completeOnComplete(callbackData: Long) {
+        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return
+        Native.invokeOnComplete(callbackPtr, callbackData)
+    }
+
+    @JvmStatic
+    fun failOnComplete(callbackData: Long) {
+        val callbackPtr = pendingAsyncCallbacks.remove(callbackData) ?: return
+        Native.invokeOnCompleteFailure(callbackPtr, callbackData)
     }
 }
 

@@ -359,6 +359,8 @@ pub struct KotlinCallbackMethod {
 pub struct KotlinAsyncCallbackMethod {
     pub name: String,
     pub ffi_name: String,
+    pub complete_name: String,
+    pub fail_name: String,
     pub invoker_name: String,
     pub params: Vec<KotlinCallbackParam>,
     pub return_info: Option<KotlinCallbackReturn>,
@@ -387,6 +389,7 @@ pub struct KotlinCallbackReturn {
 #[derive(Clone)]
 pub struct KotlinNative {
     pub lib_name: String,
+    pub desktop_loader: bool,
     pub prefix: String,
     pub functions: Vec<KotlinNativeFunction>,
     pub wire_functions: Vec<KotlinNativeWireFunction>,

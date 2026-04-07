@@ -916,7 +916,7 @@ impl<'a> SwiftLowerer<'a> {
                         // IR generates encode ops with self as root but we capture the
                         // callback return as result in the template so we need to rewrite
                         // the root before handing it off
-                        let returns = self.rebase_return_encode(
+                        let returns = Self::rebase_return_encode(
                             self.swift_return_from_abi_with_context(
                                 &abi_method.returns,
                                 &abi_method.error,
@@ -1785,7 +1785,7 @@ impl<'a> SwiftLowerer<'a> {
         }
     }
 
-    fn rebase_return_encode(&self, returns: SwiftReturn, new_base: &str) -> SwiftReturn {
+    fn rebase_return_encode(returns: SwiftReturn, new_base: &str) -> SwiftReturn {
         match returns {
             SwiftReturn::FromWireBuffer {
                 swift_type,
@@ -1804,7 +1804,7 @@ impl<'a> SwiftLowerer<'a> {
                 err_is_string,
                 err_encode,
             } => SwiftReturn::Throws {
-                ok: Box::new(self.rebase_return_encode(*ok, new_base)),
+                ok: Box::new(Self::rebase_return_encode(*ok, new_base)),
                 err_type,
                 result_decode,
                 err_decode,
@@ -1938,7 +1938,7 @@ impl<'a> SwiftLowerer<'a> {
                     EnumRepr::Data { .. } => None,
                 })
                 .unwrap_or_else(|| {
-                    self.rebase_return_encode(
+                    Self::rebase_return_encode(
                         self.swift_return_from_abi(
                             &abi_method.returns,
                             &abi_method.error,
@@ -1958,7 +1958,7 @@ impl<'a> SwiftLowerer<'a> {
                     fields: self.record_field_mappings(record_id),
                 })
                 .unwrap_or_else(|| {
-                    self.rebase_return_encode(
+                    Self::rebase_return_encode(
                         self.swift_return_from_abi(
                             &abi_method.returns,
                             &abi_method.error,
@@ -1967,7 +1967,7 @@ impl<'a> SwiftLowerer<'a> {
                         "result",
                     )
                 }),
-            _ => self.rebase_return_encode(
+            _ => Self::rebase_return_encode(
                 self.swift_return_from_abi(&abi_method.returns, &abi_method.error, &method.returns),
                 "result",
             ),

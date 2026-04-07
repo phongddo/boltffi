@@ -1,5 +1,6 @@
 ---
 source: boltffi_bindgen/src/render/kotlin/templates.rs
+assertion_line: 1263
 expression: template.render().unwrap()
 ---
 /**
@@ -34,6 +35,7 @@ private object DataHandlerMap {
 }
 
 object DataHandlerCallbacks {
+
     @JvmStatic
     fun free(handle: Long) {
         DataHandlerMap.remove(handle)

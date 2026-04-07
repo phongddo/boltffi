@@ -36,7 +36,7 @@ Your `Cargo.toml` needs the right crate types:
 
 ```toml
 [lib]
-crate-type = ["staticlib", "cdylib"]
+crate-type = ["staticlib"]
 ```
 
 ## Packaging All Platforms
@@ -163,6 +163,8 @@ boltffi pack apple --release
 
 This builds for arm64 (device) and arm64/x86_64 (simulator), generates Swift bindings and a C header, creates an xcframework, and generates a SwiftPM package.
 
+Those slices come from `targets.apple.ios_architectures` and `targets.apple.simulator_architectures`. If you enable macOS, `targets.apple.macos_architectures` is included too.
+
 ### Output Structure
 
 ```
@@ -201,6 +203,20 @@ boltffi pack apple --release
 ```
 
 The xcframework will include an additional `macos-arm64_x86_64` slice.
+
+### Restricting Apple Slices
+
+To package only a subset of Apple slices, configure them explicitly:
+
+```toml
+[targets.apple]
+ios_architectures = ["arm64"]
+simulator_architectures = ["arm64"]
+include_macos = true
+macos_architectures = ["arm64"]
+```
+
+`boltffi pack apple --no-build` validates exactly those configured slices. Stale artifacts for old simulator or macOS architectures are ignored.
 
 ### SwiftPM Layouts
 
@@ -323,7 +339,7 @@ Package for JVM:
 boltffi pack java --release
 ```
 
-This compiles a cdylib for the host platform, generates Java bindings and a C header, compiles the JNI glue into a shared library, and writes everything to `dist/java/`.
+This builds the host Rust library, generates Java bindings and a C header, links the JNI glue against the Rust `staticlib` when available, and writes the native output to `dist/java/native/<host-target>/`. A flat current-host `_jni` copy is kept in `dist/java/` for compatibility during the transition.
 
 ### Prerequisites
 
@@ -341,7 +357,25 @@ min_version = 8  # or 16, 17, 21
 
 [targets.java.jvm]
 enabled = true
+host_targets = ["current", "linux-x86_64"]
 ```
+
+`host_targets` defaults to `["current"]`. BoltFFI resolves `current` to the active machine target, dedupes it against explicit entries, and writes one native output per resolved host target under `dist/java/native/<host-target>/`. `boltffi pack java --no-build` is still intentionally unsupported; rerun without `--no-build`.
+
+Current Phase 4 support is intentionally narrow:
+
+- Current-host packaging works on `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, and `windows-x86_64`
+- Cross-host packaging is supported for the initial parity set, including the macOS release case of `linux-x86_64`
+- Cross-host targets must be fully configured up front; BoltFFI fails early instead of silently skipping them
+
+For the macOS to Linux desktop case, install the Rust target and provide a Linux linker that Cargo can use, for example via `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` or `BOLTFFI_JAVA_LINKER_X86_64_UNKNOWN_LINUX_GNU`.
+
+Cross-host JNI compilation also needs target-appropriate JNI headers. If the active `JAVA_HOME` does not contain the target platform header directory, point BoltFFI at a target-specific JDK or header directory:
+
+- `BOLTFFI_JAVA_HOME_X86_64_UNKNOWN_LINUX_GNU=/path/to/linux-jdk`
+- or `BOLTFFI_JAVA_INCLUDE_X86_64_UNKNOWN_LINUX_GNU=/path/to/linux-jdk/include/linux`
+
+Do not pass Cargo `--target` through `--cargo-arg` for `pack java`; BoltFFI resolves JVM targets from `targets.java.jvm.host_targets`.
 
 The `min_version` controls which language features the generated code uses:
 
@@ -365,13 +399,16 @@ dist/java/
 ├── jni/
 │   ├── jni_glue.c          # JNI bridge implementation
 │   └── mylib.h             # C header
-└── libmylib_jni.dylib      # Compiled JNI library (.so on Linux)
+├── libmylib_jni.dylib      # Flat compatibility copy for the current host (.so/.dll elsewhere)
+└── native/
+    └── darwin-arm64/
+        └── libmylib_jni.dylib
 ```
 
 ### Using in a Project
 
 1. Copy the Java sources from `dist/java/com/...` into your source tree
-2. Place the JNI shared library where `System.loadLibrary` can find it (or set `java.library.path`)
+2. Bundle the matching `dist/java/native/<host-target>/lib*_jni.*` native library in your JAR resources. Generated desktop bindings will extract and `System.load(...)` bundled natives automatically. If you do not bundle the native library, place it where `System.loadLibrary` can find it.
 
 ```java
 import com.example.mylib.*;
@@ -390,6 +427,8 @@ dependencies {
 ```
 
 Set the library path in your run configuration:
+
+If you are not bundling native libraries into the JAR, you can still point tests at an external native directory:
 
 ```kotlin
 tasks.test {
@@ -597,5 +636,3 @@ Or build everything at once:
 ```bash
 boltffi release all
 ```
-
-

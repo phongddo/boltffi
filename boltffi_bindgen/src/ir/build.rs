@@ -101,7 +101,7 @@ impl<'m> ContractBuilder<'m> {
                 .fields
                 .iter()
                 .map(|f| {
-                    let type_expr = self.convert_type(&f.field_type);
+                    let type_expr = Self::convert_type(&f.field_type);
                     let default =
                         f.default_value
                             .as_deref()
@@ -194,7 +194,7 @@ impl<'m> ContractBuilder<'m> {
             VariantPayload::Tuple(
                 fields
                     .iter()
-                    .map(|f| self.convert_type(&f.field_type))
+                    .map(|f| Self::convert_type(&f.field_type))
                     .collect(),
             )
         } else {
@@ -203,7 +203,7 @@ impl<'m> ContractBuilder<'m> {
                     .iter()
                     .map(|f| FieldDef {
                         name: FieldName::new(&f.name),
-                        type_expr: self.convert_type(&f.field_type),
+                        type_expr: Self::convert_type(&f.field_type),
                         doc: f.doc.clone(),
                         default: None,
                     })
@@ -263,7 +263,7 @@ impl<'m> ContractBuilder<'m> {
     fn convert_stream(&self, stream: &model::StreamMethod) -> StreamDef {
         StreamDef {
             id: StreamId::new(&stream.name),
-            item_type: self.convert_type(&stream.item_type),
+            item_type: Self::convert_type(&stream.item_type),
             mode: match stream.mode {
                 model::StreamMode::Async => StreamMode::Async,
                 model::StreamMode::Batch => StreamMode::Batch,
@@ -364,7 +364,7 @@ impl<'m> ContractBuilder<'m> {
         CustomTypeDef {
             id: CustomTypeId::new(&ct.name),
             rust_type: QualifiedName::new(&ct.name),
-            repr: self.convert_type(&ct.repr),
+            repr: Self::convert_type(&ct.repr),
             converters: ConverterPath {
                 into_ffi: QualifiedName::new(format!("{}::into_ffi", ct.name)),
                 try_from_ffi: QualifiedName::new(format!("{}::try_from_ffi", ct.name)),
@@ -424,11 +424,11 @@ impl<'m> ContractBuilder<'m> {
     fn convert_type_with_passing(&self, ty: &model::Type) -> (TypeExpr, ParamPassing) {
         match ty {
             model::Type::Slice(inner) => (
-                TypeExpr::Vec(Box::new(self.convert_type(inner))),
+                TypeExpr::Vec(Box::new(Self::convert_type(inner))),
                 ParamPassing::Ref,
             ),
             model::Type::MutSlice(inner) => (
-                TypeExpr::Vec(Box::new(self.convert_type(inner))),
+                TypeExpr::Vec(Box::new(Self::convert_type(inner))),
                 ParamPassing::RefMut,
             ),
             model::Type::BoxedTrait(name) => (
@@ -442,21 +442,21 @@ impl<'m> ContractBuilder<'m> {
                     ParamPassing::ImplTrait,
                 )
             }
-            _ => (self.convert_type(ty), ParamPassing::Value),
+            _ => (Self::convert_type(ty), ParamPassing::Value),
         }
     }
 
-    fn convert_type(&self, ty: &model::Type) -> TypeExpr {
+    fn convert_type(ty: &model::Type) -> TypeExpr {
         match ty {
             model::Type::Primitive(p) => TypeExpr::Primitive(*p),
             model::Type::String => TypeExpr::String,
             model::Type::Bytes => TypeExpr::Bytes,
             model::Type::Builtin(id) => TypeExpr::Builtin(BuiltinId::new(id.type_id())),
-            model::Type::Vec(inner) => TypeExpr::Vec(Box::new(self.convert_type(inner))),
-            model::Type::Option(inner) => TypeExpr::Option(Box::new(self.convert_type(inner))),
+            model::Type::Vec(inner) => TypeExpr::Vec(Box::new(Self::convert_type(inner))),
+            model::Type::Option(inner) => TypeExpr::Option(Box::new(Self::convert_type(inner))),
             model::Type::Result { ok, err } => TypeExpr::Result {
-                ok: Box::new(self.convert_type(ok)),
-                err: Box::new(self.convert_type(err)),
+                ok: Box::new(Self::convert_type(ok)),
+                err: Box::new(Self::convert_type(err)),
             },
             model::Type::Record(name) => TypeExpr::Record(RecordId::new(name)),
             model::Type::Enum(name) => TypeExpr::Enum(EnumId::new(name)),
@@ -468,7 +468,7 @@ impl<'m> ContractBuilder<'m> {
                 TypeExpr::Callback(CallbackId::new(&sig_id))
             }
             model::Type::Slice(inner) | model::Type::MutSlice(inner) => {
-                TypeExpr::Vec(Box::new(self.convert_type(inner)))
+                TypeExpr::Vec(Box::new(Self::convert_type(inner)))
             }
             model::Type::Void => TypeExpr::Void,
         }
@@ -481,12 +481,12 @@ impl<'m> ContractBuilder<'m> {
                 if ty.is_void() {
                     ReturnDef::Void
                 } else {
-                    ReturnDef::Value(self.convert_type(ty))
+                    ReturnDef::Value(Self::convert_type(ty))
                 }
             }
             model::ReturnType::Fallible { ok, err } => ReturnDef::Result {
-                ok: self.convert_type(ok),
-                err: self.convert_type(err),
+                ok: Self::convert_type(ok),
+                err: Self::convert_type(err),
             },
         }
     }

@@ -1851,4 +1851,45 @@ mod tests {
         assert!(!generated.contains("profile : & UserProfile"));
         assert!(!generated.contains("filter : & Filter"));
     }
+
+    #[test]
+    fn instance_method_with_borrowed_wire_params_and_encoded_return_keeps_storage_binding() {
+        let impl_block = parse_impl(
+            r#"
+            impl Inventory {
+                pub fn summarize(&self, profile: &UserProfile) -> Vec<Summary> {
+                    let _ = profile;
+                    Vec::new()
+                }
+            }
+            "#,
+        );
+        let method = impl_block
+            .items
+            .iter()
+            .find_map(|item| match item {
+                syn::ImplItem::Fn(method) => Some(method),
+                _ => None,
+            })
+            .expect("instance method should exist");
+        let type_name = impl_type_name(&impl_block).expect("impl type name should resolve");
+
+        let generated = generate_sync_method_export(
+            MethodCallable::new(method),
+            &type_name,
+            "Inventory",
+            &return_lowering(),
+            callback_registry(),
+        )
+        .expect("instance export should be generated")
+        .to_string();
+
+        assert!(generated.contains("profile_storage_ptr : * const u8"));
+        assert!(generated.contains("profile_storage_len : usize"));
+        assert!(generated.contains("let profile_storage : UserProfile"));
+        assert!(generated.contains("let profile = & profile_storage"));
+        assert!(
+            generated.contains("let result : Vec < Summary > = (* handle) . summarize (profile) ;")
+        );
+    }
 }

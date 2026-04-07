@@ -1,5 +1,10 @@
+use crate::target::{
+    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, JavaHostTarget, RustTarget,
+    resolve_android_targets, resolve_apple_ios_targets, resolve_apple_macos_targets,
+    resolve_apple_simulator_targets, resolve_java_host_targets,
+};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +38,7 @@ pub enum Experimental {
 
 impl Experimental {
     pub const ALL: &'static [Experimental] = &[
+        Experimental::WholeTarget(Target::Java),
         Experimental::Feature {
             target: Target::TypeScript,
             name: "async_streams",
@@ -185,6 +191,9 @@ pub struct AppleConfig {
     pub deployment_target: String,
     #[serde(default)]
     pub include_macos: bool,
+    pub ios_architectures: Option<Vec<AppleIosArchitecture>>,
+    pub simulator_architectures: Option<Vec<AppleArchitecture>>,
+    pub macos_architectures: Option<Vec<AppleArchitecture>>,
     #[serde(default)]
     pub swift: AppleSwiftConfig,
     #[serde(default)]
@@ -204,6 +213,7 @@ pub struct AndroidConfig {
     #[serde(default = "default_android_min_sdk")]
     pub min_sdk: u32,
     pub ndk_version: Option<String>,
+    pub architectures: Option<Vec<AndroidArchitecture>>,
     #[serde(default)]
     pub kotlin: AndroidKotlinConfig,
     #[serde(default)]
@@ -267,6 +277,7 @@ pub struct JavaJvmConfig {
     pub enabled: bool,
     #[serde(default = "default_java_jvm_output")]
     pub output: PathBuf,
+    pub host_targets: Option<Vec<JavaHostTarget>>,
 }
 
 impl Default for JavaJvmConfig {
@@ -274,6 +285,7 @@ impl Default for JavaJvmConfig {
         Self {
             enabled: false,
             output: default_java_jvm_output(),
+            host_targets: None,
         }
     }
 }
@@ -423,6 +435,9 @@ impl Default for AppleConfig {
             output: default_apple_output(),
             deployment_target: default_apple_deployment_target(),
             include_macos: false,
+            ios_architectures: None,
+            simulator_architectures: None,
+            macos_architectures: None,
             swift: AppleSwiftConfig::default(),
             header: HeaderConfig::default(),
             xcframework: XcframeworkConfig::default(),
@@ -438,6 +453,7 @@ impl Default for AndroidConfig {
             output: default_android_output(),
             min_sdk: default_android_min_sdk(),
             ndk_version: None,
+            architectures: None,
             kotlin: AndroidKotlinConfig::default(),
             header: HeaderConfig::default(),
             pack: AndroidPackConfig::default(),
@@ -551,6 +567,55 @@ impl Config {
             ));
         }
 
+        if self.is_android_enabled()
+            && let Some(architectures) = self.targets.android.architectures.as_ref()
+        {
+            if architectures.is_empty() {
+                return Err(ConfigError::Validation(
+                    "targets.android.architectures must be non-empty when provided".to_string(),
+                ));
+            }
+
+            let mut seen = HashSet::new();
+            for architecture in architectures {
+                if !seen.insert(*architecture) {
+                    return Err(ConfigError::Validation(format!(
+                        "targets.android.architectures contains duplicate architecture '{}'",
+                        architecture.canonical_name()
+                    )));
+                }
+            }
+        }
+
+        if self.is_apple_enabled() {
+            validate_non_empty_unique(
+                self.targets.apple.ios_architectures.as_deref(),
+                "targets.apple.ios_architectures",
+                AppleIosArchitecture::canonical_name,
+            )?;
+            validate_non_empty_unique(
+                self.targets.apple.simulator_architectures.as_deref(),
+                "targets.apple.simulator_architectures",
+                AppleArchitecture::canonical_name,
+            )?;
+            if self.apple_include_macos() {
+                validate_non_empty_unique(
+                    self.targets.apple.macos_architectures.as_deref(),
+                    "targets.apple.macos_architectures",
+                    AppleArchitecture::canonical_name,
+                )?;
+            }
+        }
+
+        if self.is_java_jvm_enabled()
+            && let Some(host_targets) = self.targets.java.jvm.host_targets.as_ref()
+            && host_targets.is_empty()
+        {
+            return Err(ConfigError::Validation(
+                "targets.java.jvm.host_targets must be non-empty when provided".to_string(),
+            ));
+        }
+
         Ok(())
     }
 
@@ -601,6 +666,56 @@ impl Config {
 
     pub fn apple_include_macos(&self) -> bool {
         self.targets.apple.include_macos
+    }
+
+    pub fn apple_ios_architectures(&self) -> &[AppleIosArchitecture] {
+        self.targets
+            .apple
+            .ios_architectures
+            .as_deref()
+            .unwrap_or(AppleIosArchitecture::ALL)
+    }
+
+    pub fn apple_simulator_architectures(&self) -> &[AppleArchitecture] {
+        self.targets
+            .apple
+            .simulator_architectures
+            .as_deref()
+            .unwrap_or(AppleArchitecture::ALL)
+    }
+
+    pub fn apple_macos_architectures(&self) -> &[AppleArchitecture] {
+        self.targets
+            .apple
+            .macos_architectures
+            .as_deref()
+            .unwrap_or(AppleArchitecture::ALL)
+    }
+
+    pub fn apple_ios_targets(&self) -> Vec<RustTarget> {
+        resolve_apple_ios_targets(self.apple_ios_architectures())
+    }
+
+    pub fn apple_simulator_targets(&self) -> Vec<RustTarget> {
+        resolve_apple_simulator_targets(self.apple_simulator_architectures())
+    }
+
+    pub fn apple_macos_targets(&self) -> Vec<RustTarget> {
+        self.targets
+            .apple
+            .macos_architectures
+            .as_deref()
+            .map(resolve_apple_macos_targets)
+            .unwrap_or_else(|| RustTarget::ALL_MACOS.to_vec())
+    }
+
+    pub fn apple_targets(&self) -> Vec<RustTarget> {
+        let mut targets = self.apple_ios_targets();
+        targets.extend(self.apple_simulator_targets());
+        if self.apple_include_macos() {
+            targets.extend(self.apple_macos_targets());
+        }
+        targets
     }
 
     pub fn apple_deployment_target(&self) -> &str {
@@ -665,6 +780,18 @@ impl Config {
 
     pub fn android_ndk_version(&self) -> Option<&str> {
         self.targets.android.ndk_version.as_deref()
+    }
+
+    pub fn android_architectures(&self) -> &[AndroidArchitecture] {
+        self.targets
+            .android
+            .architectures
+            .as_deref()
+            .unwrap_or(AndroidArchitecture::ALL)
+    }
+
+    pub fn android_targets(&self) -> Vec<RustTarget> {
+        resolve_android_targets(self.android_architectures())
     }
 
     pub fn android_output(&self) -> PathBuf {
@@ -845,6 +972,19 @@ impl Config {
 
     pub fn java_jvm_output(&self) -> PathBuf {
         self.targets.java.jvm.output.clone()
+    }
+
+    pub fn java_jvm_requested_host_targets(&self) -> &[JavaHostTarget] {
+        self.targets
+            .java
+            .jvm
+            .host_targets
+            .as_deref()
+            .unwrap_or(JavaHostTarget::DEFAULTS)
+    }
+
+    pub fn java_jvm_host_targets(&self) -> std::result::Result<Vec<JavaHostTarget>, String> {
+        resolve_java_host_targets(self.java_jvm_requested_host_targets())
     }
 
     pub fn java_android_output(&self) -> PathBuf {
@@ -1052,6 +1192,38 @@ fn normalize_module_name(input: &str) -> String {
     }
 }
 
+fn validate_non_empty_unique<T, F>(
+    values: Option<&[T]>,
+    field_name: &str,
+    canonical_name: F,
+) -> Result<(), ConfigError>
+where
+    T: Copy + Eq + std::hash::Hash,
+    F: Fn(T) -> &'static str,
+{
+    let Some(values) = values else {
+        return Ok(());
+    };
+
+    if values.is_empty() {
+        return Err(ConfigError::Validation(format!(
+            "{field_name} must be non-empty when provided"
+        )));
+    }
+
+    let mut seen = HashSet::new();
+    for value in values {
+        if !seen.insert(*value) {
+            return Err(ConfigError::Validation(format!(
+                "{field_name} contains duplicate architecture '{}'",
+                canonical_name(*value)
+            )));
+        }
+    }
+
+    Ok(())
+}
+
 fn to_pascal_case(input: &str) -> String {
     input
         .split(['_', '-'])
@@ -1135,6 +1307,376 @@ include_macos = false
 
         assert_eq!(config.targets.apple.deployment_target, "16.0");
         assert!(!config.targets.apple.include_macos);
+    }
+
+    #[test]
+    fn defaults_apple_architectures_to_ios_and_simulator_defaults() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+"#,
+        );
+
+        assert_eq!(
+            config
+                .apple_ios_architectures()
+                .iter()
+                .map(|architecture| architecture.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["arm64"]
+        );
+        assert_eq!(
+            config
+                .apple_simulator_architectures()
+                .iter()
+                .map(|architecture| architecture.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["arm64", "x86_64"]
+        );
+        assert_eq!(
+            config
+                .apple_targets()
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+            ]
+        );
+    }
+
+    #[test]
+    fn includes_macos_targets_only_when_enabled() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+include_macos = true
+"#,
+        );
+
+        assert_eq!(
+            config
+                .apple_targets()
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin",
+            ]
+        );
+    }
+
+    #[test]
+    fn ignores_macos_architectures_when_macos_is_disabled() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+macos_architectures = ["x86_64"]
+"#,
+        );
+
+        assert_eq!(
+            config
+                .apple_targets()
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+            ]
+        );
+    }
+
+    #[test]
+    fn allows_empty_macos_architectures_when_macos_is_disabled() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+include_macos = false
+macos_architectures = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(parsed.validate().is_ok());
+    }
+
+    #[test]
+    fn rejects_empty_apple_ios_architectures() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+ios_architectures = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message == "targets.apple.ios_architectures must be non-empty when provided"
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_apple_simulator_architectures() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+simulator_architectures = ["arm64", "arm64"]
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message
+                    == "targets.apple.simulator_architectures contains duplicate architecture 'arm64'"
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_apple_ios_architectures() {
+        let parsed = toml::from_str::<Config>(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple]
+ios_architectures = ["x86_64"]
+"#,
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn defaults_android_architectures_to_all_supported_abis() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+"#,
+        );
+
+        assert_eq!(
+            config
+                .android_architectures()
+                .iter()
+                .map(|architecture| architecture.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["arm64", "armv7", "x86_64", "x86"]
+        );
+    }
+
+    #[test]
+    fn rejects_noncanonical_android_architecture_aliases() {
+        let parsed = toml::from_str::<Config>(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android]
+architectures = ["arm"]
+"#,
+        );
+
+        assert!(parsed.is_err());
+    }
+
+    #[test]
+    fn rejects_empty_android_architectures() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android]
+architectures = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message == "targets.android.architectures must be non-empty when provided"
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_android_architectures() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.android]
+architectures = ["armv7", "armv7"]
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message
+                    == "targets.android.architectures contains duplicate architecture 'armv7'"
+        ));
+    }
+
+    #[test]
+    fn defaults_java_jvm_host_targets_to_current() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        assert_eq!(
+            config
+                .java_jvm_requested_host_targets()
+                .iter()
+                .map(|target| target.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["current"]
+        );
+        assert_eq!(
+            config
+                .java_jvm_host_targets()
+                .expect("resolved current host")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn parses_java_jvm_host_target_aliases() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+host_targets = ["current", "darwin-aarch64", "linux-x86-64", "windows-x86-64"]
+"#,
+        );
+
+        assert_eq!(
+            config
+                .java_jvm_requested_host_targets()
+                .iter()
+                .map(|target| target.canonical_name())
+                .collect::<Vec<_>>(),
+            vec!["current", "darwin-arm64", "linux-x86_64", "windows-x86_64"]
+        );
+    }
+
+    #[test]
+    fn rejects_empty_java_jvm_host_targets() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+host_targets = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message == "targets.java.jvm.host_targets must be non-empty when provided"
+        ));
+    }
+
+    #[test]
+    fn resolves_current_java_host_targets_with_deduping() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let current_host_value = current_host.canonical_name();
+        let config = parse_config(&format!(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+host_targets = ["current", "{current_host_value}"]
+"#
+        ));
+
+        assert_eq!(
+            config
+                .java_jvm_host_targets()
+                .expect("resolved current host"),
+            vec![current_host]
+        );
+    }
+
+    #[test]
+    fn preserves_explicit_cross_host_java_targets() {
+        let current_host = JavaHostTarget::current().expect("supported test host");
+        let explicit_other_host = [
+            JavaHostTarget::DarwinArm64,
+            JavaHostTarget::DarwinX86_64,
+            JavaHostTarget::LinuxX86_64,
+            JavaHostTarget::LinuxAarch64,
+            JavaHostTarget::WindowsX86_64,
+        ]
+        .into_iter()
+        .find(|target| *target != current_host)
+        .expect("alternate host target");
+        let config = parse_config(&format!(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+host_targets = ["current", "{}"]
+"#,
+            explicit_other_host.canonical_name()
+        ));
+
+        assert_eq!(
+            config
+                .java_jvm_host_targets()
+                .expect("resolved host targets"),
+            vec![current_host, explicit_other_host]
+        );
     }
 
     #[test]

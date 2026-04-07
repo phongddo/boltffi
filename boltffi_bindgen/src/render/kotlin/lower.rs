@@ -250,23 +250,23 @@ impl<'a> KotlinLowerer<'a> {
             class
                 .streams
                 .iter()
-                .for_each(|stream| self.collect_builtins_from_type(&stream.item_type, &mut used));
+                .for_each(|stream| Self::collect_builtins_from_type(&stream.item_type, &mut used));
         });
         self.contract.catalog.all_records().for_each(|record| {
             record
                 .fields
                 .iter()
-                .for_each(|field| self.collect_builtins_from_type(&field.type_expr, &mut used))
+                .for_each(|field| Self::collect_builtins_from_type(&field.type_expr, &mut used))
         });
         self.contract.catalog.all_enums().for_each(|enumeration| {
             if let EnumRepr::Data { variants, .. } = &enumeration.repr {
                 variants.iter().for_each(|variant| match &variant.payload {
                     VariantPayload::Struct(fields) => fields.iter().for_each(|field| {
-                        self.collect_builtins_from_type(&field.type_expr, &mut used)
+                        Self::collect_builtins_from_type(&field.type_expr, &mut used)
                     }),
                     VariantPayload::Tuple(fields) => fields
                         .iter()
-                        .for_each(|ty| self.collect_builtins_from_type(ty, &mut used)),
+                        .for_each(|ty| Self::collect_builtins_from_type(ty, &mut used)),
                     VariantPayload::Unit => {}
                 })
             }
@@ -274,13 +274,12 @@ impl<'a> KotlinLowerer<'a> {
         self.contract
             .catalog
             .all_custom_types()
-            .for_each(|custom| self.collect_builtins_from_type(&custom.repr, &mut used));
+            .for_each(|custom| Self::collect_builtins_from_type(&custom.repr, &mut used));
         self.contract.catalog.all_callbacks().for_each(|callback| {
             callback.methods.iter().for_each(|method| {
-                method
-                    .params
-                    .iter()
-                    .for_each(|param| self.collect_builtins_from_type(&param.type_expr, &mut used));
+                method.params.iter().for_each(|param| {
+                    Self::collect_builtins_from_type(&param.type_expr, &mut used)
+                });
                 self.collect_builtins_from_return(&method.returns, &mut used);
             })
         });
@@ -290,7 +289,7 @@ impl<'a> KotlinLowerer<'a> {
     fn collect_builtins_from_function(&self, func: &FunctionDef, used: &mut HashSet<BuiltinId>) {
         func.params
             .iter()
-            .for_each(|param| self.collect_builtins_from_type(&param.type_expr, used));
+            .for_each(|param| Self::collect_builtins_from_type(&param.type_expr, used));
         self.collect_builtins_from_return(&func.returns, used);
     }
 
@@ -301,39 +300,39 @@ impl<'a> KotlinLowerer<'a> {
     ) {
         ctor.params()
             .iter()
-            .for_each(|param| self.collect_builtins_from_type(&param.type_expr, used));
+            .for_each(|param| Self::collect_builtins_from_type(&param.type_expr, used));
     }
 
     fn collect_builtins_from_method(&self, method: &MethodDef, used: &mut HashSet<BuiltinId>) {
         method
             .params
             .iter()
-            .for_each(|param| self.collect_builtins_from_type(&param.type_expr, used));
+            .for_each(|param| Self::collect_builtins_from_type(&param.type_expr, used));
         self.collect_builtins_from_return(&method.returns, used);
     }
 
     fn collect_builtins_from_return(&self, returns: &ReturnDef, used: &mut HashSet<BuiltinId>) {
         match returns {
             ReturnDef::Void => {}
-            ReturnDef::Value(ty) => self.collect_builtins_from_type(ty, used),
+            ReturnDef::Value(ty) => Self::collect_builtins_from_type(ty, used),
             ReturnDef::Result { ok, err } => {
-                self.collect_builtins_from_type(ok, used);
-                self.collect_builtins_from_type(err, used);
+                Self::collect_builtins_from_type(ok, used);
+                Self::collect_builtins_from_type(err, used);
             }
         }
     }
 
-    fn collect_builtins_from_type(&self, ty: &TypeExpr, used: &mut HashSet<BuiltinId>) {
+    fn collect_builtins_from_type(ty: &TypeExpr, used: &mut HashSet<BuiltinId>) {
         match ty {
             TypeExpr::Builtin(id) => {
                 used.insert(id.clone());
             }
             TypeExpr::Option(inner) | TypeExpr::Vec(inner) => {
-                self.collect_builtins_from_type(inner, used)
+                Self::collect_builtins_from_type(inner, used)
             }
             TypeExpr::Result { ok, err } => {
-                self.collect_builtins_from_type(ok, used);
-                self.collect_builtins_from_type(err, used);
+                Self::collect_builtins_from_type(ok, used);
+                Self::collect_builtins_from_type(err, used);
             }
             _ => {}
         }
@@ -585,7 +584,7 @@ impl<'a> KotlinLowerer<'a> {
 
     fn strip_field_access_in_write_seq(&self, seq: &WriteSeq) -> WriteSeq {
         WriteSeq {
-            size: self.strip_field_access_in_size(&seq.size),
+            size: Self::strip_field_access_in_size(&seq.size),
             ops: seq
                 .ops
                 .iter()
@@ -595,50 +594,47 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn strip_field_access_in_size(&self, size: &SizeExpr) -> SizeExpr {
+    fn strip_field_access_in_size(size: &SizeExpr) -> SizeExpr {
         match size {
             SizeExpr::Fixed(value) => SizeExpr::Fixed(*value),
             SizeExpr::Runtime => SizeExpr::Runtime,
             SizeExpr::StringLen(value) => {
-                SizeExpr::StringLen(self.strip_field_access_in_value(value))
+                SizeExpr::StringLen(Self::strip_field_access_in_value(value))
             }
             SizeExpr::BytesLen(value) => {
-                SizeExpr::BytesLen(self.strip_field_access_in_value(value))
+                SizeExpr::BytesLen(Self::strip_field_access_in_value(value))
             }
             SizeExpr::ValueSize(value) => {
-                SizeExpr::ValueSize(self.strip_field_access_in_value(value))
+                SizeExpr::ValueSize(Self::strip_field_access_in_value(value))
             }
             SizeExpr::WireSize { value, owner } => SizeExpr::WireSize {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 owner: owner.clone(),
             },
             SizeExpr::BuiltinSize { id, value } => SizeExpr::BuiltinSize {
                 id: id.clone(),
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
             },
-            SizeExpr::Sum(parts) => SizeExpr::Sum(
-                parts
-                    .iter()
-                    .map(|part| self.strip_field_access_in_size(part))
-                    .collect(),
-            ),
+            SizeExpr::Sum(parts) => {
+                SizeExpr::Sum(parts.iter().map(Self::strip_field_access_in_size).collect())
+            }
             SizeExpr::OptionSize { value, inner } => SizeExpr::OptionSize {
-                value: self.strip_field_access_in_value(value),
-                inner: Box::new(self.strip_field_access_in_size(inner)),
+                value: Self::strip_field_access_in_value(value),
+                inner: Box::new(Self::strip_field_access_in_size(inner)),
             },
             SizeExpr::VecSize {
                 value,
                 inner,
                 layout,
             } => SizeExpr::VecSize {
-                value: self.strip_field_access_in_value(value),
-                inner: Box::new(self.strip_field_access_in_size(inner)),
+                value: Self::strip_field_access_in_value(value),
+                inner: Box::new(Self::strip_field_access_in_size(inner)),
                 layout: layout.clone(),
             },
             SizeExpr::ResultSize { value, ok, err } => SizeExpr::ResultSize {
-                value: self.strip_field_access_in_value(value),
-                ok: Box::new(self.strip_field_access_in_size(ok)),
-                err: Box::new(self.strip_field_access_in_size(err)),
+                value: Self::strip_field_access_in_value(value),
+                ok: Box::new(Self::strip_field_access_in_size(ok)),
+                err: Box::new(Self::strip_field_access_in_size(err)),
             },
         }
     }
@@ -647,20 +643,20 @@ impl<'a> KotlinLowerer<'a> {
         match op {
             WriteOp::Primitive { primitive, value } => WriteOp::Primitive {
                 primitive: *primitive,
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
             },
             WriteOp::String { value } => WriteOp::String {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
             },
             WriteOp::Bytes { value } => WriteOp::Bytes {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
             },
             WriteOp::Builtin { id, value } => WriteOp::Builtin {
                 id: id.clone(),
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
             },
             WriteOp::Option { value, some } => WriteOp::Option {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 some: Box::new(self.strip_field_access_in_write_seq(some)),
             },
             WriteOp::Vec {
@@ -669,30 +665,30 @@ impl<'a> KotlinLowerer<'a> {
                 element,
                 layout,
             } => WriteOp::Vec {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 element_type: element_type.clone(),
                 element: Box::new(self.strip_field_access_in_write_seq(element)),
                 layout: layout.clone(),
             },
             WriteOp::Record { id, value, fields } => WriteOp::Record {
                 id: id.clone(),
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 fields: fields
                     .iter()
                     .map(|field| FieldWriteOp {
                         name: field.name.clone(),
-                        accessor: self.strip_field_access_in_value(&field.accessor),
+                        accessor: Self::strip_field_access_in_value(&field.accessor),
                         seq: self.strip_field_access_in_write_seq(&field.seq),
                     })
                     .collect(),
             },
             WriteOp::Enum { id, value, layout } => WriteOp::Enum {
                 id: id.clone(),
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 layout: layout.clone(),
             },
             WriteOp::Result { value, ok, err } => WriteOp::Result {
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 ok: Box::new(self.strip_field_access_in_write_seq(ok)),
                 err: Box::new(self.strip_field_access_in_write_seq(err)),
             },
@@ -702,16 +698,16 @@ impl<'a> KotlinLowerer<'a> {
                 underlying,
             } => WriteOp::Custom {
                 id: id.clone(),
-                value: self.strip_field_access_in_value(value),
+                value: Self::strip_field_access_in_value(value),
                 underlying: Box::new(self.strip_field_access_in_write_seq(underlying)),
             },
         }
     }
 
-    fn strip_field_access_in_value(&self, value: &ValueExpr) -> ValueExpr {
+    fn strip_field_access_in_value(value: &ValueExpr) -> ValueExpr {
         match value {
             ValueExpr::Field(parent, name) => {
-                let stripped_parent = self.strip_field_access_in_value(parent);
+                let stripped_parent = Self::strip_field_access_in_value(parent);
                 match &stripped_parent {
                     ValueExpr::Var(var) if var == "repr" => ValueExpr::Var("repr".to_string()),
                     ValueExpr::Named(name) if name == "repr" => ValueExpr::Var("repr".to_string()),
@@ -1573,7 +1569,7 @@ impl<'a> KotlinLowerer<'a> {
 
     fn stream_pop_batch_items_expr(&self, stream: &AbiStream) -> String {
         match &stream.item_transport {
-            Transport::Scalar(origin) => self.direct_scalar_stream_items_expr(origin),
+            Transport::Scalar(origin) => Self::direct_scalar_stream_items_expr(origin),
             Transport::Composite(layout) => {
                 let reader_name = format!(
                     "{}Reader",
@@ -1596,7 +1592,7 @@ impl<'a> KotlinLowerer<'a> {
         }
     }
 
-    fn direct_scalar_stream_items_expr(&self, origin: &ScalarOrigin) -> String {
+    fn direct_scalar_stream_items_expr(origin: &ScalarOrigin) -> String {
         match origin {
             ScalarOrigin::Primitive(primitive) => match primitive {
                 PrimitiveType::Bool => {
@@ -1634,7 +1630,7 @@ impl<'a> KotlinLowerer<'a> {
             ScalarOrigin::CStyleEnum { enum_id, tag_type } => {
                 let enum_name = NamingConvention::class_name(enum_id.as_str());
                 let values_expr =
-                    self.direct_scalar_stream_items_expr(&ScalarOrigin::Primitive(*tag_type));
+                    Self::direct_scalar_stream_items_expr(&ScalarOrigin::Primitive(*tag_type));
                 format!("{}.map {{ value -> {}.fromValue(value) }}", values_expr, enum_name)
             }
         }
@@ -1866,9 +1862,12 @@ impl<'a> KotlinLowerer<'a> {
         let return_info =
             self.callback_return_info(&method.returns, output_route, &abi_method.error);
         let invoker = self.async_callback_invoker(&return_info, output_route);
+        let method_name_pascal = NamingConvention::class_name(method.id.as_str());
         KotlinAsyncCallbackMethod {
             name: NamingConvention::method_name(method.id.as_str()),
             ffi_name: abi_method.vtable_field.as_str().to_string(),
+            complete_name: format!("complete{}", method_name_pascal),
+            fail_name: format!("fail{}", method_name_pascal),
             invoker_name: invoker.name,
             params,
             return_info,
@@ -2521,6 +2520,7 @@ impl<'a> KotlinLowerer<'a> {
                 .library_name
                 .clone()
                 .unwrap_or_else(|| self.contract.package.name.clone()),
+            desktop_loader: self.options.desktop_loader,
             prefix: naming::ffi_prefix().to_string(),
             functions,
             wire_functions,
@@ -4082,7 +4082,7 @@ impl<'a> KotlinLowerer<'a> {
     fn find_custom_read_seq(&self, custom: &CustomTypeId) -> Option<ReadSeq> {
         self.read_seqs()
             .into_iter()
-            .find_map(|seq| self.read_seq_custom(&seq, custom))
+            .find_map(|seq| Self::read_seq_custom(&seq, custom))
     }
 
     fn read_seqs(&self) -> Vec<ReadSeq> {
@@ -4146,17 +4146,17 @@ impl<'a> KotlinLowerer<'a> {
             .collect()
     }
 
-    fn read_seq_custom(&self, seq: &ReadSeq, custom: &CustomTypeId) -> Option<ReadSeq> {
+    fn read_seq_custom(seq: &ReadSeq, custom: &CustomTypeId) -> Option<ReadSeq> {
         seq.ops.iter().find_map(|op| match op {
             ReadOp::Custom { id, underlying } if id == custom => Some(*underlying.clone()),
-            ReadOp::Option { some, .. } => self.read_seq_custom(some, custom),
-            ReadOp::Vec { element, .. } => self.read_seq_custom(element, custom),
+            ReadOp::Option { some, .. } => Self::read_seq_custom(some, custom),
+            ReadOp::Vec { element, .. } => Self::read_seq_custom(element, custom),
             ReadOp::Record { fields, .. } => fields
                 .iter()
-                .find_map(|field| self.read_seq_custom(&field.seq, custom)),
-            ReadOp::Result { ok, err, .. } => self
-                .read_seq_custom(ok, custom)
-                .or_else(|| self.read_seq_custom(err, custom)),
+                .find_map(|field| Self::read_seq_custom(&field.seq, custom)),
+            ReadOp::Result { ok, err, .. } => {
+                Self::read_seq_custom(ok, custom).or_else(|| Self::read_seq_custom(err, custom))
+            }
             _ => None,
         })
     }
@@ -4164,7 +4164,7 @@ impl<'a> KotlinLowerer<'a> {
     fn find_custom_write_seq(&self, custom: &CustomTypeId) -> Option<WriteSeq> {
         self.write_seqs()
             .into_iter()
-            .find_map(|seq| self.write_seq_custom(&seq, custom))
+            .find_map(|seq| Self::write_seq_custom(&seq, custom))
     }
 
     fn write_seqs(&self) -> Vec<WriteSeq> {
@@ -4220,17 +4220,17 @@ impl<'a> KotlinLowerer<'a> {
             .collect()
     }
 
-    fn write_seq_custom(&self, seq: &WriteSeq, custom: &CustomTypeId) -> Option<WriteSeq> {
+    fn write_seq_custom(seq: &WriteSeq, custom: &CustomTypeId) -> Option<WriteSeq> {
         seq.ops.iter().find_map(|op| match op {
             WriteOp::Custom { id, underlying, .. } if id == custom => Some(*underlying.clone()),
-            WriteOp::Option { some, .. } => self.write_seq_custom(some, custom),
-            WriteOp::Vec { element, .. } => self.write_seq_custom(element, custom),
+            WriteOp::Option { some, .. } => Self::write_seq_custom(some, custom),
+            WriteOp::Vec { element, .. } => Self::write_seq_custom(element, custom),
             WriteOp::Record { fields, .. } => fields
                 .iter()
-                .find_map(|field| self.write_seq_custom(&field.seq, custom)),
-            WriteOp::Result { ok, err, .. } => self
-                .write_seq_custom(ok, custom)
-                .or_else(|| self.write_seq_custom(err, custom)),
+                .find_map(|field| Self::write_seq_custom(&field.seq, custom)),
+            WriteOp::Result { ok, err, .. } => {
+                Self::write_seq_custom(ok, custom).or_else(|| Self::write_seq_custom(err, custom))
+            }
             _ => None,
         })
     }
@@ -4306,16 +4306,16 @@ impl<'a> KotlinLowerer<'a> {
     fn find_read_seq_for_type(&self, ty: &TypeExpr) -> Option<ReadSeq> {
         self.read_seqs()
             .into_iter()
-            .find(|seq| self.read_seq_matches_type(seq, ty))
+            .find(|seq| Self::read_seq_matches_type(seq, ty))
     }
 
     fn find_write_seq_for_type(&self, ty: &TypeExpr) -> Option<WriteSeq> {
         self.write_seqs()
             .into_iter()
-            .find(|seq| self.write_seq_matches_type(seq, ty))
+            .find(|seq| Self::write_seq_matches_type(seq, ty))
     }
 
-    fn read_seq_matches_type(&self, seq: &ReadSeq, ty: &TypeExpr) -> bool {
+    fn read_seq_matches_type(seq: &ReadSeq, ty: &TypeExpr) -> bool {
         match (seq.ops.first(), ty) {
             (Some(ReadOp::Primitive { primitive, .. }), TypeExpr::Primitive(expected)) => {
                 primitive == expected
@@ -4330,7 +4330,7 @@ impl<'a> KotlinLowerer<'a> {
                 element_type == inner.as_ref()
             }
             (Some(ReadOp::Option { some, .. }), TypeExpr::Option(inner)) => {
-                self.read_seq_matches_type(some, inner)
+                Self::read_seq_matches_type(some, inner)
             }
             (
                 Some(ReadOp::Result { ok, err, .. }),
@@ -4338,12 +4338,12 @@ impl<'a> KotlinLowerer<'a> {
                     ok: ok_ty,
                     err: err_ty,
                 },
-            ) => self.read_seq_matches_type(ok, ok_ty) && self.read_seq_matches_type(err, err_ty),
+            ) => Self::read_seq_matches_type(ok, ok_ty) && Self::read_seq_matches_type(err, err_ty),
             _ => false,
         }
     }
 
-    fn write_seq_matches_type(&self, seq: &WriteSeq, ty: &TypeExpr) -> bool {
+    fn write_seq_matches_type(seq: &WriteSeq, ty: &TypeExpr) -> bool {
         match (seq.ops.first(), ty) {
             (Some(WriteOp::Primitive { primitive, .. }), TypeExpr::Primitive(expected)) => {
                 primitive == expected
@@ -4358,7 +4358,7 @@ impl<'a> KotlinLowerer<'a> {
                 element_type == inner.as_ref()
             }
             (Some(WriteOp::Option { some, .. }), TypeExpr::Option(inner)) => {
-                self.write_seq_matches_type(some, inner)
+                Self::write_seq_matches_type(some, inner)
             }
             (
                 Some(WriteOp::Result { ok, err, .. }),
@@ -4366,7 +4366,9 @@ impl<'a> KotlinLowerer<'a> {
                     ok: ok_ty,
                     err: err_ty,
                 },
-            ) => self.write_seq_matches_type(ok, ok_ty) && self.write_seq_matches_type(err, err_ty),
+            ) => {
+                Self::write_seq_matches_type(ok, ok_ty) && Self::write_seq_matches_type(err, err_ty)
+            }
             _ => false,
         }
     }

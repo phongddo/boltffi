@@ -2,6 +2,7 @@ final class Native {
     static {
         String preferredLibrary = "{{ module.lib_name }}_jni";
         String fallbackLibrary = "{{ module.lib_name }}";
+{%- if module.desktop_loader %}
         String vmName = System.getProperty("java.vm.name");
         if (vmName == null) vmName = "";
         boolean isAndroidRuntime =
@@ -10,11 +11,160 @@ final class Native {
         if (isAndroidRuntime) {
             System.loadLibrary(fallbackLibrary);
         } else {
-            System.loadLibrary(preferredLibrary);
+            loadDesktopLibraries(preferredLibrary, fallbackLibrary);
         }
+{%- else %}
+        System.loadLibrary(fallbackLibrary);
+{%- endif %}
     }
 
     private Native() {}
+
+{%- if module.desktop_loader %}
+    private static volatile java.io.File bundledLibraryDirectory;
+
+    private static void loadDesktopLibraries(String preferredLibrary, String fallbackLibrary) {
+        UnsatisfiedLinkError preferredFailure = tryLoadDesktopLibrary(preferredLibrary);
+        if (preferredFailure == null) {
+            return;
+        }
+
+        if (tryLoadOptionalDesktopLibrary(fallbackLibrary)) {
+            preferredFailure = tryLoadDesktopLibrary(preferredLibrary);
+            if (preferredFailure == null) {
+                return;
+            }
+        }
+
+        throw preferredFailure;
+    }
+
+    private static UnsatisfiedLinkError tryLoadDesktopLibrary(String libraryName) {
+        try {
+            if (loadBundledLibraryIfPresent(libraryName) || loadExternalLibraryIfPresent(libraryName)) {
+                return null;
+            }
+            return new UnsatisfiedLinkError("Could not load native library '" + libraryName + "'");
+        } catch (UnsatisfiedLinkError error) {
+            return error;
+        }
+    }
+
+    private static boolean tryLoadOptionalDesktopLibrary(String libraryName) {
+        try {
+            return loadBundledLibraryIfPresent(libraryName) || loadExternalLibraryIfPresent(libraryName);
+        } catch (UnsatisfiedLinkError ignored) {
+            return false;
+        }
+    }
+
+    private static boolean loadExternalLibraryIfPresent(String libraryName) {
+        try {
+            System.loadLibrary(libraryName);
+            return true;
+        } catch (UnsatisfiedLinkError ignored) {
+            return false;
+        }
+    }
+
+    private static boolean loadBundledLibraryIfPresent(String libraryName) {
+        String mappedName = System.mapLibraryName(libraryName);
+        for (String resourcePath : bundledLibraryResourceCandidates(mappedName)) {
+            try (java.io.InputStream input = Native.class.getResourceAsStream(resourcePath)) {
+                if (input == null) continue;
+                java.io.File extracted = extractBundledLibrary(resourcePath, input);
+                System.load(extracted.getAbsolutePath());
+                return true;
+            } catch (java.io.IOException error) {
+                throw new ExceptionInInitializerError(error);
+            }
+        }
+        return false;
+    }
+
+    private static java.io.File extractBundledLibrary(
+        String resourcePath,
+        java.io.InputStream input
+    ) throws java.io.IOException {
+        String fileName = resourcePath.substring(resourcePath.lastIndexOf('/') + 1);
+        java.io.File extracted = new java.io.File(bundledLibraryDirectory(), fileName);
+        if (!extracted.isFile()) {
+            copyBundledLibrary(input, extracted);
+            extracted.deleteOnExit();
+        }
+        return extracted;
+    }
+
+    private static void copyBundledLibrary(
+        java.io.InputStream input,
+        java.io.File extracted
+    ) throws java.io.IOException {
+        try (java.io.OutputStream output = new java.io.FileOutputStream(extracted)) {
+            byte[] buffer = new byte[8192];
+            int read;
+            while ((read = input.read(buffer)) != -1) {
+                output.write(buffer, 0, read);
+            }
+        }
+    }
+
+    private static java.io.File bundledLibraryDirectory() throws java.io.IOException {
+        java.io.File existing = bundledLibraryDirectory;
+        if (existing != null) {
+            return existing;
+        }
+
+        synchronized (Native.class) {
+            if (bundledLibraryDirectory == null) {
+                bundledLibraryDirectory = createBundledLibraryDirectory();
+            }
+            return bundledLibraryDirectory;
+        }
+    }
+
+    private static java.io.File createBundledLibraryDirectory() throws java.io.IOException {
+        java.io.File created = java.io.File.createTempFile("boltffi-native-", "");
+        if (!created.delete() || !created.mkdir()) {
+            throw new java.io.IOException("failed to create temp directory for bundled native extraction");
+        }
+        created.deleteOnExit();
+        return created;
+    }
+
+    private static java.util.List<String> bundledLibraryResourceCandidates(String mappedName) {
+        java.util.ArrayList<String> candidates = new java.util.ArrayList<>();
+        for (String directory : desktopNativeDirectories()) {
+            candidates.add("/" + directory + "/" + mappedName);
+            candidates.add("/native/" + directory + "/" + mappedName);
+        }
+        candidates.add("/" + mappedName);
+        return candidates;
+    }
+
+    private static java.util.List<String> desktopNativeDirectories() {
+        String osName = System.getProperty("os.name", "").toLowerCase();
+        String osArch = System.getProperty("os.arch", "").toLowerCase();
+
+        if ((osName.contains("mac") || osName.contains("darwin"))
+            && (osArch.equals("aarch64") || osArch.equals("arm64"))) {
+            return java.util.Arrays.asList("darwin-arm64", "darwin-aarch64");
+        }
+        if ((osName.contains("mac") || osName.contains("darwin")) && osArch.equals("x86_64")) {
+            return java.util.Arrays.asList("darwin-x86_64", "darwin-x86-64");
+        }
+        if (osName.contains("linux") && (osArch.equals("x86_64") || osArch.equals("amd64"))) {
+            return java.util.Arrays.asList("linux-x86_64", "linux-x86-64");
+        }
+        if (osName.contains("linux") && (osArch.equals("aarch64") || osArch.equals("arm64"))) {
+            return java.util.Arrays.asList("linux-aarch64", "linux-arm64");
+        }
+        if (osName.contains("windows") && (osArch.equals("x86_64") || osArch.equals("amd64"))) {
+            return java.util.Arrays.asList("windows-x86_64", "windows-x86-64", "win32-x86_64");
+        }
+
+        return java.util.Collections.emptyList();
+    }
+{%- endif %}
 
     @SuppressWarnings("unused")
     static void boltffiFutureContinuationCallback(long handle, byte pollResult) {

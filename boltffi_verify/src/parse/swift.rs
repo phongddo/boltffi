@@ -268,8 +268,9 @@ impl SwiftExtractor {
         }
 
         let value = self
-            .find_descendant_by_kind(node, "call_expression")
-            .or_else(|| self.find_descendant_by_kind(node, "navigation_expression"))
+            .find_child_by_kind(node, "value_binding")
+            .or_else(|| Self::find_descendant_by_kind(node, "call_expression"))
+            .or_else(|| Self::find_descendant_by_kind(node, "navigation_expression"))
             .map(|v| self.extract_expression(v, ctx))
             .unwrap_or(Expression::Other {
                 description: "no value".to_string(),
@@ -319,7 +320,7 @@ impl SwiftExtractor {
 
             let body = self
                 .find_child_by_kind(node, "lambda_literal")
-                .or_else(|| self.find_descendant_by_kind(node, "statements"))
+                .or_else(|| Self::find_descendant_by_kind(node, "statements"))
                 .map(|s| self.extract_statements(s, ctx))
                 .unwrap_or_default();
 
@@ -707,7 +708,7 @@ impl SwiftExtractor {
         children.into_iter().find(|c| c.kind() == kind)
     }
 
-    fn find_descendant_by_kind<'a>(&self, node: Node<'a>, kind: &str) -> Option<Node<'a>> {
+    fn find_descendant_by_kind<'a>(node: Node<'a>, kind: &str) -> Option<Node<'a>> {
         if node.kind() == kind {
             return Some(node);
         }
@@ -715,7 +716,7 @@ impl SwiftExtractor {
         let children: Vec<_> = node.children(&mut cursor).collect();
         children
             .into_iter()
-            .find_map(|child| self.find_descendant_by_kind(child, kind))
+            .find_map(|child| Self::find_descendant_by_kind(child, kind))
     }
 
     fn node_text(&self, node: Node) -> String {

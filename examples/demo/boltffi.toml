@@ -43,3 +43,4 @@ package = "com.boltffi.demo"
 [targets.java.jvm]
 enabled = true
 output = "../platforms/java/src/main/java"
+host_targets = ["current"]

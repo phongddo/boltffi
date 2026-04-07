@@ -1584,12 +1584,12 @@ impl<'a> JniLowerer<'a> {
         }
     }
 
-    fn fixed_size(&self, size: &SizeExpr) -> Option<usize> {
+    fn fixed_size(size: &SizeExpr) -> Option<usize> {
         match size {
             SizeExpr::Fixed(value) => Some(*value),
             SizeExpr::Sum(parts) => parts
                 .iter()
-                .map(|part| self.fixed_size(part))
+                .map(Self::fixed_size)
                 .collect::<Option<Vec<_>>>()
                 .map(|sizes| sizes.into_iter().sum()),
             _ => None,
@@ -1601,7 +1601,7 @@ impl<'a> JniLowerer<'a> {
             .enums
             .iter()
             .find(|enum_def| enum_def.id == *enum_id)
-            .and_then(|enum_def| self.fixed_size(&enum_def.encode_ops.size))
+            .and_then(|enum_def| Self::fixed_size(&enum_def.encode_ops.size))
             .unwrap_or(0)
     }
 

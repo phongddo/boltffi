@@ -50,18 +50,14 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
                 return Ok(Vec::new());
             }
             println!("Building for Apple ({})...", profile);
-            let mut apple_results = builder.build_ios()?;
-            if config.apple_include_macos() {
-                apple_results.extend(builder.build_macos()?);
-            }
-            apple_results
+            builder.build_targets(&config.apple_targets())?
         }
         BuildPlatform::Android => {
             if !config.is_android_enabled() {
                 return Ok(Vec::new());
             }
             println!("Building for Android ({})...", profile);
-            builder.build_android()?
+            builder.build_android(&config.android_targets())?
         }
         BuildPlatform::Wasm => {
             if !config.is_wasm_enabled() {
@@ -74,13 +70,10 @@ pub fn run_build(config: &Config, options: BuildCommandOptions) -> Result<Vec<Bu
             println!("Building all targets ({})...", profile);
             let mut all_results = Vec::new();
             if config.is_apple_enabled() {
-                all_results.extend(builder.build_ios()?);
+                all_results.extend(builder.build_targets(&config.apple_targets())?);
             }
             if config.is_android_enabled() {
-                all_results.extend(builder.build_android()?);
-            }
-            if config.is_apple_enabled() && config.apple_include_macos() {
-                all_results.extend(builder.build_macos()?);
+                all_results.extend(builder.build_android(&config.android_targets())?);
             }
             if config.is_wasm_enabled() {
                 all_results.extend(builder.build_wasm_with_triple(config.wasm_triple())?);
