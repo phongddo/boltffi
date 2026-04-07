@@ -8,6 +8,7 @@ pub enum Platform {
     MacOs,
     Android,
     Wasm,
+    Linux,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -362,6 +363,18 @@ impl RustTarget {
         architecture: Architecture::Wasm32,
     };
 
+    pub const LINUX_X86_64: Self = Self {
+        triple: "x86_64-unknown-linux-gnu",
+        platform: Platform::Linux,
+        architecture: Architecture::X86_64,
+    };
+
+    pub const LINUX_ARM64: Self = Self {
+        triple: "aarch64-unknown-linux-gnu",
+        platform: Platform::Linux,
+        architecture: Architecture::Arm64,
+    };
+
     pub const ALL_IOS: &'static [Self] =
         &[Self::IOS_ARM64, Self::IOS_SIM_ARM64, Self::IOS_SIM_X86_64];
 
@@ -405,6 +418,7 @@ impl RustTarget {
             // into the generated JNI glue. Using the Rust cdylib here leaves a DT_NEEDED
             // entry on the build-machine path, which breaks on-device loading.
             Platform::Android => format!("lib{}.a", lib_name),
+            Platform::Linux => format!("lib{}.so", lib_name),
         };
 
         target_dir
