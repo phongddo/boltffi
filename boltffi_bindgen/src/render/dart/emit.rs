@@ -309,94 +309,10 @@ fn emit_write_vec(
     _element: &WriteSeq,
     _layout: &VecLayout,
 ) -> String {
-    // match layout {
-    //     VecLayout::Blittable { .. } => match element_type {
-    //         TypeExpr::Primitive(_) => format!("wire.writePrimitiveList({})", value),
-    //         TypeExpr::Record(id) => format!(
-    //             "wire.writeU32({}.size.toUInt()); {}Writer.writeAllToWire(wire, {})",
-    //             value,
-    //             id.as_str(),
-    //             value
-    //         ),
-    //         _ => {
-    //             let inner = emit_write_expr(element, "writer");
-    //             format!(
-    //                 "wire.writeU32({}.size.toUInt()); {}.forEach {{ item -> {} }}",
-    //                 value, value, inner
-    //             )
-    //         }
-    //     },
-    //     VecLayout::Encoded => {
-    //         let inner = emit_write_expr(element, "writer");
-    //         format!(
-    //             "wire.writeU32({}.size.toUInt()); {}.forEach {{ item -> {} }}",
-    //             value, value, inner
-    //         )
-    //     }
-    // }
     String::new()
 }
 
 pub fn emit_write_expr(_seq: &WriteSeq, _writer_name: &str) -> String {
-    // let op = seq.ops.first().expect("write ops");
-    // match op {
-    //     WriteOp::Primitive { primitive, value } => {
-    //         emit_write_primitive(*primitive, writer_name, render_value(value).as_str())
-    //     }
-    //     WriteOp::String { value } => {
-    //         format!("{}.writeString({})", writer_name, render_value(value))
-    //     }
-    //     WriteOp::Bytes { value } => format!("{}.writeBytes({})", writer_name, render_value(value)),
-    //     WriteOp::Option { value, some } => {
-    //         let inner = emit_write_expr(some, writer_name);
-    //
-    //         format!(
-    //             "if ({value} == null) {{ {writer_name}.writeI32(0); }} else {{ {writer_name}.writeI32(1);{inner}; }}",
-    //             value = render_value(value),
-    //         )
-    //     }
-    //     WriteOp::Vec {
-    //         value,
-    //         element_type,
-    //         element,
-    //         layout,
-    //     } => emit_write_vec(&render_value(value), element_type, element, layout),
-    //     WriteOp::Record { value, .. } => {
-    //         format!("{}.wireEncodeTo({writer_name})", render_value(value))
-    //     }
-    //     WriteOp::Enum { value, layout, .. } => match layout {
-    //         EnumLayout::CStyle {
-    //             tag_type,
-    //             tag_strategy: _,
-    //             is_error: false,
-    //         } => enum_tag_write_expr(
-    //             *tag_type,
-    //             writer_name,
-    //             &format!("{}.value", render_value(value)),
-    //         ),
-    //         EnumLayout::CStyle { is_error: true, .. }
-    //         | EnumLayout::Data { .. }
-    //         | EnumLayout::Recursive => {
-    //             format!("{}.wireEncodeTo({writer_name})", render_value(value))
-    //         }
-    //     },
-    //     WriteOp::Result { value, ok, err } => {
-    //         let _v = render_value(value);
-    //         let _ok_expr = emit_write_expr(ok, writer_name);
-    //         let _err_expr = emit_write_expr(err, writer_name);
-    //         let _ok_type = write_seq_dart_type(ok);
-    //         let _err_type = write_seq_dart_type(err);
-    //         // format!(
-    //         //     "when ({}) {{ is BoltFFIResult.Ok<*> -> {{ wire.writeU8(0u); val okVal = boltffiUnsafeCast<{}>({}.value); {} }} is BoltFFIResult.Err<*> -> {{ wire.writeU8(1u); val errVal = boltffiUnsafeCast<{}>({}.error); {} }} }}",
-    //         //     v, ok_type, v, ok_expr, err_type, v, err_expr
-    //         // )
-    //         String::new()
-    //     }
-    //     WriteOp::Builtin { id, value } => emit_write_builtin(id, writer_name, &render_value(value)),
-    //     WriteOp::Custom { value, .. } => {
-    //         format!("{}.wireEncodeTo({writer_name})", render_value(value))
-    //     }
-    // }
     String::new()
 }
 
