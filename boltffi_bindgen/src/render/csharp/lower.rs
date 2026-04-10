@@ -14,11 +14,7 @@ pub struct CSharpLowerer<'a> {
 }
 
 impl<'a> CSharpLowerer<'a> {
-    pub fn new(
-        ffi: &'a FfiContract,
-        abi: &'a AbiContract,
-        options: &'a CSharpOptions,
-    ) -> Self {
+    pub fn new(ffi: &'a FfiContract, abi: &'a AbiContract, options: &'a CSharpOptions) -> Self {
         Self { ffi, abi, options }
     }
 

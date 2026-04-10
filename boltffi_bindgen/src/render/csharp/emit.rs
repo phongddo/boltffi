@@ -5,9 +5,9 @@ use askama::Template as _;
 use crate::ir::{AbiContract, FfiContract};
 
 use super::{
+    CSharpOptions,
     lower::CSharpLowerer,
     templates::{NativeTemplate, PreambleTemplate},
-    CSharpOptions,
 };
 
 /// The rendered C# output: source code plus metadata for file naming.
@@ -26,11 +26,7 @@ pub struct CSharpOutput {
 pub struct CSharpEmitter;
 
 impl CSharpEmitter {
-    pub fn emit(
-        ffi: &FfiContract,
-        abi: &AbiContract,
-        options: &CSharpOptions,
-    ) -> CSharpOutput {
+    pub fn emit(ffi: &FfiContract, abi: &AbiContract, options: &CSharpOptions) -> CSharpOutput {
         let lowerer = CSharpLowerer::new(ffi, abi, options);
         let module = lowerer.lower();
 
