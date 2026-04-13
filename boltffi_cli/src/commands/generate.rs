@@ -295,7 +295,7 @@ fn generate_kotlin(config: &Config, output: Option<PathBuf>) -> Result<()> {
         module_object_name: Some(module_name.clone()),
         library_name: config
             .android_kotlin_library_name()
-            .map(|name| name.to_string()),
+            .map(boltffi_bindgen::library_name),
         desktop_loader: true,
     };
 
@@ -400,7 +400,7 @@ fn generate_java_from_source_directory(
     let abi_contract = ir::Lowerer::new(&contract).to_abi_contract();
 
     let java_options = render::java::JavaOptions {
-        library_name: Some(crate_name.to_string()),
+        library_name: Some(boltffi_bindgen::library_name(crate_name)),
         min_java_version: render::java::JavaVersion(config.java_min_version().unwrap_or(8)),
         desktop_loader: matches!(generation_mode, JavaGenerationMode::Jvm),
     };

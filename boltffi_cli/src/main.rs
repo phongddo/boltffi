@@ -1,3 +1,6 @@
+//! Command-line tool that orchestrates code generation, building, packaging,
+//! and verification.
+
 mod android;
 mod build;
 mod check;

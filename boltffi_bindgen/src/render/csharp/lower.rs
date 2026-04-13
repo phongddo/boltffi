@@ -24,7 +24,7 @@ impl<'a> CSharpLowerer<'a> {
             .options
             .library_name
             .clone()
-            .unwrap_or_else(|| self.ffi.package.name.clone());
+            .unwrap_or_else(|| naming::library_name(&self.ffi.package.name));
 
         let class_name = NamingConvention::class_name(&self.ffi.package.name);
         let namespace = NamingConvention::namespace(&self.ffi.package.name);

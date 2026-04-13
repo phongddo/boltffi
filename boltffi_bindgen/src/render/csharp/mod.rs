@@ -11,9 +11,11 @@ pub use emit::{CSharpEmitter, CSharpOutput};
 pub use names::NamingConvention;
 pub use plan::*;
 
+use boltffi_ffi_rules::naming::{LibraryName, Name};
+
 #[derive(Debug, Clone, Default)]
 pub struct CSharpOptions {
     /// Override the native library name used in `[DllImport("...")]` declarations.
     /// Defaults to the crate/package name when `None`.
-    pub library_name: Option<String>,
+    pub library_name: Option<Name<LibraryName>>,
 }
