@@ -1,0 +1,175 @@
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+use serde::Serialize;
+
+use crate::config::{Config, WasmNpmTarget};
+use crate::error::{CliError, Result};
+
+pub(crate) fn generate_wasm_loader_entrypoints(
+    module_name: &str,
+    enabled_targets: &[WasmNpmTarget],
+    output_dir: &Path,
+) -> Result<()> {
+    enabled_targets.iter().try_for_each(|target| {
+        let (filename, content) = match target {
+            WasmNpmTarget::Bundler => (
+                "bundler.js",
+                format!(
+                    "import init from \"./{module}.js\";\nexport * from \"./{module}.js\";\nexport {{ default as init }} from \"./{module}.js\";\nexport const initialized = (async () => {{\n  const response = await fetch(new URL(\"./{module}_bg.wasm\", import.meta.url));\n  await init(response);\n}})();\n",
+                    module = module_name
+                ),
+            ),
+            WasmNpmTarget::Web => (
+                "web.js",
+                format!(
+                    "import init from \"./{module}.js\";\nexport * from \"./{module}.js\";\nexport {{ default as init }} from \"./{module}.js\";\nexport const initialized = (async () => {{\n  const response = await fetch(new URL(\"./{module}_bg.wasm\", import.meta.url));\n  await init(response);\n}})();\n",
+                    module = module_name
+                ),
+            ),
+            WasmNpmTarget::Nodejs => (
+                "node.js",
+                format!(
+                    "export * from \"./{module}_node.js\";\nexport {{ default, initialized }} from \"./{module}_node.js\";\n",
+                    module = module_name
+                ),
+            ),
+        };
+
+        let path = output_dir.join(filename);
+        std::fs::write(&path, content).map_err(|source| CliError::WriteFailed { path, source })
+    })
+}
+
+pub(crate) fn generate_wasm_package_json(
+    config: &Config,
+    module_name: &str,
+    enabled_targets: &[WasmNpmTarget],
+    output_dir: &Path,
+) -> Result<PathBuf> {
+    let package_name = config
+        .wasm_npm_package_name()
+        .ok_or_else(|| CliError::CommandFailed {
+            command: "targets.wasm.npm.package_name is required for pack wasm".to_string(),
+            status: None,
+        })?;
+    let package_version = config
+        .wasm_npm_version()
+        .unwrap_or_else(|| "0.1.0".to_string());
+
+    let has_bundler = enabled_targets.contains(&WasmNpmTarget::Bundler);
+    let has_web = enabled_targets.contains(&WasmNpmTarget::Web);
+    let has_node = enabled_targets.contains(&WasmNpmTarget::Nodejs);
+    let default_entry = if has_bundler {
+        "./bundler.js"
+    } else if has_web {
+        "./web.js"
+    } else {
+        "./node.js"
+    };
+
+    let runtime_package = config.wasm_runtime_package();
+    let runtime_version = config.wasm_runtime_version();
+    let mut dependencies = BTreeMap::new();
+    dependencies.insert(runtime_package, runtime_version);
+
+    let package_json = WasmPackageJson {
+        name: package_name.to_string(),
+        version: package_version,
+        package_type: "module".to_string(),
+        exports: WasmPackageExports {
+            root: WasmPackageEntry {
+                types: format!("./{}.d.ts", module_name),
+                browser: has_web.then(|| "./web.js".to_string()),
+                node: has_node.then(|| "./node.js".to_string()),
+                default: default_entry.to_string(),
+            },
+        },
+        types: format!("./{}.d.ts", module_name),
+        files: vec![
+            format!("{}.js", module_name),
+            format!("{}.d.ts", module_name),
+            format!("{}_bg.wasm", module_name),
+            "bundler.js".to_string(),
+            "web.js".to_string(),
+            "node.js".to_string(),
+        ],
+        dependencies,
+        license: config.wasm_npm_license(),
+        repository: config.wasm_npm_repository(),
+    };
+
+    let rendered =
+        serde_json::to_string_pretty(&package_json).map_err(|source| CliError::CommandFailed {
+            command: format!("failed to serialize package.json: {}", source),
+            status: None,
+        })?;
+    let package_json_path = output_dir.join("package.json");
+    std::fs::write(&package_json_path, rendered).map_err(|source| CliError::WriteFailed {
+        path: package_json_path.clone(),
+        source,
+    })?;
+
+    Ok(package_json_path)
+}
+
+pub(crate) fn generate_wasm_readme(
+    config: &Config,
+    module_name: &str,
+    enabled_targets: &[WasmNpmTarget],
+    output_dir: &Path,
+) -> Result<PathBuf> {
+    let package_name = config.wasm_npm_package_name().unwrap_or(module_name);
+    let targets_text = enabled_targets
+        .iter()
+        .map(|target| match target {
+            WasmNpmTarget::Bundler => "bundler",
+            WasmNpmTarget::Web => "web",
+            WasmNpmTarget::Nodejs => "nodejs",
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    let content = format!(
+        "# {package_name}\n\nGenerated by boltffi.\n\nEnabled wasm npm targets: {targets_text}\n\n```ts\nimport {{ initialized }} from \"{package_name}\";\nawait initialized;\n```\n"
+    );
+
+    let readme_path = output_dir.join("README.md");
+    std::fs::write(&readme_path, content).map_err(|source| CliError::WriteFailed {
+        path: readme_path.clone(),
+        source,
+    })?;
+
+    Ok(readme_path)
+}
+
+#[derive(Serialize)]
+pub(crate) struct WasmPackageJson {
+    name: String,
+    version: String,
+    #[serde(rename = "type")]
+    package_type: String,
+    exports: WasmPackageExports,
+    types: String,
+    files: Vec<String>,
+    dependencies: BTreeMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    license: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    repository: Option<String>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WasmPackageExports {
+    #[serde(rename = ".")]
+    root: WasmPackageEntry,
+}
+
+#[derive(Serialize)]
+pub(crate) struct WasmPackageEntry {
+    types: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    browser: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    node: Option<String>,
+    default: String,
+}

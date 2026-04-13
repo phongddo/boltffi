@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use crate::config::Config;
-use crate::error::{CliError, Result};
+use crate::error::{CliError, PackError, Result};
 use crate::target::{BuiltLibrary, Platform, RustTarget};
 use crate::toolchain::AndroidToolchain;
 
@@ -27,9 +27,10 @@ impl<'a> AndroidPackager<'a> {
         let android_libs = self.filter_android_libraries();
 
         if android_libs.is_empty() {
-            return Err(CliError::NoLibrariesFound {
+            return Err(PackError::NoLibrariesFound {
                 platform: "Android".to_string(),
-            });
+            }
+            .into());
         }
 
         let jnilibs_path = self.config.android_pack_output();
