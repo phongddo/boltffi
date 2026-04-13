@@ -2,6 +2,7 @@ use std::path::PathBuf;
 use std::path::{Component, Path};
 
 use boltffi_bindgen::render::dart::{DartEmitter, DartLowerer};
+use boltffi_bindgen::render::python::{PythonEmitter, PythonLowerer};
 use boltffi_bindgen::render::typescript::{
     TypeScriptEmitter, TypeScriptLowerError, TypeScriptLowerer,
 };
@@ -23,6 +24,7 @@ pub enum GenerateTarget {
     Header,
     Typescript,
     Dart,
+    Python,
     All,
 }
 
@@ -67,6 +69,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             require_experimental_target(config, Target::Dart, options.experimental)?;
             generate_dart(config, options.output)
         }
+        GenerateTarget::Python => {
+            require_experimental_target(config, Target::Python, options.experimental)?;
+            generate_python(config, options.output)
+        }
         GenerateTarget::All => {
             if config.should_process(Target::Swift, options.experimental) {
                 generate_swift(config, options.output.clone())?;
@@ -84,7 +90,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                 generate_typescript(config, options.output.clone())?;
             }
             if config.should_process(Target::Dart, options.experimental) {
-                generate_dart(config, options.output)?;
+                generate_dart(config, options.output.clone())?;
+            }
+            if config.should_process(Target::Python, options.experimental) {
+                generate_python(config, options.output)?;
             }
             Ok(())
         }
@@ -593,4 +602,167 @@ fn generate_dart(config: &Config, output: Option<PathBuf>) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn generate_python(config: &Config, output: Option<PathBuf>) -> Result<()> {
+    let crate_dir = std::env::current_dir()
+        .and_then(|path| path.canonicalize())
+        .unwrap_or_else(|_| PathBuf::from("."));
+    generate_python_from_source_directory(config, output, &crate_dir, config.library_name())
+}
+
+fn generate_python_from_source_directory(
+    config: &Config,
+    output: Option<PathBuf>,
+    source_directory: &Path,
+    crate_name: &str,
+) -> Result<()> {
+    if !config.is_python_enabled() {
+        return Err(CliError::CommandFailed {
+            command: "targets.python.enabled = false".to_string(),
+            status: None,
+        });
+    }
+
+    let output_dir = output.unwrap_or_else(|| config.python_output());
+
+    std::fs::create_dir_all(&output_dir).map_err(|source| CliError::CreateDirectoryFailed {
+        path: output_dir.clone(),
+        source,
+    })?;
+
+    let mut module = scan_crate(source_directory, crate_name, host_pointer_width_bits())?;
+    let ffi_contract = ir::build_contract(&mut module);
+    let abi_contract = ir::Lowerer::new(&ffi_contract).to_abi_contract();
+
+    let module_name = config.python_module_name();
+    let python_module = PythonLowerer::new(&ffi_contract, &abi_contract, &module_name).lower();
+    let python_source = PythonEmitter::emit(&python_module);
+    let output_path = output_dir.join(format!("{module_name}.py"));
+
+    std::fs::write(&output_path, python_source).map_err(|source| CliError::WriteFailed {
+        path: output_path,
+        source,
+    })?;
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        GenerateOptions, GenerateTarget, generate_python_from_source_directory,
+        run_generate_with_output,
+    };
+    use crate::config::Config;
+    use crate::error::CliError;
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn parse_config(input: &str) -> Config {
+        let parsed: Config = toml::from_str(input).expect("toml parse failed");
+        parsed.validate().expect("config validation failed");
+        parsed
+    }
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
+    }
+
+    fn demo_source_directory() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../examples/demo")
+    }
+
+    #[test]
+    fn python_generate_requires_experimental_opt_in() {
+        let config = parse_config(
+            r#"
+[package]
+name = "demo"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        let error = run_generate_with_output(
+            &config,
+            GenerateOptions {
+                target: GenerateTarget::Python,
+                output: None,
+                experimental: false,
+            },
+        )
+        .expect_err("python generate should require experimental opt-in");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command
+                    == "python is experimental, use --experimental flag or add \"python\" to [experimental]"
+        ));
+    }
+
+    #[test]
+    fn python_generate_requires_enabled_target() {
+        let config = parse_config(
+            r#"
+[package]
+name = "demo"
+"#,
+        );
+
+        let error = run_generate_with_output(
+            &config,
+            GenerateOptions {
+                target: GenerateTarget::Python,
+                output: None,
+                experimental: true,
+            },
+        )
+        .expect_err("python generate should require enabled target");
+
+        assert!(matches!(
+            error,
+            CliError::CommandFailed { command, status: None }
+                if command == "targets.python.enabled = false"
+        ));
+    }
+
+    #[test]
+    fn python_generate_writes_module_file() {
+        let output_dir = unique_temp_dir("boltffi-python-generate-test");
+        let config = parse_config(
+            r#"
+[package]
+name = "demo"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        generate_python_from_source_directory(
+            &config,
+            Some(output_dir.clone()),
+            &demo_source_directory(),
+            "demo",
+        )
+        .expect("python generate should succeed");
+
+        let generated_module_path = output_dir.join("demo.py");
+        let generated_module = fs::read_to_string(&generated_module_path)
+            .expect("generated python module should be readable");
+
+        assert!(generated_module.contains("MODULE_NAME = \"demo\""));
+        assert!(generated_module.contains("PACKAGE_NAME = \"demo\""));
+        assert!(generated_module.contains("EXPORTED_API = {"));
+
+        fs::remove_dir_all(output_dir).expect("cleanup generated output");
+    }
 }

@@ -21,6 +21,7 @@ pub mod dart;
 pub mod java;
 pub mod jni;
 pub mod kotlin;
+pub mod python;
 pub mod swift;
 pub mod typescript;
 
