@@ -7,7 +7,8 @@ use std::path::{Path, PathBuf};
 use generator::{GenerateRequest, run_generator};
 use header::HeaderGenerator;
 use languages::{
-    DartGenerator, JavaGenerator, KotlinGenerator, SwiftGenerator, TypeScriptGenerator,
+    DartGenerator, JavaGenerator, KotlinGenerator, PythonGenerator, SwiftGenerator,
+    TypeScriptGenerator,
 };
 
 use crate::cli::Result;
@@ -20,6 +21,7 @@ pub enum GenerateTarget {
     Header,
     Typescript,
     Dart,
+    Python,
     All,
 }
 
@@ -41,6 +43,7 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             run_generator::<TypeScriptGenerator>(&request, options.experimental)
         }
         GenerateTarget::Dart => run_generator::<DartGenerator>(&request, options.experimental),
+        GenerateTarget::Python => run_generator::<PythonGenerator>(&request, options.experimental),
         GenerateTarget::All => {
             if config.should_process(Target::Swift, options.experimental) {
                 run_generator::<SwiftGenerator>(&request, options.experimental)?;
@@ -64,6 +67,10 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
 
             if config.should_process(Target::Dart, options.experimental) {
                 run_generator::<DartGenerator>(&request, options.experimental)?;
+            }
+
+            if config.should_process(Target::Python, options.experimental) {
+                run_generator::<PythonGenerator>(&request, options.experimental)?;
             }
 
             Ok(())
