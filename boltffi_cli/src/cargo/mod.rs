@@ -1,4 +1,6 @@
 mod args;
+#[cfg(test)]
+pub(crate) mod fixture;
 mod metadata;
 
 use std::path::{Path, PathBuf};
@@ -8,6 +10,8 @@ use crate::config::Config;
 
 use self::args::CargoArguments;
 
+#[cfg(test)]
+pub(crate) use self::metadata::CargoCrateType;
 pub(crate) use self::metadata::CargoMetadata;
 
 #[derive(Debug, Clone)]
@@ -153,7 +157,9 @@ impl Cargo {
 mod tests {
     use std::path::Path;
 
-    use super::{Cargo, CargoMetadata};
+    use super::Cargo;
+    use crate::cargo::fixture::{CargoMetadataFixture, CargoPackageFixture, CargoTargetFixture};
+    use crate::cargo::metadata::CargoCrateType;
     use crate::config::{CargoConfig, Config, PackageConfig, TargetsConfig};
 
     fn cargo(arguments: &[&str]) -> Cargo {
@@ -182,8 +188,8 @@ mod tests {
         }
     }
 
-    fn metadata(json: &str) -> CargoMetadata {
-        serde_json::from_str(json).expect("cargo metadata fixture")
+    fn metadata_fixture() -> CargoMetadataFixture {
+        CargoMetadataFixture::new("/tmp/boltffi-target")
     }
 
     #[test]
@@ -408,20 +414,19 @@ mod tests {
 
     #[test]
     fn falls_back_to_current_manifest_package_for_effective_package_selector() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/Cargo.toml",
-                    "targets": [{
-                        "name": "workspace_member",
-                        "crate_types": ["cdylib"]
-                    }]
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "workspace_member",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .metadata();
 
         let package_selector = cargo(&[]).effective_package_selector(
             &config(None),
@@ -434,20 +439,19 @@ mod tests {
 
     #[test]
     fn falls_back_to_cargo_package_name_when_crate_name_differs() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/Cargo.toml",
-                    "targets": [{
-                        "name": "ffi_member",
-                        "crate_types": ["cdylib"]
-                    }]
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "ffi_member",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .metadata();
 
         let package_selector = cargo(&[]).effective_package_selector(
             &config(Some("ffi_member")),
@@ -460,17 +464,13 @@ mod tests {
 
     #[test]
     fn returns_none_for_effective_package_selector_when_manifest_path_selects_package() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/member/Cargo.toml",
-                    "targets": []
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(CargoPackageFixture::manifest_package(
+                "workspace-member",
+                "/tmp/workspace/member/Cargo.toml",
+                "0.1.0",
+            ))
+            .metadata();
 
         let package_selector = cargo(&["--manifest-path", "member/Cargo.toml"])
             .effective_package_selector(
@@ -484,20 +484,19 @@ mod tests {
 
     #[test]
     fn falls_back_to_package_name_for_virtual_workspace_manifest_path() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/member/Cargo.toml",
-                    "targets": [{
-                        "name": "workspace_member",
-                        "crate_types": ["cdylib"]
-                    }]
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/member/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "workspace_member",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .metadata();
 
         let package_selector = cargo(&["--manifest-path", "/tmp/workspace/Cargo.toml"])
             .effective_package_selector(
@@ -511,20 +510,19 @@ mod tests {
 
     #[test]
     fn falls_back_to_package_name_when_crate_name_differs_for_virtual_workspace_manifest_path() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/member/Cargo.toml",
-                    "targets": [{
-                        "name": "ffi_member",
-                        "crate_types": ["cdylib"]
-                    }]
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/member/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "ffi_member",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .metadata();
 
         let package_selector = cargo(&["--manifest-path", "/tmp/workspace/Cargo.toml"])
             .effective_package_selector(
@@ -540,12 +538,7 @@ mod tests {
     fn prefers_explicit_package_selector_over_config_package_name() {
         let package_selector = cargo(&["--package=selected-member"]).effective_package_selector(
             &config(None),
-            &metadata(
-                r#"{
-                    "target_directory": "/tmp/boltffi-target",
-                    "packages": []
-                }"#,
-            ),
+            &metadata_fixture().metadata(),
             Path::new("/tmp/workspace/Cargo.toml"),
         );
 
@@ -554,31 +547,30 @@ mod tests {
 
     #[test]
     fn prefers_configured_package_name_over_unique_library_target_match() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace/other#0.1.0",
-                        "name": "other-member",
-                        "manifest_path": "/tmp/workspace/other/Cargo.toml",
-                        "targets": [{
-                            "name": "ffi_member",
-                            "crate_types": ["cdylib"]
-                        }]
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace/member#0.1.0",
-                        "name": "workspace-member",
-                        "manifest_path": "/tmp/workspace/member/Cargo.toml",
-                        "targets": [{
-                            "name": "workspace_member_lib",
-                            "crate_types": ["cdylib"]
-                        }]
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "other-member",
+                    "/tmp/workspace/other/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "ffi_member",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/member/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "workspace_member_lib",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .metadata();
 
         let package_selector = cargo(&["--manifest-path", "/tmp/workspace/Cargo.toml"])
             .effective_package_selector(

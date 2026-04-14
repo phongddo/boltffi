@@ -27,45 +27,44 @@ mod tests {
     use std::path::Path;
 
     use super::JvmCrateOutputs;
-    use crate::cargo::CargoMetadata;
+    use crate::cargo::CargoCrateType;
+    use crate::cargo::fixture::{CargoMetadataFixture, CargoPackageFixture, CargoTargetFixture};
 
-    fn metadata(json: &str) -> CargoMetadata {
-        serde_json::from_str(json).expect("cargo metadata fixture")
+    fn metadata_fixture() -> CargoMetadataFixture {
+        CargoMetadataFixture::new("/tmp/boltffi-target")
     }
 
     #[test]
     fn parses_current_jvm_crate_outputs_from_cargo_metadata() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace/sibling#0.1.0",
-                        "name": "sibling",
-                        "manifest_path": "/tmp/workspace/sibling/Cargo.toml",
-                        "targets": [{
-                            "name": "demo",
-                            "crate_types": ["cdylib"]
-                        }]
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace/current#0.1.0",
-                        "name": "current",
-                        "manifest_path": "/tmp/workspace/current/Cargo.toml",
-                        "targets": [
-                            {
-                                "name": "demo",
-                                "crate_types": ["staticlib", "cdylib", "rlib"]
-                            },
-                            {
-                                "name": "demo_cli",
-                                "crate_types": ["bin"]
-                            }
-                        ]
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "sibling",
+                    "/tmp/workspace/sibling/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "demo",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "current",
+                    "/tmp/workspace/current/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "demo",
+                    [
+                        CargoCrateType::StaticLib,
+                        CargoCrateType::Cdylib,
+                        CargoCrateType::Rlib,
+                    ],
+                ))
+                .target(CargoTargetFixture::bin("demo_cli")),
+            )
+            .metadata();
 
         let outputs = JvmCrateOutputs::from_metadata(
             &metadata,
@@ -86,31 +85,30 @@ mod tests {
 
     #[test]
     fn scopes_jvm_crate_outputs_to_selected_package_manifest() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace/a#0.1.0",
-                        "name": "workspace-a",
-                        "manifest_path": "/tmp/workspace/a/Cargo.toml",
-                        "targets": [{
-                            "name": "shared_name",
-                            "crate_types": ["cdylib"]
-                        }]
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace/b#0.1.0",
-                        "name": "workspace-b",
-                        "manifest_path": "/tmp/workspace/b/Cargo.toml",
-                        "targets": [{
-                            "name": "shared_name",
-                            "crate_types": ["staticlib"]
-                        }]
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-a",
+                    "/tmp/workspace/a/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "shared_name",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-b",
+                    "/tmp/workspace/b/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "shared_name",
+                    [CargoCrateType::StaticLib],
+                )),
+            )
+            .metadata();
 
         let outputs = JvmCrateOutputs::from_metadata(
             &metadata,
@@ -131,31 +129,30 @@ mod tests {
 
     #[test]
     fn scopes_jvm_crate_outputs_to_selected_package_name() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-a@0.1.0",
-                        "name": "workspace-a",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": [{
-                            "name": "shared_name",
-                            "crate_types": ["cdylib"]
-                        }]
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-b@0.1.0",
-                        "name": "workspace-b",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": [{
-                            "name": "shared_name",
-                            "crate_types": ["staticlib"]
-                        }]
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::workspace_package(
+                    "workspace-a",
+                    "/tmp/workspace/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "shared_name",
+                    [CargoCrateType::Cdylib],
+                )),
+            )
+            .package(
+                CargoPackageFixture::workspace_package(
+                    "workspace-b",
+                    "/tmp/workspace/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "shared_name",
+                    [CargoCrateType::StaticLib],
+                )),
+            )
+            .metadata();
 
         let outputs = JvmCrateOutputs::from_metadata(
             &metadata,
@@ -176,26 +173,20 @@ mod tests {
 
     #[test]
     fn falls_back_to_selected_package_ffi_target_when_preferred_artifact_name_differs() {
-        let metadata = metadata(
-            r#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [{
-                    "id": "path+file:///tmp/workspace/member#0.1.0",
-                    "name": "workspace-member",
-                    "manifest_path": "/tmp/workspace/member/Cargo.toml",
-                    "targets": [
-                        {
-                            "name": "workspace_member_lib",
-                            "crate_types": ["staticlib", "cdylib"]
-                        },
-                        {
-                            "name": "workspace_member_cli",
-                            "crate_types": ["bin"]
-                        }
-                    ]
-                }]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(
+                CargoPackageFixture::manifest_package(
+                    "workspace-member",
+                    "/tmp/workspace/member/Cargo.toml",
+                    "0.1.0",
+                )
+                .target(CargoTargetFixture::library(
+                    "workspace_member_lib",
+                    [CargoCrateType::StaticLib, CargoCrateType::Cdylib],
+                ))
+                .target(CargoTargetFixture::bin("workspace_member_cli")),
+            )
+            .metadata();
 
         let outputs = JvmCrateOutputs::from_metadata(
             &metadata,

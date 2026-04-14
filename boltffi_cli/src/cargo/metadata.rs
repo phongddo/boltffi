@@ -221,55 +221,54 @@ impl From<&str> for CargoCrateType {
     }
 }
 
+impl From<CargoCrateType> for String {
+    fn from(crate_type: CargoCrateType) -> Self {
+        match crate_type {
+            CargoCrateType::StaticLib => "staticlib".to_string(),
+            CargoCrateType::Cdylib => "cdylib".to_string(),
+            CargoCrateType::Dylib => "dylib".to_string(),
+            CargoCrateType::Rlib => "rlib".to_string(),
+            CargoCrateType::Bin => "bin".to_string(),
+            CargoCrateType::ProcMacro => "proc-macro".to_string(),
+            CargoCrateType::Other(crate_type) => crate_type,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::path::{Path, PathBuf};
 
     use super::CargoMetadata;
+    use crate::cargo::fixture::{CargoMetadataFixture, CargoPackageFixture};
 
-    fn metadata(json: &[u8]) -> CargoMetadata {
-        serde_json::from_slice(json).expect("cargo metadata fixture")
+    fn metadata_fixture() -> CargoMetadataFixture {
+        CargoMetadataFixture::new("/tmp/boltffi-target")
     }
 
     #[test]
     fn parses_target_directory_from_cargo_metadata() {
-        let metadata = br#"{
-            "packages": [],
-            "workspace_members": [],
-            "workspace_default_members": [],
-            "resolve": null,
-            "target_directory": "/tmp/boltffi-target",
-            "version": 1,
-            "workspace_root": "/tmp/demo"
-        }"#;
-
-        let target_directory = CargoMetadata::target_directory_from_bytes(metadata)
-            .expect("expected target directory");
+        let target_directory =
+            CargoMetadata::target_directory_from_bytes(&metadata_fixture().json_bytes())
+                .expect("expected target directory");
 
         assert_eq!(target_directory, PathBuf::from("/tmp/boltffi-target"));
     }
 
     #[test]
     fn finds_current_cargo_metadata_package_by_manifest_path() {
-        let metadata = metadata(
-            br#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace/a#0.1.0",
-                        "name": "workspace-a",
-                        "manifest_path": "/tmp/workspace/a/Cargo.toml",
-                        "targets": []
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace/b#0.1.0",
-                        "name": "workspace-b",
-                        "manifest_path": "/tmp/workspace/b/Cargo.toml",
-                        "targets": []
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(CargoPackageFixture::manifest_package(
+                "workspace-a",
+                "/tmp/workspace/a/Cargo.toml",
+                "0.1.0",
+            ))
+            .package(CargoPackageFixture::manifest_package(
+                "workspace-b",
+                "/tmp/workspace/b/Cargo.toml",
+                "0.1.0",
+            ))
+            .metadata();
 
         let package = metadata
             .find_package(Path::new("/tmp/workspace/b/Cargo.toml"), None)
@@ -280,25 +279,18 @@ mod tests {
 
     #[test]
     fn finds_selected_cargo_metadata_package_by_package_name() {
-        let metadata = metadata(
-            br#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-a@0.1.0",
-                        "name": "workspace-a",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": []
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-b@0.1.0",
-                        "name": "workspace-b",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": []
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(CargoPackageFixture::workspace_package(
+                "workspace-a",
+                "/tmp/workspace/Cargo.toml",
+                "0.1.0",
+            ))
+            .package(CargoPackageFixture::workspace_package(
+                "workspace-b",
+                "/tmp/workspace/Cargo.toml",
+                "0.1.0",
+            ))
+            .metadata();
 
         let package = metadata
             .find_package(Path::new("/tmp/workspace/Cargo.toml"), Some("workspace-b"))
@@ -309,25 +301,18 @@ mod tests {
 
     #[test]
     fn finds_selected_cargo_metadata_package_by_package_spec() {
-        let metadata = metadata(
-            br#"{
-                "target_directory": "/tmp/boltffi-target",
-                "packages": [
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-a@0.1.0",
-                        "name": "workspace-a",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": []
-                    },
-                    {
-                        "id": "path+file:///tmp/workspace#workspace-b@1.2.3",
-                        "name": "workspace-b",
-                        "manifest_path": "/tmp/workspace/Cargo.toml",
-                        "targets": []
-                    }
-                ]
-            }"#,
-        );
+        let metadata = metadata_fixture()
+            .package(CargoPackageFixture::workspace_package(
+                "workspace-a",
+                "/tmp/workspace/Cargo.toml",
+                "0.1.0",
+            ))
+            .package(CargoPackageFixture::workspace_package(
+                "workspace-b",
+                "/tmp/workspace/Cargo.toml",
+                "1.2.3",
+            ))
+            .metadata();
 
         let package = metadata
             .find_package(
