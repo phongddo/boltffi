@@ -6,39 +6,69 @@ use serde::Serialize;
 use crate::cli::{CliError, Result};
 use crate::config::{Config, WasmNpmTarget};
 
+struct WasmLoaderEntrypoint {
+    filename: &'static str,
+    source: String,
+}
+
+impl WasmLoaderEntrypoint {
+    fn browser(filename: &'static str, module_name: &str) -> Self {
+        Self {
+            filename,
+            source: format!(
+                r#"
+                    import init from "./{module_name}.js";
+                    export * from "./{module_name}.js";
+                    export {{ default as init }} from "./{module_name}.js";
+                    export const initialized = (async () => {{
+                    const response = await fetch(new URL("./{module_name}_bg.wasm", import.meta.url));
+                    await init(response);
+                    }})();
+                "#
+            ),
+        }
+    }
+
+    fn node(filename: &'static str, module_name: &str) -> Self {
+        Self {
+            filename,
+            source: format!(
+                r#"
+                   export * from "./{module_name}_node.js";
+                   export {{ default, initialized }} from "./{module_name}_node.js";
+                "#
+            ),
+        }
+    }
+
+    fn write(self, output_directory: &Path) -> Result<()> {
+        let output_path = output_directory.join(self.filename);
+        std::fs::write(&output_path, self.source).map_err(|source| CliError::WriteFailed {
+            path: output_path,
+            source,
+        })
+    }
+}
+
+impl WasmNpmTarget {
+    fn loader_entrypoint(&self, module_name: &str) -> WasmLoaderEntrypoint {
+        match self {
+            Self::Bundler => WasmLoaderEntrypoint::browser("bundler.js", module_name),
+            Self::Web => WasmLoaderEntrypoint::browser("web.js", module_name),
+            Self::Nodejs => WasmLoaderEntrypoint::node("node.js", module_name),
+        }
+    }
+}
+
 pub(crate) fn generate_wasm_loader_entrypoints(
     module_name: &str,
     enabled_targets: &[WasmNpmTarget],
     output_dir: &Path,
 ) -> Result<()> {
-    enabled_targets.iter().try_for_each(|target| {
-        let (filename, content) = match target {
-            WasmNpmTarget::Bundler => (
-                "bundler.js",
-                format!(
-                    "import init from \"./{module}.js\";\nexport * from \"./{module}.js\";\nexport {{ default as init }} from \"./{module}.js\";\nexport const initialized = (async () => {{\n  const response = await fetch(new URL(\"./{module}_bg.wasm\", import.meta.url));\n  await init(response);\n}})();\n",
-                    module = module_name
-                ),
-            ),
-            WasmNpmTarget::Web => (
-                "web.js",
-                format!(
-                    "import init from \"./{module}.js\";\nexport * from \"./{module}.js\";\nexport {{ default as init }} from \"./{module}.js\";\nexport const initialized = (async () => {{\n  const response = await fetch(new URL(\"./{module}_bg.wasm\", import.meta.url));\n  await init(response);\n}})();\n",
-                    module = module_name
-                ),
-            ),
-            WasmNpmTarget::Nodejs => (
-                "node.js",
-                format!(
-                    "export * from \"./{module}_node.js\";\nexport {{ default, initialized }} from \"./{module}_node.js\";\n",
-                    module = module_name
-                ),
-            ),
-        };
-
-        let path = output_dir.join(filename);
-        std::fs::write(&path, content).map_err(|source| CliError::WriteFailed { path, source })
-    })
+    enabled_targets
+        .iter()
+        .map(|target| target.loader_entrypoint(module_name))
+        .try_for_each(|entrypoint| entrypoint.write(output_dir))
 }
 
 pub(crate) fn generate_wasm_package_json(
@@ -172,4 +202,64 @@ pub(crate) struct WasmPackageEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     node: Option<String>,
     default: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use super::generate_wasm_loader_entrypoints;
+    use crate::config::WasmNpmTarget;
+
+    fn unique_temp_dir(prefix: &str) -> PathBuf {
+        let unique_suffix = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time before unix epoch")
+            .as_nanos();
+
+        std::env::temp_dir().join(format!("{prefix}-{unique_suffix}"))
+    }
+
+    #[test]
+    fn writes_browser_loader_entrypoints_without_escaped_source_noise() {
+        let output_directory = unique_temp_dir("boltffi-wasm-browser-loader-test");
+        fs::create_dir_all(&output_directory).expect("create output directory");
+
+        generate_wasm_loader_entrypoints(
+            "demo",
+            &[WasmNpmTarget::Bundler, WasmNpmTarget::Web],
+            &output_directory,
+        )
+        .expect("browser loader generation should succeed");
+
+        let bundler_loader =
+            fs::read_to_string(output_directory.join("bundler.js")).expect("read bundler loader");
+        let web_loader =
+            fs::read_to_string(output_directory.join("web.js")).expect("read web loader");
+
+        assert!(bundler_loader.contains(r#"import init from "./demo.js";"#));
+        assert!(bundler_loader.contains(r#"await init(response);"#));
+        assert!(web_loader.contains(r#"new URL("./demo_bg.wasm", import.meta.url)"#));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
+
+    #[test]
+    fn writes_node_loader_entrypoint_from_typed_target_mapping() {
+        let output_directory = unique_temp_dir("boltffi-wasm-node-loader-test");
+        fs::create_dir_all(&output_directory).expect("create output directory");
+
+        generate_wasm_loader_entrypoints("demo", &[WasmNpmTarget::Nodejs], &output_directory)
+            .expect("node loader generation should succeed");
+
+        let node_loader =
+            fs::read_to_string(output_directory.join("node.js")).expect("read node loader");
+
+        assert!(node_loader.contains(r#"export * from "./demo_node.js";"#));
+        assert!(node_loader.contains(r#"export { default, initialized } from "./demo_node.js";"#));
+
+        fs::remove_dir_all(output_directory).expect("cleanup generated output");
+    }
 }
