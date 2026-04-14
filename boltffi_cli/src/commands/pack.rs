@@ -652,7 +652,6 @@ fn pack_java_with_prepared(
         run_generate_java_with_output_from_source_dir(
             config,
             Some(config.java_jvm_output()),
-            options.experimental,
             &source_directory,
             artifact_name,
         )?;

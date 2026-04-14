@@ -1,0 +1,19 @@
+from __future__ import annotations
+
+MODULE_NAME = {{ module.module_name_literal() }}
+PACKAGE_NAME = {{ module.package_name_literal() }}
+PACKAGE_VERSION = {{ module.package_version_literal() }}
+EXPORTED_API = {
+    "functions": {{ module.exported_api.functions }},
+    "records": {{ module.exported_api.records }},
+    "enumerations": {{ module.exported_api.enumerations }},
+    "classes": {{ module.exported_api.classes }},
+    "callbacks": {{ module.exported_api.callbacks }},
+}
+
+__all__ = [
+    "MODULE_NAME",
+    "PACKAGE_NAME",
+    "PACKAGE_VERSION",
+    "EXPORTED_API",
+]

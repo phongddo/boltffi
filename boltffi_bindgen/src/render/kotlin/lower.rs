@@ -2527,7 +2527,7 @@ impl<'a> KotlinLowerer<'a> {
                 .options
                 .library_name
                 .clone()
-                .unwrap_or_else(|| self.contract.package.name.clone()),
+                .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
             desktop_loader: self.options.desktop_loader,
             prefix: naming::ffi_prefix().to_string(),
             functions,
