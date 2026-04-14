@@ -5,6 +5,7 @@ pub struct PythonLowerer<'a> {
     ffi_contract: &'a FfiContract,
     abi_contract: &'a AbiContract,
     module_name: &'a str,
+    package_version: Option<String>,
 }
 
 impl<'a> PythonLowerer<'a> {
@@ -12,11 +13,13 @@ impl<'a> PythonLowerer<'a> {
         ffi_contract: &'a FfiContract,
         abi_contract: &'a AbiContract,
         module_name: &'a str,
+        package_version: Option<String>,
     ) -> Self {
         Self {
             ffi_contract,
             abi_contract,
             module_name,
+            package_version,
         }
     }
 
@@ -32,7 +35,10 @@ impl<'a> PythonLowerer<'a> {
         PythonModule {
             module_name: self.module_name.to_string(),
             package_name: self.ffi_contract.package.name.clone(),
-            package_version: self.ffi_contract.package.version.clone(),
+            package_version: self
+                .package_version
+                .clone()
+                .or_else(|| self.ffi_contract.package.version.clone()),
             exported_api,
         }
     }

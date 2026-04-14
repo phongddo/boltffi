@@ -30,7 +30,7 @@ use config::{Config, Target};
 #[command(name = "boltffi")]
 #[command(about = "BoltFFI - Rust FFI toolchain (Apple + Android + WASM)")]
 #[command(
-    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*], [targets.java.*], [targets.dart.*], and [targets.python.*]\n"
+    after_help = "Examples:\n  boltffi init\n  boltffi check --apple\n  boltffi generate swift\n  boltffi build apple --release\n  boltffi build wasm --release\n  boltffi pack apple --layout bundled\n  boltffi pack wasm --release\n  boltffi --overlay boltffi.ci.toml pack android\n\nConfig:\n  boltffi reads ./boltffi.toml\n  Use --overlay PATH to load a merged overlay config on top of it\n  Settings live under [targets.apple.*], [targets.android.*], [targets.wasm.*], [targets.java.*], and [targets.dart.*]\n"
 )]
 #[command(version)]
 struct Cli {
@@ -105,7 +105,7 @@ enum Commands {
 
     #[command(
         about = "Generate bindings",
-        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n  boltffi generate python --experimental\n"
+        long_about = "Generate bindings.\n\nExamples:\n  boltffi generate\n  boltffi generate swift\n  boltffi generate kotlin\n  boltffi generate header\n"
     )]
     Generate {
         #[arg(value_enum)]
@@ -172,8 +172,6 @@ enum GenerateTargetArg {
     Typescript,
     #[value(help = "Generate Dart Bindings")]
     Dart,
-    #[value(help = "Generate experimental Python bindings")]
-    Python,
     #[value(help = "Generate all bindings")]
     All,
 }
@@ -411,7 +409,6 @@ fn execute_command(
                         GenerateTargetArg::Header => GenerateTarget::Header,
                         GenerateTargetArg::Typescript => GenerateTarget::Typescript,
                         GenerateTargetArg::Dart => GenerateTarget::Dart,
-                        GenerateTargetArg::Python => GenerateTarget::Python,
                         GenerateTargetArg::All => GenerateTarget::All,
                     })
                     .unwrap_or(GenerateTarget::All),
@@ -822,11 +819,10 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg,
-        configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
-        configured_wasm_target_triple_for_diagnostics, load_config_if_present,
-        release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
-        resolve_init_options,
+        BuildPlatformArg, Cli, ConfigPaths, configured_android_targets_for_diagnostics,
+        configured_apple_targets_for_diagnostics, configured_wasm_target_triple_for_diagnostics,
+        load_config_if_present, release_pack_commands,
+        release_requires_java_environment_validation, resolve_doctor_config, resolve_init_options,
     };
     use crate::commands::doctor::ConfigSummary;
     use crate::commands::pack::PackCommand;
@@ -1071,18 +1067,13 @@ enabled = true
     }
 
     #[test]
-    fn cli_parses_generate_python_target() {
-        let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
-            .expect("cli parse should succeed");
+    fn cli_rejects_generate_python_target() {
+        let error = match Cli::try_parse_from(["boltffi", "generate", "python"]) {
+            Ok(_) => panic!("cli parse should reject python target"),
+            Err(error) => error,
+        };
 
-        assert!(matches!(
-            cli.command,
-            Commands::Generate {
-                target: Some(GenerateTargetArg::Python),
-                experimental: true,
-                ..
-            }
-        ));
+        assert!(error.to_string().contains("invalid value 'python'"));
     }
 
     #[test]

@@ -48,6 +48,7 @@ impl LanguageGenerator for PythonGenerator {
             &lowered_crate.ffi_contract,
             &lowered_crate.abi_contract,
             &module_name,
+            request.config().package_version(),
         )
         .lower();
         let python_source = PythonEmitter::emit(&python_module);

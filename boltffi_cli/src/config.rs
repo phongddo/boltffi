@@ -1071,10 +1071,12 @@ impl Config {
         self.targets.java.android.output.clone()
     }
 
+    #[cfg(test)]
     pub fn python_output(&self) -> PathBuf {
         self.targets.python.output.clone()
     }
 
+    #[cfg(test)]
     pub fn python_module_name(&self) -> String {
         self.crate_artifact_name()
     }

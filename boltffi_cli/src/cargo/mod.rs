@@ -203,7 +203,7 @@ mod tests {
 
     #[test]
     fn keeps_metadata_relevant_cargo_args() {
-        let metadata_args = cargo(&[
+        let cargo = cargo(&[
             "+nightly",
             "--target-dir",
             "out/target",
@@ -214,13 +214,13 @@ mod tests {
             "--manifest-path",
             "examples/demo/Cargo.toml",
             "-Zunstable-options",
-        ])
-        .metadata_passthrough_arguments();
+        ]);
+        let metadata_args = cargo.metadata_passthrough_arguments();
 
+        assert_eq!(cargo.toolchain_selector(), Some("+nightly"));
         assert_eq!(
             metadata_args,
             vec![
-                "+nightly".to_string(),
                 "--target-dir".to_string(),
                 "out/target".to_string(),
                 "--config=build.target-dir=\"other-target\"".to_string(),
@@ -373,6 +373,32 @@ mod tests {
             cargo_args,
             vec![
                 "+nightly".to_string(),
+                "--features".to_string(),
+                "demo".to_string(),
+                "--release".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn probe_command_arguments_strip_rustup_toolchain_selectors() {
+        let cargo_args = cargo(&[
+            "--package",
+            "member-a",
+            "+nightly",
+            "--manifest-path",
+            "workspace/Cargo.toml",
+            "--target",
+            "aarch64-apple-darwin",
+            "--features",
+            "demo",
+            "--release",
+        ])
+        .probe_command_arguments();
+
+        assert_eq!(
+            cargo_args,
+            vec![
                 "--features".to_string(),
                 "demo".to_string(),
                 "--release".to_string(),

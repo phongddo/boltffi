@@ -7,8 +7,7 @@ use std::path::{Path, PathBuf};
 use generator::{GenerateRequest, run_generator};
 use header::HeaderGenerator;
 use languages::{
-    DartGenerator, JavaGenerator, KotlinGenerator, PythonGenerator, SwiftGenerator,
-    TypeScriptGenerator,
+    DartGenerator, JavaGenerator, KotlinGenerator, SwiftGenerator, TypeScriptGenerator,
 };
 
 use crate::cli::Result;
@@ -21,7 +20,6 @@ pub enum GenerateTarget {
     Header,
     Typescript,
     Dart,
-    Python,
     All,
 }
 
@@ -43,7 +41,6 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
             run_generator::<TypeScriptGenerator>(&request, options.experimental)
         }
         GenerateTarget::Dart => run_generator::<DartGenerator>(&request, options.experimental),
-        GenerateTarget::Python => run_generator::<PythonGenerator>(&request, options.experimental),
         GenerateTarget::All => {
             if config.should_process(Target::Swift, options.experimental) {
                 run_generator::<SwiftGenerator>(&request, options.experimental)?;
@@ -69,10 +66,6 @@ pub fn run_generate_with_output(config: &Config, options: GenerateOptions) -> Re
                 run_generator::<DartGenerator>(&request, options.experimental)?;
             }
 
-            if config.should_process(Target::Python, options.experimental) {
-                run_generator::<PythonGenerator>(&request, options.experimental)?;
-            }
-
             Ok(())
         }
     }
@@ -93,8 +86,7 @@ mod tests {
     use std::path::PathBuf;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    use super::{GenerateOptions, GenerateTarget, PythonGenerator, run_generate_with_output};
-    use crate::cli::CliError;
+    use super::languages::PythonGenerator;
     use crate::config::Config;
 
     fn parse_config(input: &str) -> Config {
@@ -117,68 +109,13 @@ mod tests {
     }
 
     #[test]
-    fn python_generate_requires_experimental_opt_in() {
-        let config = parse_config(
-            r#"
-[package]
-name = "demo"
-
-[targets.python]
-enabled = true
-"#,
-        );
-
-        let error = run_generate_with_output(
-            &config,
-            GenerateOptions {
-                target: GenerateTarget::Python,
-                output: None,
-                experimental: false,
-            },
-        )
-        .expect_err("python generate should require experimental opt-in");
-
-        assert!(matches!(
-            error,
-            CliError::CommandFailed { command, status: None }
-                if command
-                    == "python is experimental, use --experimental flag or add \"python\" to [experimental]"
-        ));
-    }
-
-    #[test]
-    fn python_generate_requires_enabled_target() {
-        let config = parse_config(
-            r#"
-[package]
-name = "demo"
-"#,
-        );
-
-        let error = run_generate_with_output(
-            &config,
-            GenerateOptions {
-                target: GenerateTarget::Python,
-                output: None,
-                experimental: true,
-            },
-        )
-        .expect_err("python generate should require enabled target");
-
-        assert!(matches!(
-            error,
-            CliError::CommandFailed { command, status: None }
-                if command == "targets.python.enabled = false"
-        ));
-    }
-
-    #[test]
     fn python_generate_writes_module_file() {
         let output_directory = unique_temp_dir("boltffi-python-generate-test");
         let config = parse_config(
             r#"
 [package]
 name = "demo"
+version = "0.1.0"
 
 [targets.python]
 enabled = true
@@ -199,6 +136,7 @@ enabled = true
 
         assert!(generated_module.contains("MODULE_NAME = \"demo\""));
         assert!(generated_module.contains("PACKAGE_NAME = \"demo\""));
+        assert!(generated_module.contains("PACKAGE_VERSION = \"0.1.0\""));
         assert!(generated_module.contains("EXPORTED_API = {"));
 
         fs::remove_dir_all(output_directory).expect("cleanup generated output");

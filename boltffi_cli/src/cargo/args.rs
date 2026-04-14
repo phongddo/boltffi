@@ -73,8 +73,7 @@ impl CargoArguments {
                 argument.as_str(),
                 "--target-dir" | "--config" | "-Z" | "--manifest-path"
             );
-            let keep_current = argument.starts_with('+')
-                || takes_value
+            let keep_current = takes_value
                 || matches!(argument.as_str(), "--locked" | "--offline" | "--frozen")
                 || argument.starts_with("--target-dir=")
                 || argument.starts_with("--config=")
@@ -183,7 +182,11 @@ impl CargoArguments {
         let without_manifest_path_selector = CargoArguments::new(
             &without_package_selector.command_arguments_without_manifest_path_selector(),
         );
-        without_manifest_path_selector.command_arguments_without_target_selector()
+        CargoArguments::new(
+            &without_manifest_path_selector.command_arguments_without_target_selector(),
+        )
+        .command_arguments
+        .clone()
     }
 
     pub(super) fn has_explicit_manifest_path(&self) -> bool {
