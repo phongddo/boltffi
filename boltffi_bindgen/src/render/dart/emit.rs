@@ -23,7 +23,7 @@ pub struct DartPackage {
 pub struct DartEmitter {}
 
 impl DartEmitter {
-    pub fn emit(library: &DartLibrary, package_name: &str, crate_dir: &str) -> DartPackage {
+    pub fn emit(library: &DartLibrary, package_name: &str) -> DartPackage {
         let mut output = String::new();
 
         output.push_str(PreludeTemplate {}.render().unwrap().as_str());
@@ -66,8 +66,6 @@ impl DartEmitter {
             lib: output,
             build: BuildHookTemplate {
                 crate_name: package_name,
-                crate_path: crate_dir,
-                build_mode: "release",
             }
             .render()
             .unwrap(),

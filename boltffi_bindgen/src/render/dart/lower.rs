@@ -389,7 +389,7 @@ mod test {
 
         let library = lower(&ffi);
 
-        let output = DartEmitter::emit(&library, "test", "test");
+        let output = DartEmitter::emit(&library, "test");
 
         assert!(library.records[0].blittable_layout.is_some());
         assert!(

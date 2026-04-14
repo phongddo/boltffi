@@ -21,8 +21,6 @@ pub struct NativeRecordTemplate<'a> {
 #[template(path = "render_dart/hook.build.dart.txt", escape = "none")]
 pub struct BuildHookTemplate<'a> {
     pub crate_name: &'a str,
-    pub crate_path: &'a str,
-    pub build_mode: &'a str,
 }
 
 #[derive(Template)]

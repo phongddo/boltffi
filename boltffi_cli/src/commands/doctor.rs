@@ -242,6 +242,52 @@ fn print_config_summary(summary: &ConfigSummary, config_path: &Path, overlay_pat
                     .collect::<Vec<_>>()
                     .join(", ")
             );
+            println!("  targets.dart.output: {}", config.dart_output().display());
+            println!(
+                "  targets.dart.android_architectures: {}",
+                config
+                    .dart_android_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.dart.ios_architectures: {}",
+                config
+                    .dart_ios_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.dart.ios_simulator_architectures: {}",
+                config
+                    .dart_ios_simulator_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.dart.linux_architectures: {}",
+                config
+                    .dart_linux_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            println!(
+                "  targets.dart.macos_architectures: {}",
+                config
+                    .dart_macos_architectures()
+                    .iter()
+                    .map(|architecture| architecture.canonical_name())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
             println!("  targets.wasm.output: {}", config.wasm_output().display());
             println!(
                 "  targets.wasm.typescript.output: {}",
