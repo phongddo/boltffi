@@ -3,15 +3,14 @@ use crate::{
         BuildOptions, Builder, CargoBuildProfile, OutputCallback, all_successful, failed_targets,
         resolve_build_profile,
     },
+    cargo::Cargo,
     cli::{CliError, Result},
     commands::{
         generate::{GenerateOptions, GenerateTarget, run_generate_with_output},
         pack::PackDartOptions,
     },
     config::Config,
-    pack::{
-        PackError, discover_built_libraries_for_targets, print_cargo_line, resolve_build_cargo_args,
-    },
+    pack::{PackError, print_cargo_line, resolve_build_cargo_args},
     reporter::{Reporter, Step},
 };
 
@@ -88,14 +87,22 @@ pub(crate) fn pack_dart(
 
     let step = reporter.step("Packaging native libraries");
 
-    let libraries = discover_built_libraries_for_targets(
-        &config.crate_artifact_name(),
+    let cargo = Cargo::current(&build_cargo_args)?;
+
+    let metadata = cargo.metadata()?;
+    let cargo_manifest_path = cargo.manifest_path()?;
+    let package_selector =
+        cargo.effective_package_selector(config, &metadata, &cargo_manifest_path);
+
+    let libraries = metadata.resolve_built_libraries_for_targets(
+        &cargo_manifest_path,
         build_profile.output_directory_name(),
+        &config.crate_artifact_name(),
+        package_selector.as_deref(),
         &config.dart_targets(),
     )?;
 
     let package_dir = config.dart_output().join(&config.package.name);
-
     let native_libs_dir = package_dir.join("native");
     std::fs::create_dir_all(&native_libs_dir).map_err(|source| {
         CliError::CreateDirectoryFailed {
@@ -103,24 +110,26 @@ pub(crate) fn pack_dart(
             source,
         }
     })?;
+
     for l in libraries {
-        let lib_triple_dir = native_libs_dir.join(l.target.triple());
-        std::fs::create_dir_all(&lib_triple_dir).map_err(|source| {
+        let native_lib_triple_dir = native_libs_dir.join(l.target.triple());
+        std::fs::create_dir_all(&native_lib_triple_dir).map_err(|source| {
             CliError::CreateDirectoryFailed {
-                path: lib_triple_dir.clone(),
+                path: native_lib_triple_dir.clone(),
                 source,
             }
         })?;
-        std::fs::copy(
-            &l.path,
-            lib_triple_dir.join(l.path.file_name().expect("file shouldn't terminate in ..")),
-        )
-        .map_err(|source| CliError::CopyFailed {
+
+        let native_lib_filepath =
+            native_lib_triple_dir.join(l.path.file_name().expect("file shouldn't terminate in .."));
+
+        std::fs::copy(&l.path, &native_lib_filepath).map_err(|source| CliError::CopyFailed {
             from: l.path,
-            to: lib_triple_dir,
+            to: native_lib_filepath,
             source,
         })?;
     }
+
     step.finish_success();
 
     reporter.finish();
