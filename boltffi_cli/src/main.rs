@@ -4,7 +4,7 @@ mod check;
 mod cli;
 mod commands;
 mod config;
-mod pack;
+pub mod pack;
 mod reporter;
 mod target;
 mod toolchain;
@@ -20,7 +20,7 @@ use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_outp
 use commands::init::InitOptions;
 use commands::pack::{
     PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackWasmOptions, check_java_packaging_prereqs,
+    PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -136,7 +136,7 @@ enum Commands {
 
     #[command(
         about = "Package platform artifacts (xcframework/SPM/jniLibs/npm)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n"
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -207,6 +207,14 @@ enum PackTargetArg {
 
         #[arg(long, help = "Include experimental targets/features")]
         experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path for Python packaging (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 
     #[command(
@@ -279,6 +287,32 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+    },
+
+    #[command(
+        about = "Build + package Python artifacts",
+        long_about = "Build + package Python artifacts.\n\nOutputs:\n  - Python source package: {targets.python.output}\n  - Wheel output:          defaults to {targets.python.output}/wheelhouse\n\nConfig:\n  - [targets.python].module_name overrides the generated package module\n  - [targets.python.wheel].output overrides the wheel directory\n  - [targets.python.wheel].interpreters or repeated --python values select the Python build matrix\n"
+    )]
+    Python {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 }
 
@@ -449,11 +483,13 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                 } => PackCommand::All(PackAllOptions {
                     release,
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                     cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Apple {
@@ -507,6 +543,20 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental: false,
+                    cargo_args: cargo_args.clone(),
+                }),
+                PackTargetArg::Python {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                    python_interpreters,
+                } => PackCommand::Python(PackPythonOptions {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                    python_interpreters,
                     cargo_args: cargo_args.clone(),
                 }),
             };
@@ -799,6 +849,16 @@ fn release_pack_commands(
                     cargo_args: cargo_args.to_vec(),
                 }));
             }
+            if config.should_process(Target::Python, false) {
+                commands.push(PackCommand::Python(PackPythonOptions {
+                    release: true,
+                    regenerate: false,
+                    no_build: false,
+                    experimental: false,
+                    python_interpreters: Vec::new(),
+                    cargo_args: cargo_args.to_vec(),
+                }));
+            }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
                     release: true,
@@ -825,7 +885,7 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg,
+        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg, PackTargetArg,
         configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
         configured_wasm_target_triple_for_diagnostics, load_config_if_present,
         release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
@@ -1074,6 +1134,32 @@ enabled = true
     }
 
     #[test]
+    fn release_all_includes_python_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["python"]
+
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Python(options)
+                if options.release
+                    && !options.regenerate
+                    && !options.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
     fn cli_parses_generate_python_target() {
         let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
             .expect("cli parse should succeed");
@@ -1085,6 +1171,47 @@ enabled = true
                 experimental: true,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_interpreter_matrix() {
+        let cli = Cli::try_parse_from([
+            "boltffi",
+            "pack",
+            "python",
+            "--experimental",
+            "--python",
+            "python3.12",
+            "--python",
+            "python3.13",
+        ])
+        .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    python_interpreters,
+                    ..
+                }
+            } if python_interpreters == vec!["python3.12".to_string(), "python3.13".to_string()]
         ));
     }
 

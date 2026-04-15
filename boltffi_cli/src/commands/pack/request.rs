@@ -6,6 +6,7 @@ pub enum PackCommand {
     Android(PackAndroidOptions),
     Wasm(PackWasmOptions),
     Java(PackJavaOptions),
+    Python(PackPythonOptions),
 }
 
 pub struct PackAllOptions {
@@ -13,6 +14,7 @@ pub struct PackAllOptions {
     pub regenerate: bool,
     pub no_build: bool,
     pub experimental: bool,
+    pub python_interpreters: Vec<String>,
     pub cargo_args: Vec<String>,
 }
 
@@ -46,5 +48,14 @@ pub struct PackJavaOptions {
     pub regenerate: bool,
     pub no_build: bool,
     pub experimental: bool,
+    pub cargo_args: Vec<String>,
+}
+
+pub struct PackPythonOptions {
+    pub release: bool,
+    pub regenerate: bool,
+    pub no_build: bool,
+    pub experimental: bool,
+    pub python_interpreters: Vec<String>,
     pub cargo_args: Vec<String>,
 }

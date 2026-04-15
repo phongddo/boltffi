@@ -1,6 +1,7 @@
 pub mod android;
 pub mod apple;
 pub mod java;
+pub mod python;
 pub mod wasm;
 
 use std::path::PathBuf;

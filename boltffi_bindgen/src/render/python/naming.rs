@@ -9,12 +9,26 @@ impl NamingConvention {
         Self::escape_keyword(name)
     }
 
+    pub fn is_valid_module_name(name: &str) -> bool {
+        Self::is_identifier(name) && !Self::is_python_keyword(name)
+    }
+
     fn escape_keyword(name: &str) -> String {
         if Self::is_python_keyword(name) {
             format!("{name}_")
         } else {
             name.to_string()
         }
+    }
+
+    fn is_identifier(name: &str) -> bool {
+        let mut characters = name.chars();
+        let Some(first_character) = characters.next() else {
+            return false;
+        };
+
+        (first_character == '_' || first_character.is_alphabetic())
+            && characters.all(|character| character == '_' || character.is_alphanumeric())
     }
 
     fn is_python_keyword(name: &str) -> bool {
@@ -78,5 +92,14 @@ mod tests {
     fn leaves_non_keywords_unchanged() {
         assert_eq!(NamingConvention::function_name("echo_i32"), "echo_i32");
         assert_eq!(NamingConvention::param_name("value"), "value");
+    }
+
+    #[test]
+    fn validates_python_module_names() {
+        assert!(NamingConvention::is_valid_module_name("demo_runtime"));
+        assert!(!NamingConvention::is_valid_module_name("demo-runtime"));
+        assert!(!NamingConvention::is_valid_module_name("demo.runtime"));
+        assert!(!NamingConvention::is_valid_module_name("3demo"));
+        assert!(!NamingConvention::is_valid_module_name("class"));
     }
 }

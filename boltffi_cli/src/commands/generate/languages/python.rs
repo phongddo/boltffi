@@ -7,8 +7,7 @@ use crate::config::Target;
 pub struct PythonGenerator;
 
 impl PythonGenerator {
-    #[cfg(test)]
-    pub fn generate_from_source_directory(
+    pub(crate) fn generate_from_source_directory(
         config: &crate::config::Config,
         output_override: Option<std::path::PathBuf>,
         source_directory: &std::path::Path,

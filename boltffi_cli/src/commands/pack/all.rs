@@ -3,8 +3,9 @@ use crate::config::{Config, Target};
 use crate::reporter::Reporter;
 
 use super::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackWasmOptions,
-    pack_android, pack_apple, pack_java, pack_wasm, prepare_java_packaging,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackPythonOptions,
+    PackWasmOptions, pack_android, pack_apple, pack_java, pack_python, pack_wasm,
+    prepare_java_packaging,
 };
 
 pub(super) fn pack_all(
@@ -82,6 +83,22 @@ pub(super) fn pack_all(
                 cargo_args: options.cargo_args.clone(),
             },
             prepared_java_packaging,
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::Python, options.experimental) {
+        pack_python(
+            config,
+            PackPythonOptions {
+                release: options.release,
+                regenerate: options.regenerate,
+                no_build: options.no_build,
+                experimental: options.experimental,
+                python_interpreters: options.python_interpreters.clone(),
+                cargo_args: options.cargo_args.clone(),
+            },
             reporter,
         )?;
         packed_any = true;
