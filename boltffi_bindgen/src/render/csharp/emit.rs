@@ -106,14 +106,26 @@ mod tests {
 
         let output = emit_contract(&contract);
 
-        assert!(output.source.contains("public static int EchoI32(int value)"));
-        assert!(output.source.contains("return NativeMethods.EchoI32(value);"));
-        assert!(output
-            .source
-            .contains(r#"[DllImport(LibName, EntryPoint = "boltffi_echo_i32")]"#));
-        assert!(output
-            .source
-            .contains("internal static extern int EchoI32(int value);"));
+        assert!(
+            output
+                .source
+                .contains("public static int EchoI32(int value)")
+        );
+        assert!(
+            output
+                .source
+                .contains("return NativeMethods.EchoI32(value);")
+        );
+        assert!(
+            output
+                .source
+                .contains(r#"[DllImport(LibName, EntryPoint = "boltffi_echo_i32")]"#)
+        );
+        assert!(
+            output
+                .source
+                .contains("internal static extern int EchoI32(int value);")
+        );
     }
 
     #[test]
@@ -146,9 +158,11 @@ mod tests {
 
         let output = emit_contract(&contract);
 
-        assert!(output
-            .source
-            .contains("uint UnsignedEcho(byte a, ushort b, uint c, ulong d)"));
+        assert!(
+            output
+                .source
+                .contains("uint UnsignedEcho(byte a, ushort b, uint c, ulong d)")
+        );
     }
 
     #[test]
@@ -189,12 +203,18 @@ mod tests {
 
         let output = emit_contract(&contract);
 
-        assert!(output.source.contains("public static bool Flip(bool value)"));
-        assert!(output
-            .source
-            .contains("[return: MarshalAs(UnmanagedType.I1)]"));
-        assert!(output
-            .source
-            .contains("internal static extern bool Flip([MarshalAs(UnmanagedType.I1)] bool value);"));
+        assert!(
+            output
+                .source
+                .contains("public static bool Flip(bool value)")
+        );
+        assert!(
+            output
+                .source
+                .contains("[return: MarshalAs(UnmanagedType.I1)]")
+        );
+        assert!(output.source.contains(
+            "internal static extern bool Flip([MarshalAs(UnmanagedType.I1)] bool value);"
+        ));
     }
 }
