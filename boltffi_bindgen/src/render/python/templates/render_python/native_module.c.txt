@@ -1,6 +1,5 @@
 #include <Python.h>
 #include <float.h>
-#include <math.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
@@ -37,12 +36,18 @@ static void boltffi_python_unload_library(void) {
 }
 
 static int boltffi_python_load_library(PyObject *library_path) {
+#ifdef _WIN32
+    wchar_t *wide_library_path = NULL;
+#else
+    const char *utf8_library_path = NULL;
+    const char *loader_error = NULL;
+#endif
     if (!PyUnicode_Check(library_path)) {
         PyErr_SetString(PyExc_TypeError, "expected str library path");
         return 0;
     }
 #ifdef _WIN32
-    wchar_t *wide_library_path = PyUnicode_AsWideCharString(library_path, NULL);
+    wide_library_path = PyUnicode_AsWideCharString(library_path, NULL);
     if (wide_library_path == NULL) {
         return 0;
     }
@@ -53,8 +58,7 @@ static int boltffi_python_load_library(PyObject *library_path) {
         return 0;
     }
 #else
-    const char *utf8_library_path = PyUnicode_AsUTF8(library_path);
-    const char *loader_error = NULL;
+    utf8_library_path = PyUnicode_AsUTF8(library_path);
     if (utf8_library_path == NULL) {
         return 0;
     }
@@ -162,7 +166,7 @@ static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_na
     if (parsed == -1.0 && PyErr_Occurred()) {
         return 0;
     }
-    if (isfinite(parsed) && (parsed < -(double)FLT_MAX || parsed > (double)FLT_MAX)) {
+    if (parsed < -(double)FLT_MAX || parsed > (double)FLT_MAX) {
         PyErr_SetString(PyExc_OverflowError, "f32 out of range");
         return 0;
     }
@@ -183,6 +187,12 @@ static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_na
 {% if !module.functions.is_empty() %}
 {% for function in module.functions %}
 static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
+{% for parameter in function.parameters %}
+    {{ parameter.c_type_name() }} {{ parameter.name }};
+{% endfor %}
+{% if !function.returns_void() %}
+    {{ function.return_type.c_type_name() }} result;
+{% endif %}
     (void)self;
     if (nargs != {{ function.parameter_count() }}) {
         PyErr_Format(PyExc_TypeError, "{{ function.python_name }}() takes {{ function.parameter_count() }} positional arguments but %zd were given", nargs);
@@ -193,7 +203,6 @@ static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *
         return NULL;
     }
 {% for parameter in function.parameters %}
-    {{ parameter.c_type_name() }} {{ parameter.name }};
     if (!{{ parameter.primitive().parser_name() }}(args[{{ loop.index0 }}], &{{ parameter.name }})) {
         return NULL;
     }
@@ -202,7 +211,7 @@ static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *
     {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
     Py_RETURN_NONE;
 {% else %}
-    {{ function.return_type.c_type_name() }} result = {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    result = {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
 {% let return_primitive = function.return_primitive().unwrap() %}
 {% if return_primitive.boxes_as_bool() %}
     return PyBool_FromLong(result ? 1 : 0);

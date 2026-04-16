@@ -35,7 +35,7 @@ impl PythonEmitter {
             files: vec![
                 PythonOutputFile {
                     relative_path: PathBuf::from("pyproject.toml"),
-                    contents: PyprojectTemplate.render().unwrap(),
+                    contents: rendered_text_file(PyprojectTemplate.render().unwrap()),
                 },
                 PythonOutputFile {
                     relative_path: PathBuf::from("setup.py"),
@@ -71,6 +71,14 @@ impl PythonEmitter {
                 },
             ],
         }
+    }
+}
+
+fn rendered_text_file(contents: String) -> String {
+    if contents.ends_with('\n') {
+        contents
+    } else {
+        format!("{contents}\n")
     }
 }
 
@@ -139,8 +147,10 @@ mod tests {
         let native_source = rendered_file(&rendered, "demo_lib/_native.c");
 
         assert!(pyproject_source.contains("build-backend = \"setuptools.build_meta\""));
+        assert!(pyproject_source.ends_with('\n'));
         assert!(setup_source.contains("Extension("));
         assert!(setup_source.contains("\"demo_lib._native\""));
+        assert!(setup_source.contains("\"*.pyi\""));
         assert!(init_source.contains("from pathlib import Path"));
         assert!(init_source.contains("from . import _native"));
         assert!(init_source.contains("_native._initialize_loader"));
@@ -152,9 +162,12 @@ mod tests {
         assert!(native_source.contains("static PyObject *boltffi_python_initialize_loader"));
         assert!(native_source.contains("static int boltffi_python_parse_i32"));
         assert!(native_source.contains("static PyObject *boltffi_python_echo_bool"));
+        assert!(native_source.contains("wchar_t *wide_library_path = NULL;"));
         assert!(native_source.contains("dlsym"));
         assert!(native_source.contains("GetProcAddress"));
         assert!(native_source.contains("FLT_MAX"));
+        assert!(!native_source.contains("isfinite"));
         assert!(native_source.contains("METH_FASTCALL"));
+        assert!(pyproject_source.contains("wheel>=0.43"));
     }
 }

@@ -2,6 +2,8 @@ use std::path::{Path, PathBuf};
 
 use crate::cli::{CliError, Result};
 
+use super::config;
+
 #[derive(Debug, Clone)]
 pub(super) struct CargoArguments {
     raw_arguments: Vec<String>,
@@ -187,6 +189,10 @@ impl CargoArguments {
         )
         .command_arguments
         .clone()
+    }
+
+    pub(super) fn configured_build_target(&self, working_directory: &Path) -> Option<String> {
+        config::configured_build_target(&self.raw_arguments, Some(working_directory))
     }
 
     pub(super) fn has_explicit_manifest_path(&self) -> bool {

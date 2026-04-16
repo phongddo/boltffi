@@ -6,45 +6,46 @@ pub enum PackCommand {
     Android(PackAndroidOptions),
     Wasm(PackWasmOptions),
     Java(PackJavaOptions),
+    Python(PackPythonOptions),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackExecutionOptions {
+    pub release: bool,
+    pub regenerate: bool,
+    pub no_build: bool,
+    pub cargo_args: Vec<String>,
 }
 
 pub struct PackAllOptions {
-    pub release: bool,
-    pub regenerate: bool,
-    pub no_build: bool,
+    pub execution: PackExecutionOptions,
     pub experimental: bool,
-    pub cargo_args: Vec<String>,
+    pub python_interpreters: Vec<String>,
 }
 
 pub struct PackAppleOptions {
-    pub release: bool,
+    pub execution: PackExecutionOptions,
     pub version: Option<String>,
-    pub regenerate: bool,
-    pub no_build: bool,
     pub spm_only: bool,
     pub xcframework_only: bool,
     pub layout: Option<SpmLayout>,
-    pub cargo_args: Vec<String>,
 }
 
 pub struct PackAndroidOptions {
-    pub release: bool,
-    pub regenerate: bool,
-    pub no_build: bool,
-    pub cargo_args: Vec<String>,
+    pub execution: PackExecutionOptions,
 }
 
 pub struct PackWasmOptions {
-    pub release: bool,
-    pub regenerate: bool,
-    pub no_build: bool,
-    pub cargo_args: Vec<String>,
+    pub execution: PackExecutionOptions,
 }
 
 pub struct PackJavaOptions {
-    pub release: bool,
-    pub regenerate: bool,
-    pub no_build: bool,
+    pub execution: PackExecutionOptions,
     pub experimental: bool,
-    pub cargo_args: Vec<String>,
+}
+
+pub struct PackPythonOptions {
+    pub execution: PackExecutionOptions,
+    pub experimental: bool,
+    pub python_interpreters: Vec<String>,
 }

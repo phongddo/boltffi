@@ -24,6 +24,7 @@ indexmap = "2.7"
 
 [dev-dependencies]
 insta = "1.46"
+rstest = "0.25"
 
 [lints]
 workspace = true

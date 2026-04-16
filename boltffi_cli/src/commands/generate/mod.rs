@@ -93,6 +93,15 @@ pub fn run_generate_java_with_output_from_source_dir(
     JavaGenerator::generate_from_source_directory(config, output, source_directory, crate_name)
 }
 
+pub fn run_generate_python_with_output_from_source_dir(
+    config: &Config,
+    output: Option<PathBuf>,
+    source_directory: &Path,
+    crate_name: &str,
+) -> Result<()> {
+    PythonGenerator::generate_from_source_directory(config, output, source_directory, crate_name)
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;

@@ -12,6 +12,14 @@ pub struct PreambleTemplate<'a> {
     pub module: &'a CSharpModule,
 }
 
+/// Renders the public static wrapper class with methods that delegate
+/// to the native P/Invoke declarations.
+#[derive(Template)]
+#[template(path = "render_csharp/functions.txt", escape = "none")]
+pub struct FunctionsTemplate<'a> {
+    pub module: &'a CSharpModule,
+}
+
 /// Renders the `NativeMethods` static class containing `[DllImport]`
 /// declarations for the C FFI functions.
 #[derive(Template)]

@@ -3,6 +3,7 @@ use crate::target::{
     resolve_android_targets, resolve_apple_ios_targets, resolve_apple_macos_targets,
     resolve_apple_simulator_targets, resolve_java_host_targets,
 };
+use boltffi_bindgen::render::python::NamingConvention;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -128,6 +129,9 @@ impl Default for DartConfig {
 pub struct PythonConfig {
     #[serde(default = "default_python_output")]
     pub output: PathBuf,
+    pub module_name: Option<String>,
+    #[serde(default, alias = "pack")]
+    pub wheel: PythonWheelConfig,
     #[serde(default)]
     pub enabled: bool,
 }
@@ -136,9 +140,18 @@ impl Default for PythonConfig {
     fn default() -> Self {
         Self {
             output: default_python_output(),
+            module_name: None,
+            wheel: PythonWheelConfig::default(),
             enabled: false,
         }
     }
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+pub struct PythonWheelConfig {
+    #[serde(alias = "wheel_output")]
+    pub output: Option<PathBuf>,
+    pub interpreters: Option<Vec<String>>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -717,6 +730,44 @@ impl Config {
             ));
         }
 
+        if self.is_python_enabled()
+            && let Some(interpreters) = self.targets.python.wheel.interpreters.as_ref()
+        {
+            if interpreters.is_empty() {
+                return Err(ConfigError::Validation(
+                    "targets.python.wheel.interpreters must be non-empty when provided".to_string(),
+                ));
+            }
+
+            let mut seen = HashSet::new();
+            for interpreter in interpreters {
+                let normalized = interpreter.trim();
+                if normalized.is_empty() {
+                    return Err(ConfigError::Validation(
+                        "targets.python.wheel.interpreters must not contain empty values"
+                            .to_string(),
+                    ));
+                }
+
+                if !seen.insert(normalized.to_string()) {
+                    return Err(ConfigError::Validation(format!(
+                        "targets.python.wheel.interpreters contains duplicate interpreter '{}'",
+                        normalized
+                    )));
+                }
+            }
+        }
+
+        if self.is_python_enabled()
+            && let Some(module_name) = self.targets.python.module_name.as_deref()
+            && !NamingConvention::is_valid_module_name(module_name)
+        {
+            return Err(ConfigError::Validation(format!(
+                "targets.python.module_name must be a valid Python identifier, got '{}'",
+                module_name
+            )));
+        }
+
         Ok(())
     }
 
@@ -728,7 +779,7 @@ impl Config {
     }
 
     pub fn crate_artifact_name(&self) -> String {
-        self.library_name().replace('-', "_")
+        boltffi_bindgen::library_name(self.library_name()).into_string()
     }
 
     pub fn swift_module_name(&self) -> String {
@@ -1107,7 +1158,24 @@ impl Config {
     }
 
     pub fn python_module_name(&self) -> String {
-        self.crate_artifact_name()
+        self.targets
+            .python
+            .module_name
+            .clone()
+            .unwrap_or_else(|| self.crate_artifact_name())
+    }
+
+    pub fn python_wheel_output(&self) -> PathBuf {
+        self.targets
+            .python
+            .wheel
+            .output
+            .clone()
+            .unwrap_or_else(|| self.python_output().join("wheelhouse"))
+    }
+
+    pub fn python_wheel_interpreters(&self) -> Option<&[String]> {
+        self.targets.python.wheel.interpreters.as_deref()
     }
 
     pub fn csharp_output(&self) -> PathBuf {
@@ -2132,5 +2200,146 @@ enabled = true
         );
 
         assert!(config.should_process(Target::Python, false));
+    }
+
+    #[test]
+    fn python_module_name_defaults_to_crate_artifact_name() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        assert_eq!(config.python_module_name(), "my_lib");
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheelhouse")
+        );
+        assert_eq!(config.python_wheel_interpreters(), None);
+    }
+
+    #[test]
+    fn python_wheel_configuration_supports_module_override_and_interpreter_matrix() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+module_name = "demo_runtime"
+
+[targets.python.wheel]
+output = "dist/python/wheels"
+interpreters = ["python3.11", "python3.12"]
+"#,
+        );
+
+        assert_eq!(config.python_module_name(), "demo_runtime");
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheels")
+        );
+        assert_eq!(
+            config.python_wheel_interpreters(),
+            Some(["python3.11".to_string(), "python3.12".to_string()].as_slice())
+        );
+    }
+
+    #[test]
+    fn rejects_empty_python_interpreter_matrix() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.wheel]
+interpreters = []
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.wheel.interpreters must be non-empty")
+        ));
+    }
+
+    #[test]
+    fn rejects_duplicate_python_interpreters() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.wheel]
+interpreters = ["python3.13", "python3.13"]
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.wheel.interpreters contains duplicate interpreter")
+        ));
+    }
+
+    #[test]
+    fn rejects_invalid_python_module_name_override() {
+        let parsed: Config = toml::from_str(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+module_name = "demo-runtime"
+"#,
+        )
+        .expect("toml parse failed");
+
+        assert!(matches!(
+            parsed.validate(),
+            Err(ConfigError::Validation(message))
+                if message.contains("targets.python.module_name must be a valid Python identifier")
+        ));
+    }
+
+    #[test]
+    fn accepts_legacy_python_pack_table_alias() {
+        let config = parse_config(
+            r#"
+[package]
+name = "my-lib"
+
+[targets.python]
+enabled = true
+
+[targets.python.pack]
+wheel_output = "dist/python/wheels"
+interpreters = ["python3.11"]
+"#,
+        );
+
+        assert_eq!(
+            config.python_wheel_output(),
+            PathBuf::from("dist/python/wheels")
+        );
+        assert_eq!(
+            config.python_wheel_interpreters(),
+            Some(["python3.11".to_string()].as_slice())
+        );
     }
 }

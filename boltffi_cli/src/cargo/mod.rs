@@ -1,4 +1,5 @@
 mod args;
+pub(crate) mod config;
 #[cfg(test)]
 pub(crate) mod fixture;
 mod metadata;
@@ -59,6 +60,11 @@ impl Cargo {
 
     pub(crate) fn probe_command_arguments(&self) -> Vec<String> {
         self.arguments.probe_command_arguments()
+    }
+
+    pub(crate) fn configured_build_target(&self) -> Option<String> {
+        self.arguments
+            .configured_build_target(&self.working_directory)
     }
 
     pub(crate) fn effective_package_selector(

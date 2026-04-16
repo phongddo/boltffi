@@ -4,7 +4,7 @@ mod check;
 mod cli;
 mod commands;
 mod config;
-mod pack;
+pub mod pack;
 mod reporter;
 mod target;
 mod toolchain;
@@ -19,8 +19,8 @@ use commands::doctor::{ConfigSummary, DoctorOptions};
 use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use commands::init::InitOptions;
 use commands::pack::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackJavaOptions,
-    PackWasmOptions, check_java_packaging_prereqs,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackExecutionOptions,
+    PackJavaOptions, PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -136,7 +136,7 @@ enum Commands {
 
     #[command(
         about = "Package platform artifacts (xcframework/SPM/jniLibs/npm)",
-        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n"
+        long_about = "Package platform artifacts.\n\nExamples:\n  boltffi pack apple\n  boltffi pack apple --layout bundled\n  boltffi pack android --release\n  boltffi pack wasm --release\n  boltffi pack python --experimental\n"
     )]
     Pack {
         #[command(subcommand)]
@@ -207,6 +207,14 @@ enum PackTargetArg {
 
         #[arg(long, help = "Include experimental targets/features")]
         experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path for Python packaging (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 
     #[command(
@@ -279,6 +287,32 @@ enum PackTargetArg {
 
         #[arg(long)]
         no_build: bool,
+    },
+
+    #[command(
+        about = "Build + package Python artifacts",
+        long_about = "Build + package Python artifacts.\n\nOutputs:\n  - Python source package: {targets.python.output}\n  - Wheel output:          defaults to {targets.python.output}/wheelhouse\n\nConfig:\n  - [targets.python].module_name overrides the generated package module\n  - [targets.python.wheel].output overrides the wheel directory\n  - [targets.python.wheel].interpreters or repeated --python values select the Python build matrix\n"
+    )]
+    Python {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
+
+        #[arg(
+            long = "python",
+            action = clap::ArgAction::Append,
+            value_name = "PYTHON",
+            help = "Python interpreter executable or path (repeatable)"
+        )]
+        python_interpreters: Vec<String>,
     },
 }
 
@@ -449,12 +483,16 @@ fn execute_command(
                     regenerate,
                     no_build,
                     experimental,
+                    python_interpreters,
                 } => PackCommand::All(PackAllOptions {
-                    release,
-                    regenerate,
-                    no_build,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     experimental,
-                    cargo_args: cargo_args.clone(),
+                    python_interpreters,
                 }),
                 PackTargetArg::Apple {
                     release,
@@ -465,10 +503,13 @@ fn execute_command(
                     xcframework_only,
                     layout,
                 } => PackCommand::Apple(PackAppleOptions {
-                    release,
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                     version,
-                    regenerate,
-                    no_build,
                     spm_only,
                     xcframework_only,
                     layout: layout.map(|l| match l {
@@ -476,38 +517,59 @@ fn execute_command(
                         PackLayoutArg::Split => crate::config::SpmLayout::Split,
                         PackLayoutArg::FfiOnly => crate::config::SpmLayout::FfiOnly,
                     }),
-                    cargo_args: cargo_args.clone(),
                 }),
                 PackTargetArg::Android {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Android(PackAndroidOptions {
-                    release,
-                    regenerate,
-                    no_build,
-                    cargo_args: cargo_args.clone(),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                 }),
                 PackTargetArg::Wasm {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Wasm(PackWasmOptions {
-                    release,
-                    regenerate,
-                    no_build,
-                    cargo_args: cargo_args.clone(),
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
                 }),
                 PackTargetArg::Java {
                     release,
                     regenerate,
                     no_build,
                 } => PackCommand::Java(PackJavaOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental: false,
+                }),
+                PackTargetArg::Python {
                     release,
                     regenerate,
                     no_build,
-                    experimental: false,
-                    cargo_args: cargo_args.clone(),
+                    experimental,
+                    python_interpreters,
+                } => PackCommand::Python(PackPythonOptions {
+                    execution: pack_execution_options(
+                        release,
+                        regenerate,
+                        no_build,
+                        cargo_args.clone(),
+                    ),
+                    experimental,
+                    python_interpreters,
                 }),
             };
             run_pack(&config, command, reporter)
@@ -526,6 +588,20 @@ fn execute_command(
                 }
             })
         }
+    }
+}
+
+fn pack_execution_options(
+    release: bool,
+    regenerate: bool,
+    no_build: bool,
+    cargo_args: Vec<String>,
+) -> PackExecutionOptions {
+    PackExecutionOptions {
+        release,
+        regenerate,
+        no_build,
+        cargo_args,
     }
 }
 
@@ -739,73 +815,59 @@ fn release_pack_commands(
         Some(BuildPlatformArg::Apple) => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
         }
         Some(BuildPlatformArg::Android) => {
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
         }
         Some(BuildPlatformArg::Wasm) => {
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
         }
         Some(BuildPlatformArg::All) | None => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
-                    release: true,
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                     version: None,
-                    regenerate: false,
-                    no_build: true,
                     spm_only: false,
                     xcframework_only: false,
                     layout: None,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
             if config.is_android_enabled() {
                 commands.push(PackCommand::Android(PackAndroidOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
                 }));
             }
             if config.is_wasm_enabled() {
                 commands.push(PackCommand::Wasm(PackWasmOptions {
-                    release: true,
-                    regenerate: false,
-                    no_build: true,
-                    cargo_args: cargo_args.to_vec(),
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                }));
+            }
+            if config.should_process(Target::Python, false) {
+                commands.push(PackCommand::Python(PackPythonOptions {
+                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
+                    experimental: false,
+                    python_interpreters: Vec::new(),
                 }));
             }
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
-                    release: true,
-                    regenerate: true,
-                    no_build: false,
+                    execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
                     experimental: false,
-                    cargo_args: cargo_args.to_vec(),
                 }));
             }
         }
@@ -825,7 +887,7 @@ fn release_requires_java_environment_validation(
 #[cfg(test)]
 mod tests {
     use super::{
-        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg,
+        BuildPlatformArg, Cli, Commands, ConfigPaths, GenerateTargetArg, PackTargetArg,
         configured_android_targets_for_diagnostics, configured_apple_targets_for_diagnostics,
         configured_wasm_target_triple_for_diagnostics, load_config_if_present,
         release_pack_commands, release_requires_java_environment_validation, resolve_doctor_config,
@@ -1004,22 +1066,22 @@ enabled = true
         assert_eq!(commands.len(), 4);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[1],
-            PackCommand::Android(options) if options.no_build
+            PackCommand::Android(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[2],
-            PackCommand::Wasm(options) if options.no_build
+            PackCommand::Wasm(options) if options.execution.no_build
         ));
         assert!(matches!(
             &commands[3],
             PackCommand::Java(options)
-                if !options.no_build
-                    && options.release
-                    && options.regenerate
+                if !options.execution.no_build
+                    && options.execution.release
+                    && options.execution.regenerate
                     && !options.experimental
         ));
     }
@@ -1044,7 +1106,7 @@ enabled = true
         assert_eq!(commands.len(), 1);
         assert!(matches!(
             &commands[0],
-            PackCommand::Apple(options) if options.no_build
+            PackCommand::Apple(options) if options.execution.no_build
         ));
     }
 
@@ -1074,6 +1136,32 @@ enabled = true
     }
 
     #[test]
+    fn release_all_includes_python_packaging_when_enabled_and_experimental() {
+        let config = parse_config(
+            r#"
+experimental = ["python"]
+
+[package]
+name = "mylib"
+
+[targets.python]
+enabled = true
+"#,
+        );
+
+        let commands = release_pack_commands(&config, Some(BuildPlatformArg::All), &[]);
+
+        assert!(commands.iter().any(|command| matches!(
+            command,
+            PackCommand::Python(options)
+                if options.execution.release
+                    && !options.execution.regenerate
+                    && !options.execution.no_build
+                    && !options.experimental
+        )));
+    }
+
+    #[test]
     fn cli_parses_generate_python_target() {
         let cli = Cli::try_parse_from(["boltffi", "generate", "python", "--experimental"])
             .expect("cli parse should succeed");
@@ -1085,6 +1173,47 @@ enabled = true
                 experimental: true,
                 ..
             }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_target() {
+        let cli = Cli::try_parse_from(["boltffi", "pack", "python", "--experimental"])
+            .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    experimental: true,
+                    ..
+                }
+            }
+        ));
+    }
+
+    #[test]
+    fn cli_parses_pack_python_interpreter_matrix() {
+        let cli = Cli::try_parse_from([
+            "boltffi",
+            "pack",
+            "python",
+            "--experimental",
+            "--python",
+            "python3.12",
+            "--python",
+            "python3.13",
+        ])
+        .expect("cli parse should succeed");
+
+        assert!(matches!(
+            cli.command,
+            Commands::Pack {
+                target: PackTargetArg::Python {
+                    python_interpreters,
+                    ..
+                }
+            } if python_interpreters == vec!["python3.12".to_string(), "python3.13".to_string()]
         ));
     }
 

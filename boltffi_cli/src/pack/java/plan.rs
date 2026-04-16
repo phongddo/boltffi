@@ -80,7 +80,12 @@ pub(crate) fn pack_java(
 
     reporter.section("☕", "Packing Java");
 
-    ensure_java_no_build_supported(config, options.no_build, options.experimental, "pack java")?;
+    ensure_java_no_build_supported(
+        config,
+        options.execution.no_build,
+        options.experimental,
+        "pack java",
+    )?;
 
     let PreparedJavaPackaging {
         java_host_targets,
@@ -89,12 +94,16 @@ pub(crate) fn pack_java(
         prepared
     } else {
         let step = reporter.step("Validating JVM toolchains");
-        let prepared = prepare_java_packaging(config, options.release, &options.cargo_args)?;
+        let prepared = prepare_java_packaging(
+            config,
+            options.execution.release,
+            &options.execution.cargo_args,
+        )?;
         step.finish_success();
         prepared
     };
 
-    if options.regenerate {
+    if options.execution.regenerate {
         let source_directory = selected_jvm_package_source_directory(&packaging_targets)?;
         let artifact_name = selected_jvm_package_artifact_name(&packaging_targets)?;
         let step = reporter.step("Generating C header");
@@ -118,7 +127,8 @@ pub(crate) fn pack_java(
             "Building Rust library for {}",
             host_target.canonical_name()
         ));
-        let build_artifacts = build_jvm_native_library(packaging_target, options.release, &step)?;
+        let build_artifacts =
+            build_jvm_native_library(packaging_target, options.execution.release, &step)?;
         step.finish_success();
 
         let step = reporter.step(&format!(

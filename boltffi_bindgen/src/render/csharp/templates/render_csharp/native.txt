@@ -7,5 +7,13 @@
 
         [DllImport(LibName, EntryPoint = "{{ module.prefix }}_last_error_message")]
         internal static extern int LastErrorMessage(out IntPtr message);
+{%- for func in module.functions %}
+
+        [DllImport(LibName, EntryPoint = "{{ func.ffi_name }}")]
+{%- if func.return_type.is_bool() %}
+        [return: MarshalAs(UnmanagedType.I1)]
+{%- endif %}
+        internal static extern {{ func.return_type }} {{ func.name }}({% for param in func.params %}{% if param.csharp_type.is_bool() %}[MarshalAs(UnmanagedType.I1)] {% endif %}{{ param.csharp_type }} {{ param.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{%- endfor %}
     }
 }

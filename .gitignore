@@ -3,6 +3,8 @@
 .DS_Store
 .vscode/
 .idea/
+__pycache__/
+*.pyc
 debug/
 Cargo.lock
 *.log
@@ -20,3 +22,4 @@ benchmarks/android-app/build
 benchmarks/scripts/__pycache__
 benchmarks/swift-macos-bench/build/results
 benchmarks/wasm-bench/build
+examples/platforms/python/dist/
