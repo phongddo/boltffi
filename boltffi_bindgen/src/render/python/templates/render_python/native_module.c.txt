@@ -3,14 +3,20 @@
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 #ifdef _WIN32
 #include <windows.h>
 #else
 #include <dlfcn.h>
 #endif
 
+{% if module.uses_string_returns() %}
+typedef struct FfiBuf_u8 { uint8_t* ptr; size_t len; size_t cap; size_t align; } FfiBuf_u8;
+typedef void (*boltffi_python_free_buf_fn)(FfiBuf_u8);
+static boltffi_python_free_buf_fn boltffi_python_free_buf_symbol = NULL;
+{% endif %}
 {% for function in module.functions %}
-typedef {{ function.return_type.c_type_name() }} (*{{ function.function_pointer_typedef_name() }})({% if function.takes_no_parameters() %}void{% else %}{% for parameter in function.parameters %}{{ parameter.c_type_name() }}{% if !loop.last %}, {% endif %}{% endfor %}{% endif %});
+typedef {{ function.return_type.c_type_name() }} (*{{ function.function_pointer_typedef_name() }})({% if function.takes_no_parameters() %}void{% else %}{% for ffi_argument in function.ffi_arguments() %}{{ ffi_argument.c_type_name }}{% if !loop.last %}, {% endif %}{% endfor %}{% endif %});
 static {{ function.function_pointer_typedef_name() }} {{ function.function_pointer_name() }} = NULL;
 {% endfor %}
 {% if !module.functions.is_empty() %}
@@ -24,6 +30,9 @@ static void boltffi_python_unload_library(void) {
 {% for function in module.functions %}
     {{ function.function_pointer_name() }} = NULL;
 {% endfor %}
+{% if module.uses_string_returns() %}
+    boltffi_python_free_buf_symbol = NULL;
+{% endif %}
     if (boltffi_python_library_handle == NULL) {
         return;
     }
@@ -78,6 +87,18 @@ static int boltffi_python_load_library(PyObject *library_path) {
 }
 
 static int boltffi_python_bind_symbols(void) {
+{% if module.uses_string_returns() %}
+#ifdef _WIN32
+    boltffi_python_free_buf_symbol = (boltffi_python_free_buf_fn)GetProcAddress(boltffi_python_library_handle, "{{ module.free_buffer_symbol }}");
+#else
+    boltffi_python_free_buf_symbol = (boltffi_python_free_buf_fn)dlsym(boltffi_python_library_handle, "{{ module.free_buffer_symbol }}");
+#endif
+    if (boltffi_python_free_buf_symbol == NULL) {
+        boltffi_python_unload_library();
+        PyErr_SetString(PyExc_ImportError, "failed to resolve native symbol {{ module.free_buffer_symbol }}");
+        return 0;
+    }
+{% endif %}
 {% for function in module.functions %}
 #ifdef _WIN32
     {{ function.function_pointer_name() }} = ({{ function.function_pointer_typedef_name() }})GetProcAddress(boltffi_python_library_handle, "{{ function.ffi_symbol }}");
@@ -105,6 +126,24 @@ static PyObject *boltffi_python_initialize_loader(PyObject *self, PyObject *libr
         return NULL;
     }
     Py_RETURN_NONE;
+}
+{% endif %}
+{% if module.uses_string_parameters() %}
+
+static int boltffi_python_parse_string(PyObject *value, const uint8_t **out_ptr, uintptr_t *out_len) {
+    const char *utf8_data = NULL;
+    Py_ssize_t utf8_length = 0;
+    if (!PyUnicode_Check(value)) {
+        PyErr_SetString(PyExc_TypeError, "expected str");
+        return 0;
+    }
+    utf8_data = PyUnicode_AsUTF8AndSize(value, &utf8_length);
+    if (utf8_data == NULL) {
+        return 0;
+    }
+    *out_ptr = (const uint8_t *)utf8_data;
+    *out_len = (uintptr_t)utf8_length;
+    return 1;
 }
 {% endif %}
 {% if !used_scalar_types.is_empty() %}
@@ -185,10 +224,41 @@ static int {{ primitive.parser_name() }}(PyObject *value, {{ primitive.c_type_na
 {% endfor %}
 {% endif %}
 {% if !module.functions.is_empty() %}
+{% if module.uses_string_returns() %}
+static PyObject *boltffi_python_decode_owned_utf8(FfiBuf_u8 buffer) {
+    PyObject *decoded = NULL;
+    uint32_t utf8_length = 0;
+    const char *utf8_data = "";
+    if (buffer.ptr == NULL || buffer.len < sizeof(uint32_t)) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_RuntimeError, "native string buffer is invalid");
+        return NULL;
+    }
+    memcpy(&utf8_length, buffer.ptr, sizeof(uint32_t));
+    if (buffer.len != sizeof(uint32_t) + (size_t)utf8_length) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_RuntimeError, "native string buffer is invalid");
+        return NULL;
+    }
+    if ((size_t)utf8_length > (size_t)PY_SSIZE_T_MAX) {
+        boltffi_python_free_buf_symbol(buffer);
+        PyErr_SetString(PyExc_OverflowError, "string result is too large for Python");
+        return NULL;
+    }
+    if (utf8_length != 0) {
+        utf8_data = (const char *)(buffer.ptr + sizeof(uint32_t));
+    }
+    decoded = PyUnicode_DecodeUTF8(utf8_data, (Py_ssize_t)utf8_length, NULL);
+    boltffi_python_free_buf_symbol(buffer);
+    return decoded;
+}
+{% endif %}
 {% for function in module.functions %}
 static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *args, Py_ssize_t nargs) {
 {% for parameter in function.parameters %}
-    {{ parameter.c_type_name() }} {{ parameter.name }};
+{% for binding in parameter.c_bindings() %}
+    {{ binding.c_type_name }} {{ binding.name }};
+{% endfor %}
 {% endfor %}
 {% if !function.returns_void() %}
     {{ function.return_type.c_type_name() }} result;
@@ -203,15 +273,18 @@ static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *
         return NULL;
     }
 {% for parameter in function.parameters %}
-    if (!{{ parameter.primitive().parser_name() }}(args[{{ loop.index0 }}], &{{ parameter.name }})) {
+    if (!{{ parameter.parser_name() }}(args[{{ loop.index0 }}], {% for parser_output in parameter.parser_output_arguments() %}{{ parser_output }}{% if !loop.last %}, {% endif %}{% endfor %})) {
         return NULL;
     }
 {% endfor %}
 {% if function.returns_void() %}
-    {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    {{ function.function_pointer_name() }}({% for ffi_argument in function.ffi_arguments() %}{{ ffi_argument.name }}{% if !loop.last %}, {% endif %}{% endfor %});
     Py_RETURN_NONE;
 {% else %}
-    result = {{ function.function_pointer_name() }}({% for parameter in function.parameters %}{{ parameter.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+    result = {{ function.function_pointer_name() }}({% for ffi_argument in function.ffi_arguments() %}{{ ffi_argument.name }}{% if !loop.last %}, {% endif %}{% endfor %});
+{% if function.returns_string() %}
+    return boltffi_python_decode_owned_utf8(result);
+{% else %}
 {% let return_primitive = function.return_primitive().unwrap() %}
 {% if return_primitive.boxes_as_bool() %}
     return PyBool_FromLong(result ? 1 : 0);
@@ -229,6 +302,7 @@ static PyObject *{{ function.wrapper_name() }}(PyObject *self, PyObject *const *
     return PyLong_FromSize_t((size_t)result);
 {% elif return_primitive.boxes_as_double() %}
     return PyFloat_FromDouble((double)result);
+{% endif %}
 {% endif %}
 {% endif %}
 }

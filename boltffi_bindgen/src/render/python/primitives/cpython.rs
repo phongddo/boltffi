@@ -1,6 +1,12 @@
 use crate::ir::types::PrimitiveType;
 use crate::render::python::{PythonFunction, PythonParameter, PythonType};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct CPythonCBinding {
+    pub c_type_name: &'static str,
+    pub name: String,
+}
+
 pub(crate) trait CPythonPrimitiveTypeExt {
     fn c_type_name(self) -> &'static str;
     fn parser_name(self) -> &'static str;
@@ -196,17 +202,51 @@ impl CPythonTypeExt for PythonType {
         match self {
             PythonType::Void => "void",
             PythonType::Primitive(primitive) => primitive.c_type_name(),
+            PythonType::String => "FfiBuf_u8",
         }
     }
 }
 
 pub(crate) trait CPythonParameterExt {
-    fn c_type_name(&self) -> &'static str;
+    fn c_bindings(&self) -> Vec<CPythonCBinding>;
+    fn parser_name(&self) -> &'static str;
+    fn parser_output_arguments(&self) -> Vec<String>;
 }
 
 impl CPythonParameterExt for PythonParameter {
-    fn c_type_name(&self) -> &'static str {
-        self.primitive().c_type_name()
+    fn c_bindings(&self) -> Vec<CPythonCBinding> {
+        match &self.type_ref {
+            PythonType::Void => unreachable!("python parameters cannot be void"),
+            PythonType::Primitive(primitive) => vec![CPythonCBinding {
+                c_type_name: primitive.c_type_name(),
+                name: self.name.clone(),
+            }],
+            PythonType::String => vec![
+                CPythonCBinding {
+                    c_type_name: "const uint8_t *",
+                    name: format!("{}_ptr", self.name),
+                },
+                CPythonCBinding {
+                    c_type_name: "uintptr_t",
+                    name: format!("{}_len", self.name),
+                },
+            ],
+        }
+    }
+
+    fn parser_name(&self) -> &'static str {
+        match &self.type_ref {
+            PythonType::Void => unreachable!("python parameters cannot be void"),
+            PythonType::Primitive(primitive) => primitive.parser_name(),
+            PythonType::String => "boltffi_python_parse_string",
+        }
+    }
+
+    fn parser_output_arguments(&self) -> Vec<String> {
+        self.c_bindings()
+            .into_iter()
+            .map(|binding| format!("&{}", binding.name))
+            .collect()
     }
 }
 
@@ -214,6 +254,7 @@ pub(crate) trait CPythonFunctionExt {
     fn wrapper_name(&self) -> String;
     fn function_pointer_typedef_name(&self) -> String;
     fn function_pointer_name(&self) -> String;
+    fn ffi_arguments(&self) -> Vec<CPythonCBinding>;
 }
 
 impl CPythonFunctionExt for PythonFunction {
@@ -227,5 +268,12 @@ impl CPythonFunctionExt for PythonFunction {
 
     fn function_pointer_name(&self) -> String {
         format!("boltffi_python_{}_symbol", self.python_name)
+    }
+
+    fn ffi_arguments(&self) -> Vec<CPythonCBinding> {
+        self.parameters
+            .iter()
+            .flat_map(|parameter| parameter.c_bindings())
+            .collect()
     }
 }

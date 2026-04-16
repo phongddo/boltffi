@@ -76,6 +76,7 @@ impl<'a> PythonLowerer<'a> {
                 .clone()
                 .or_else(|| self.ffi_contract.package.version.clone()),
             library_name: self.library_name.to_string(),
+            free_buffer_symbol: self.abi_contract.free_buf.to_string(),
             functions,
         })
     }
@@ -170,6 +171,7 @@ impl<'a> PythonLowerer<'a> {
     fn lower_type(type_expr: &TypeExpr) -> Option<PythonType> {
         match type_expr {
             TypeExpr::Primitive(primitive) => Some(PythonType::Primitive(*primitive)),
+            TypeExpr::String => Some(PythonType::String),
             TypeExpr::Void => Some(PythonType::Void),
             _ => None,
         }
@@ -185,7 +187,7 @@ mod tests {
     use crate::ir::ids::{FunctionId, ParamName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use crate::ir::{FfiContract, Lowerer, PackageInfo, TypeCatalog};
-    use crate::render::python::PythonLowerError;
+    use crate::render::python::{PythonLowerError, PythonType};
 
     fn test_function(function_name: &str, parameter_names: &[&str]) -> FunctionDef {
         FunctionDef {
@@ -240,6 +242,30 @@ mod tests {
 
         assert_eq!(lowered.python_name, "class_");
         assert_eq!(lowered.parameters[0].name, "from_");
+    }
+
+    #[test]
+    fn lower_function_supports_string_parameters_and_returns() {
+        let function = FunctionDef {
+            id: FunctionId::new("echo_string"),
+            params: vec![ParamDef {
+                name: ParamName::new("value"),
+                type_expr: TypeExpr::String,
+                passing: ParamPassing::Value,
+                doc: None,
+            }],
+            returns: ReturnDef::Value(TypeExpr::String),
+            execution_kind: ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        };
+
+        let lowered = PythonLowerer::lower_function(&function)
+            .expect("function lowering should succeed")
+            .expect("function should lower");
+
+        assert_eq!(lowered.parameters[0].type_ref, PythonType::String);
+        assert_eq!(lowered.return_type, PythonType::String);
     }
 
     #[test]

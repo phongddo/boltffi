@@ -5,6 +5,7 @@ use crate::render::python::primitives::PythonScalarTypeExt as _;
 pub enum PythonType {
     Void,
     Primitive(PrimitiveType),
+    String,
 }
 
 impl PythonType {
@@ -12,6 +13,7 @@ impl PythonType {
         match self {
             Self::Void => "None",
             Self::Primitive(primitive) => primitive.python_annotation(),
+            Self::String => "str",
         }
     }
 
@@ -19,11 +21,16 @@ impl PythonType {
         match self {
             Self::Void => None,
             Self::Primitive(primitive) => Some(*primitive),
+            Self::String => None,
         }
     }
 
     pub fn is_void(&self) -> bool {
         matches!(self, Self::Void)
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, Self::String)
     }
 }
 
@@ -34,11 +41,8 @@ pub struct PythonParameter {
 }
 
 impl PythonParameter {
-    pub fn primitive(&self) -> PrimitiveType {
-        match &self.type_ref {
-            PythonType::Void => unreachable!("python parameters cannot be void"),
-            PythonType::Primitive(primitive) => *primitive,
-        }
+    pub fn is_string(&self) -> bool {
+        self.type_ref.is_string()
     }
 }
 
@@ -63,6 +67,10 @@ impl PythonFunction {
         self.return_type.is_void()
     }
 
+    pub fn returns_string(&self) -> bool {
+        self.return_type.is_string()
+    }
+
     pub fn return_primitive(&self) -> Option<PrimitiveType> {
         self.return_type.used_primitive()
     }
@@ -74,6 +82,7 @@ pub struct PythonModule {
     pub package_name: String,
     pub package_version: Option<String>,
     pub library_name: String,
+    pub free_buffer_symbol: String,
     pub functions: Vec<PythonFunction>,
 }
 
@@ -116,5 +125,15 @@ impl PythonModule {
                 }
                 scalar_types
             })
+    }
+
+    pub fn uses_string_parameters(&self) -> bool {
+        self.functions
+            .iter()
+            .any(|function| function.parameters.iter().any(PythonParameter::is_string))
+    }
+
+    pub fn uses_string_returns(&self) -> bool {
+        self.functions.iter().any(PythonFunction::returns_string)
     }
 }
