@@ -13,12 +13,22 @@
         internal static string ReadString(FfiBuf buf)
         {
             if (buf.ptr == IntPtr.Zero) return "";
+            nuint bufLen = (nuint)buf.len;
+            if (bufLen < 4) throw new InvalidOperationException("corrupt wire: buffer too small for length prefix");
             int len = Marshal.ReadInt32(buf.ptr);
             if (len < 0) throw new InvalidOperationException("corrupt wire: negative string length");
             if (len == 0) return "";
-            byte[] bytes = new byte[len];
-            Marshal.Copy(buf.ptr + 4, bytes, 0, len);
-            return Encoding.UTF8.GetString(bytes);
+            if ((nuint)len + 4 > bufLen) throw new InvalidOperationException("corrupt wire: string length exceeds buffer");
+            byte[] bytes = ArrayPool<byte>.Shared.Rent(len);
+            try
+            {
+                Marshal.Copy(buf.ptr + 4, bytes, 0, len);
+                return Encoding.UTF8.GetString(bytes, 0, len);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(bytes);
+            }
         }
     }
 

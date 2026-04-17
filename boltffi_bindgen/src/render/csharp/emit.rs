@@ -294,7 +294,9 @@ mod tests {
     /// A `String` return is wire-encoded by Rust into a length-prefixed
     /// `FfiBuf` (i32 length + UTF-8 bytes). The wrapper decodes via
     /// `WireReader.ReadString` and must release the native allocation with
-    /// `FreeBuf` even if decoding throws.
+    /// `FreeBuf` even if decoding throws; the generated helper also validates
+    /// the wire bounds before reading and decodes only the copied prefix of a
+    /// rented array.
     #[test]
     fn emit_string_return_decodes_ffibuf_and_frees() {
         let mut contract = empty_contract();
@@ -320,6 +322,26 @@ mod tests {
             &src,
             "return WireReader.ReadString(_buf);",
             "WireReader.ReadString to decode the wire-encoded FfiBuf into a managed string",
+        );
+        assert_source_contains(
+            &src,
+            "if (bufLen < 4) throw new InvalidOperationException(\"corrupt wire: buffer too small for length prefix\");",
+            "a guard that rejects FfiBuf values too short to hold the 4-byte string length prefix before Marshal.ReadInt32",
+        );
+        assert_source_contains(
+            &src,
+            "if ((nuint)len + 4 > bufLen) throw new InvalidOperationException(\"corrupt wire: string length exceeds buffer\");",
+            "a guard that rejects declared string payloads whose bytes would run past the end of the FfiBuf",
+        );
+        assert_source_contains(
+            &src,
+            "byte[] bytes = ArrayPool<byte>.Shared.Rent(len);",
+            "ArrayPool rental to avoid allocating a fresh byte[] on every string decode",
+        );
+        assert_source_contains(
+            &src,
+            "return Encoding.UTF8.GetString(bytes, 0, len);",
+            "UTF-8 decoding of only the copied prefix from the rented array so pooled tail bytes are ignored",
         );
         assert_source_contains(
             &src,
@@ -366,6 +388,11 @@ mod tests {
             "using System.Text;",
             "no System.Text using directive when Encoding.UTF8 is never referenced",
         );
+        assert_source_lacks(
+            &primitive_src,
+            "using System.Buffers;",
+            "no System.Buffers using directive when ArrayPool is never referenced",
+        );
 
         let mut with_string = empty_contract();
         with_string.functions.push(function_with_types(
@@ -394,6 +421,11 @@ mod tests {
             &string_src,
             "using System.Text;",
             "the System.Text using directive so Encoding.UTF8 resolves in the wrapper and WireReader",
+        );
+        assert_source_contains(
+            &string_src,
+            "using System.Buffers;",
+            "the System.Buffers using directive so ArrayPool resolves in WireReader when strings are used",
         );
     }
 

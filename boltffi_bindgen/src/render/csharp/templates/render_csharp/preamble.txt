@@ -5,6 +5,7 @@
 using System;
 using System.Runtime.InteropServices;
 {%- if module.has_strings() %}
+using System.Buffers;
 using System.Text;
 {%- endif %}
 
