@@ -54,3 +54,7 @@ module_name = "BenchBoltFFI"
 [targets.java.jvm]
 enabled = true
 output = "dist/java"
+
+[targets.csharp]
+enabled = true
+output = "dist/csharp"

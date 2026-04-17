@@ -150,6 +150,18 @@ bench-java:
     echo ""
     echo "Report: $(pwd)/build/results/jmh/results.json"
 
+# C# benchmark (.NET via BenchmarkDotNet) - builds cdylib, generates bindings, runs benchmarks.
+# Pass extra args after --, e.g. `just bench-csharp -- --filter '*String*'`.
+bench-csharp *args:
+    #!/usr/bin/env bash
+    set -e
+    cd benchmarks/dotnet-bench
+    if [ -n "{{ args }}" ]; then
+        ./build.sh -- {{ args }}
+    else
+        ./build.sh
+    fi
+
 # Build xcframework only (for iOS development in Xcode)
 bench-build-ios:
     cd benchmarks/rust-boltffi && ./build.sh --platform apple --release --skip-bench
@@ -200,6 +212,9 @@ clean-benchmarks:
     rm -rf benchmarks/swift-macos-bench/.build
     rm -rf benchmarks/kotlin-jvm-bench/build
     rm -rf benchmarks/java-jvm-bench/build
+    rm -rf benchmarks/dotnet-bench/bin
+    rm -rf benchmarks/dotnet-bench/obj
+    rm -rf benchmarks/dotnet-bench/BenchmarkDotNet.Artifacts
     rm -rf benchmarks/wasm-bench/boltffi
     rm -rf benchmarks/wasm-bench/wasmbindgen
     rm -rf benchmarks/wasm-bench/node_modules

@@ -1,0 +1,45 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>BoltFFIBench</RootNamespace>
+    <AssemblyName>BoltFFIBench</AssemblyName>
+    <IsPackable>false</IsPackable>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="BenchmarkDotNet" Version="0.15.2" />
+  </ItemGroup>
+
+  <!-- Pull generated C# bindings in as linked sources so a `boltffi generate`
+       run regenerates what the bench compiles against, without copying files. -->
+  <ItemGroup>
+    <Compile Include="..\rust-boltffi\dist\csharp\*.cs" LinkBase="Generated" />
+  </ItemGroup>
+
+  <!-- Copy the rust-boltffi cdylib next to the build output so DllImport can
+       find it via the default search path at run time. -->
+  <PropertyGroup>
+    <BoltffiNativeDir>$(MSBuildThisFileDirectory)..\rust-boltffi\target\release</BoltffiNativeDir>
+  </PropertyGroup>
+
+  <Target Name="CopyBoltffiNative" AfterTargets="Build">
+    <ItemGroup>
+      <_BoltffiNativeLib Include="$(BoltffiNativeDir)\libbench_boltffi.dylib" Condition="Exists('$(BoltffiNativeDir)\libbench_boltffi.dylib')" />
+      <_BoltffiNativeLib Include="$(BoltffiNativeDir)\libbench_boltffi.so"    Condition="Exists('$(BoltffiNativeDir)\libbench_boltffi.so')" />
+      <_BoltffiNativeLib Include="$(BoltffiNativeDir)\bench_boltffi.dll"      Condition="Exists('$(BoltffiNativeDir)\bench_boltffi.dll')" />
+    </ItemGroup>
+    <Error
+      Text="rust-boltffi cdylib not found in $(BoltffiNativeDir). Run benchmarks/dotnet-bench/build.sh or `cargo build --release --manifest-path ../rust-boltffi/Cargo.toml` first."
+      Condition="'@(_BoltffiNativeLib)' == ''" />
+    <Copy SourceFiles="@(_BoltffiNativeLib)"
+          DestinationFolder="$(OutputPath)"
+          SkipUnchangedFiles="true" />
+  </Target>
+
+</Project>
