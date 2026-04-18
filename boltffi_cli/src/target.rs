@@ -197,27 +197,70 @@ impl NativeHostPlatform {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum LinuxArchitecture {
-    #[serde(rename = "arm64")]
-    Arm64,
-    #[serde(rename = "x86_64")]
-    X86_64,
+pub enum DartNativeArchitecture {
+    #[serde(rename = "android:arm64")]
+    AndroidArm64,
+    #[serde(rename = "android:armv7")]
+    AndroidArmv7,
+    #[serde(rename = "android:x86_64")]
+    AndroidX86_64,
+    #[serde(rename = "ios:arm64")]
+    IosArm64,
+    #[serde(rename = "ios_sim:arm64")]
+    IosSimArm64,
+    #[serde(rename = "ios_sim:x86_64")]
+    IosSimX86_64,
+    #[serde(rename = "linux:arm64")]
+    LinuxArm64,
+    #[serde(rename = "linux:x86_64")]
+    LinuxX86_64,
+    #[serde(rename = "macos:arm64")]
+    MacosArm64,
+    #[serde(rename = "macos:x86_64")]
+    MacosX86_64,
 }
 
-impl LinuxArchitecture {
-    pub const ALL: &'static [Self] = &[Self::Arm64, Self::X86_64];
+impl DartNativeArchitecture {
+    pub const ALL: &'static [Self] = &[
+        Self::AndroidArm64,
+        Self::AndroidArmv7,
+        Self::AndroidX86_64,
+        Self::IosArm64,
+        Self::IosSimArm64,
+        Self::IosSimX86_64,
+        Self::LinuxArm64,
+        Self::LinuxX86_64,
+        Self::MacosArm64,
+        Self::MacosX86_64,
+    ];
 
     pub const fn canonical_name(self) -> &'static str {
         match self {
-            Self::Arm64 => "arm64",
-            Self::X86_64 => "x86_64",
+            Self::AndroidArm64 => "android:arm64",
+            Self::AndroidArmv7 => "android:armv7",
+            Self::AndroidX86_64 => "android:x86_64",
+            Self::IosArm64 => "ios:arm64",
+            Self::IosSimArm64 => "ios_sim:arm64",
+            Self::IosSimX86_64 => "ios_sim:x86_64",
+            Self::LinuxArm64 => "linux:arm64",
+            Self::LinuxX86_64 => "linux:x86_64",
+            Self::MacosArm64 => "macos:arm64",
+            Self::MacosX86_64 => "macos:x86_64",
         }
     }
 
     pub const fn rust_target(self) -> RustTarget {
         match self {
-            Self::Arm64 => RustTarget::LINUX_ARM64,
-            Self::X86_64 => RustTarget::LINUX_X86_64,
+            Self::AndroidArm64 => RustTarget::ANDROID_ARM64,
+            Self::AndroidArmv7 => RustTarget::ANDROID_ARMV7,
+            Self::AndroidX86_64 => RustTarget::ANDROID_X86_64,
+            Self::IosArm64 => RustTarget::IOS_ARM64,
+            Self::IosSimArm64 => RustTarget::IOS_SIM_ARM64,
+            Self::IosSimX86_64 => RustTarget::IOS_SIM_X86_64,
+            Self::LinuxArm64 => RustTarget::LINUX_ARM64,
+            Self::LinuxX86_64 => RustTarget::LINUX_X86_64,
+            Self::MacosArm64 => RustTarget::MACOS_ARM64,
+            Self::MacosX86_64 => RustTarget::MACOS_X86_64,
         }
     }
 }
@@ -492,11 +535,11 @@ pub fn resolve_java_host_targets(
     JavaHostTarget::resolve_requested(targets)
 }
 
-pub fn resolve_linux_targets(architectures: &[LinuxArchitecture]) -> Vec<RustTarget> {
+pub fn resolve_dart_native_targets(architectures: &[DartNativeArchitecture]) -> Vec<RustTarget> {
     architectures
         .iter()
         .copied()
-        .map(LinuxArchitecture::rust_target)
+        .map(DartNativeArchitecture::rust_target)
         .collect()
 }
 
@@ -550,6 +593,8 @@ impl BuiltLibrary {
 
 #[cfg(test)]
 mod tests {
+    use crate::target::{DartNativeArchitecture, resolve_dart_native_targets};
+
     use super::{
         AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, BuiltLibrary, JavaHostTarget,
         Platform, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
@@ -711,5 +756,40 @@ mod tests {
         );
 
         fs::remove_dir_all(&temp_root).expect("cleanup temp target dir");
+    }
+
+    #[test]
+    fn resolves_dart_native_architectures_to_targets() {
+        let targets = resolve_dart_native_targets(&[
+            DartNativeArchitecture::AndroidArm64,
+            DartNativeArchitecture::AndroidArmv7,
+            DartNativeArchitecture::AndroidX86_64,
+            DartNativeArchitecture::IosArm64,
+            DartNativeArchitecture::IosSimArm64,
+            DartNativeArchitecture::IosSimX86_64,
+            DartNativeArchitecture::LinuxArm64,
+            DartNativeArchitecture::LinuxX86_64,
+            DartNativeArchitecture::MacosArm64,
+            DartNativeArchitecture::MacosX86_64,
+        ]);
+
+        assert_eq!(
+            targets
+                .iter()
+                .map(|target| target.triple())
+                .collect::<Vec<_>>(),
+            vec![
+                "aarch64-linux-android",
+                "armv7-linux-androideabi",
+                "x86_64-linux-android",
+                "aarch64-apple-ios",
+                "aarch64-apple-ios-sim",
+                "x86_64-apple-ios",
+                "aarch64-unknown-linux-gnu",
+                "x86_64-unknown-linux-gnu",
+                "aarch64-apple-darwin",
+                "x86_64-apple-darwin"
+            ]
+        );
     }
 }

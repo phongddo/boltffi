@@ -1,8 +1,8 @@
 use crate::target::{
-    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, JavaHostTarget,
-    LinuxArchitecture, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
-    resolve_apple_macos_targets, resolve_apple_simulator_targets, resolve_java_host_targets,
-    resolve_linux_targets,
+    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, DartNativeArchitecture,
+    JavaHostTarget, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
+    resolve_apple_macos_targets, resolve_apple_simulator_targets, resolve_dart_native_targets,
+    resolve_java_host_targets,
 };
 use boltffi_bindgen::render::python::NamingConvention;
 use serde::{Deserialize, Serialize};
@@ -116,15 +116,7 @@ pub struct DartConfig {
     #[serde(default)]
     pub enabled: bool,
     #[serde(default)]
-    pub android_architectures: Option<Vec<AndroidArchitecture>>,
-    #[serde(default)]
-    pub ios_architectures: Option<Vec<AppleIosArchitecture>>,
-    #[serde(default)]
-    pub ios_simulator_architectures: Option<Vec<AppleArchitecture>>,
-    #[serde(default)]
-    pub linux_architectures: Option<Vec<LinuxArchitecture>>,
-    #[serde(default)]
-    pub macos_architectures: Option<Vec<AppleArchitecture>>,
+    pub native_architectures: Option<Vec<DartNativeArchitecture>>,
 }
 
 impl Default for DartConfig {
@@ -132,11 +124,7 @@ impl Default for DartConfig {
         Self {
             output: default_dart_output(),
             enabled: false,
-            android_architectures: None,
-            ios_architectures: None,
-            ios_simulator_architectures: None,
-            linux_architectures: None,
-            macos_architectures: None,
+            native_architectures: None,
         }
     }
 }
@@ -1386,73 +1374,16 @@ impl Config {
         self.targets.dart.output.clone()
     }
 
-    pub fn dart_android_architectures(&self) -> &[AndroidArchitecture] {
+    pub fn dart_native_architectures(&self) -> &[DartNativeArchitecture] {
         self.targets
             .dart
-            .android_architectures
+            .native_architectures
             .as_deref()
-            .unwrap_or(AndroidArchitecture::ALL)
-    }
-
-    pub fn dart_android_targets(&self) -> Vec<RustTarget> {
-        resolve_android_targets(self.dart_android_architectures())
-    }
-
-    pub fn dart_ios_architectures(&self) -> &[AppleIosArchitecture] {
-        self.targets
-            .dart
-            .ios_architectures
-            .as_deref()
-            .unwrap_or(AppleIosArchitecture::ALL)
-    }
-
-    pub fn dart_ios_targets(&self) -> Vec<RustTarget> {
-        resolve_apple_ios_targets(self.dart_ios_architectures())
-    }
-
-    pub fn dart_ios_simulator_architectures(&self) -> &[AppleArchitecture] {
-        self.targets
-            .dart
-            .ios_simulator_architectures
-            .as_deref()
-            .unwrap_or(AppleArchitecture::ALL)
-    }
-
-    pub fn dart_ios_simulator_targets(&self) -> Vec<RustTarget> {
-        resolve_apple_simulator_targets(self.dart_ios_simulator_architectures())
-    }
-
-    pub fn dart_linux_architectures(&self) -> &[LinuxArchitecture] {
-        self.targets
-            .dart
-            .linux_architectures
-            .as_deref()
-            .unwrap_or(LinuxArchitecture::ALL)
-    }
-
-    pub fn dart_linux_targets(&self) -> Vec<RustTarget> {
-        resolve_linux_targets(self.dart_linux_architectures())
-    }
-
-    pub fn dart_macos_architectures(&self) -> &[AppleArchitecture] {
-        self.targets
-            .dart
-            .macos_architectures
-            .as_deref()
-            .unwrap_or(AppleArchitecture::ALL)
-    }
-
-    pub fn dart_macos_targets(&self) -> Vec<RustTarget> {
-        resolve_apple_macos_targets(self.dart_macos_architectures())
+            .unwrap_or(DartNativeArchitecture::ALL)
     }
 
     pub fn dart_targets(&self) -> Vec<RustTarget> {
-        let mut targets = self.dart_android_targets();
-        targets.extend(self.dart_ios_targets());
-        targets.extend(self.dart_ios_simulator_targets());
-        targets.extend(self.dart_linux_targets());
-        targets.extend(self.dart_macos_targets());
-        targets
+        resolve_dart_native_targets(self.dart_native_architectures())
     }
 }
 
