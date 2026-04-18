@@ -27,14 +27,14 @@ impl PythonEnumType {
     }
 
     pub fn vector_decoder_name(&self) -> String {
-        format!(
-            "boltffi_python_decode_owned_vec_{}",
-            self.native_name_stem
-        )
+        format!("boltffi_python_decode_owned_vec_{}", self.native_name_stem)
     }
 
     pub fn native_to_wire_tag_name(&self) -> String {
-        format!("boltffi_python_{}_native_to_wire_tag", self.native_name_stem)
+        format!(
+            "boltffi_python_{}_native_to_wire_tag",
+            self.native_name_stem
+        )
     }
 
     pub fn box_from_wire_tag_name(&self) -> String {

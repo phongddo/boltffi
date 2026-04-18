@@ -64,7 +64,10 @@ impl PythonSequenceType {
     }
 
     pub fn uses_buffer_input(&self) -> bool {
-        matches!(self, Self::Bytes | Self::PrimitiveVec(_) | Self::CStyleEnumVec(_))
+        matches!(
+            self,
+            Self::Bytes | Self::PrimitiveVec(_) | Self::CStyleEnumVec(_)
+        )
     }
 }
 

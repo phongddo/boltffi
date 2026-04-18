@@ -2,10 +2,10 @@ use std::path::PathBuf;
 
 use askama::Template as _;
 
+use crate::render::python::PythonModule;
 use crate::render::python::templates::{
     InitStubTemplate, InitTemplate, NativeModuleTemplate, PyprojectTemplate, SetupTemplate,
 };
-use crate::render::python::PythonModule;
 
 use super::{PythonOutputFile, PythonPackageSources};
 
@@ -370,9 +370,10 @@ mod tests {
         assert!(native_source.contains(
             "typedef FfiBuf_u8 (*boltffi_python_symbol_echo_vec_i32_fn)(const int32_t *, uintptr_t);"
         ));
-        assert!(native_source.contains(
-            "typedef int32_t (*boltffi_python_symbol_echo_status_fn)(int32_t);"
-        ));
+        assert!(
+            native_source
+                .contains("typedef int32_t (*boltffi_python_symbol_echo_status_fn)(int32_t);")
+        );
         assert!(native_source.contains(
             "typedef FfiBuf_u8 (*boltffi_python_symbol_echo_vec_status_fn)(const uint8_t *, uintptr_t);"
         ));
@@ -388,9 +389,9 @@ mod tests {
         assert!(native_source.contains("static int boltffi_python_parse_string"));
         assert!(native_source.contains("static int boltffi_python_parse_bytes"));
         assert!(native_source.contains("static int boltffi_python_parse_vec_i32"));
-        assert!(native_source.contains(
-            "static PyObject *boltffi_python_callable_wrapper_echo_bool"
-        ));
+        assert!(
+            native_source.contains("static PyObject *boltffi_python_callable_wrapper_echo_bool")
+        );
         assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_utf8"));
         assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_bytes"));
         assert!(native_source.contains("static PyObject *boltffi_python_decode_owned_vec_i32"));

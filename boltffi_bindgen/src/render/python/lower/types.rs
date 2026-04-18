@@ -94,10 +94,10 @@ impl PythonLowerer<'_> {
 mod tests {
     use boltffi_ffi_rules::callable::ExecutionKind;
 
+    use crate::ir::TypeCatalog;
     use crate::ir::definitions::{FunctionDef, ParamDef, ParamPassing, ReturnDef};
     use crate::ir::ids::{FunctionId, ParamName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    use crate::ir::TypeCatalog;
     use crate::render::python::{PythonSequenceType, PythonType};
 
     use super::super::test_support::lower_contract;

@@ -14,15 +14,15 @@ use super::PythonLowerer;
 
 impl PythonLowerer<'_> {
     pub(super) fn lower_c_style_enums(&self) -> Result<Vec<PythonCStyleEnum>, PythonLowerError> {
-        self.ffi_contract
-            .catalog
-            .all_enums()
-            .try_fold(Vec::new(), |mut lowered_enums, enumeration| {
+        self.ffi_contract.catalog.all_enums().try_fold(
+            Vec::new(),
+            |mut lowered_enums, enumeration| {
                 if let Some(lowered_enum) = self.lower_c_style_enum(enumeration)? {
                     lowered_enums.push(lowered_enum);
                 }
                 Ok(lowered_enums)
-            })
+            },
+        )
     }
 
     fn lower_c_style_enum(
@@ -110,7 +110,10 @@ impl PythonLowerer<'_> {
             .map(|name| NamingConvention::method_name(name.as_str()))
             .unwrap_or_else(|| "new".to_string());
 
-        let callable_name = format!("enum constructor `{}.{}()`", enum_type.class_name, public_name);
+        let callable_name = format!(
+            "enum constructor `{}.{}()`",
+            enum_type.class_name, public_name
+        );
 
         let Some(parameters) = self.lower_parameters(&callable_name, constructor.params())? else {
             return Ok(None);
@@ -180,13 +183,13 @@ impl PythonLowerer<'_> {
 mod tests {
     use boltffi_ffi_rules::callable::ExecutionKind;
 
+    use crate::ir::TypeCatalog;
     use crate::ir::definitions::{
         CStyleVariant, ConstructorDef, EnumDef, EnumRepr, FunctionDef, MethodDef, ParamDef,
         ParamPassing, Receiver, ReturnDef,
     };
     use crate::ir::ids::{EnumId, FunctionId, MethodId, ParamName, VariantName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    use crate::ir::TypeCatalog;
     use crate::render::python::{PythonSequenceType, PythonType};
 
     use super::super::test_support::lower_contract;

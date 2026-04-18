@@ -14,25 +14,28 @@ impl PythonLowerer<'_> {
         source_parameters: &[&ParamDef],
         lowered_parameters: &[PythonParameter],
     ) -> Result<(), PythonLowerError> {
-        source_parameters.iter().zip(lowered_parameters.iter()).try_fold(
-            HashMap::<String, String>::new(),
-            |mut seen_parameter_names, (source_parameter, lowered_parameter)| {
-                let source_name = source_parameter.name.as_str().to_string();
+        source_parameters
+            .iter()
+            .zip(lowered_parameters.iter())
+            .try_fold(
+                HashMap::<String, String>::new(),
+                |mut seen_parameter_names, (source_parameter, lowered_parameter)| {
+                    let source_name = source_parameter.name.as_str().to_string();
 
-                if let Some(existing_parameter) = seen_parameter_names
-                    .insert(lowered_parameter.name.clone(), source_name.clone())
-                {
-                    return Err(PythonLowerError::ParameterNameCollision {
-                        callable_name: callable_name.to_string(),
-                        generated_name: lowered_parameter.name.clone(),
-                        existing_parameter,
-                        colliding_parameter: source_name,
-                    });
-                }
+                    if let Some(existing_parameter) = seen_parameter_names
+                        .insert(lowered_parameter.name.clone(), source_name.clone())
+                    {
+                        return Err(PythonLowerError::ParameterNameCollision {
+                            callable_name: callable_name.to_string(),
+                            generated_name: lowered_parameter.name.clone(),
+                            existing_parameter,
+                            colliding_parameter: source_name,
+                        });
+                    }
 
-                Ok(seen_parameter_names)
-            },
-        )?;
+                    Ok(seen_parameter_names)
+                },
+            )?;
 
         Ok(())
     }
@@ -91,7 +94,8 @@ impl PythonLowerer<'_> {
             );
         }
 
-        enums.iter()
+        enums
+            .iter()
             .map(|enumeration| {
                 (
                     enumeration.type_ref.registration_function_name(),
@@ -131,19 +135,22 @@ impl PythonLowerer<'_> {
                     )
                 })
             }))
-            .try_fold(seen_native_module_names, |mut seen_names, (generated_name, subject)| {
-                if let Some(existing_subject) =
-                    seen_names.insert(generated_name.clone(), subject.clone())
-                {
-                    return Err(PythonLowerError::NativeModuleNameCollision {
-                        generated_name,
-                        existing_subject,
-                        colliding_subject: subject,
-                    });
-                }
+            .try_fold(
+                seen_native_module_names,
+                |mut seen_names, (generated_name, subject)| {
+                    if let Some(existing_subject) =
+                        seen_names.insert(generated_name.clone(), subject.clone())
+                    {
+                        return Err(PythonLowerError::NativeModuleNameCollision {
+                            generated_name,
+                            existing_subject,
+                            colliding_subject: subject,
+                        });
+                    }
 
-                Ok(seen_names)
-            })?;
+                    Ok(seen_names)
+                },
+            )?;
 
         Ok(())
     }
@@ -152,9 +159,9 @@ impl PythonLowerer<'_> {
         enum_name: &str,
         variants: &[PythonCStyleEnumVariant],
     ) -> Result<(), PythonLowerError> {
-        variants.iter().try_fold(
-            HashMap::<String, i128>::new(),
-            |mut seen_names, variant| {
+        variants
+            .iter()
+            .try_fold(HashMap::<String, i128>::new(), |mut seen_names, variant| {
                 if let Some(existing_variant) =
                     seen_names.insert(variant.member_name.clone(), variant.native_value)
                 {
@@ -167,8 +174,7 @@ impl PythonLowerer<'_> {
                 }
 
                 Ok(seen_names)
-            },
-        )?;
+            })?;
 
         Ok(())
     }
@@ -178,16 +184,6 @@ impl PythonLowerer<'_> {
         constructors: &[PythonEnumConstructor],
         methods: &[PythonEnumMethod],
     ) -> Result<(), PythonLowerError> {
-        let reserved_member_names = NamingConvention::reserved_int_enum_member_names()
-            .iter()
-            .map(|member_name| {
-                (
-                    (*member_name).to_string(),
-                    format!("inherited IntEnum member `{member_name}`"),
-                )
-            })
-            .collect::<HashMap<_, _>>();
-
         constructors
             .iter()
             .map(|constructor| {
@@ -203,8 +199,19 @@ impl PythonLowerer<'_> {
                 )
             }))
             .try_fold(
-                reserved_member_names,
+                HashMap::<String, String>::new(),
                 |mut seen_names, (generated_name, subject)| {
+                    if NamingConvention::is_reserved_int_enum_callable_name(&generated_name) {
+                        return Err(PythonLowerError::EnumCallableNameCollision {
+                            enum_name: enum_name.to_string(),
+                            generated_name: generated_name.clone(),
+                            existing_subject: format!(
+                                "reserved IntEnum callable name `{generated_name}`"
+                            ),
+                            colliding_subject: subject,
+                        });
+                    }
+
                     if let Some(existing_subject) =
                         seen_names.insert(generated_name.clone(), subject.clone())
                     {
@@ -228,12 +235,12 @@ impl PythonLowerer<'_> {
 mod tests {
     use boltffi_ffi_rules::callable::ExecutionKind;
 
+    use crate::ir::TypeCatalog;
     use crate::ir::definitions::{
         CStyleVariant, ConstructorDef, EnumDef, EnumRepr, MethodDef, Receiver, ReturnDef,
     };
     use crate::ir::ids::{EnumId, MethodId, VariantName};
     use crate::ir::types::{PrimitiveType, TypeExpr};
-    use crate::ir::TypeCatalog;
     use crate::render::python::PythonLowerError;
 
     use super::super::test_support::lower_contract;
@@ -276,7 +283,8 @@ mod tests {
         let mut catalog = TypeCatalog::default();
         catalog.insert_enum(test_enum_with_reserved_callable_name("name"));
 
-        let error = lower_contract(catalog, vec![]).expect_err("reserved enum callable should fail");
+        let error =
+            lower_contract(catalog, vec![]).expect_err("reserved enum callable should fail");
 
         assert!(matches!(
             error,
@@ -284,6 +292,22 @@ mod tests {
                 generated_name,
                 ..
             } if generated_name == "name"
+        ));
+    }
+
+    #[test]
+    fn reject_reserved_int_enum_hook_names_for_constructors_and_methods() {
+        let mut catalog = TypeCatalog::default();
+        catalog.insert_enum(test_enum_with_reserved_callable_name("__new__"));
+
+        let error = lower_contract(catalog, vec![]).expect_err("reserved enum hook should fail");
+
+        assert!(matches!(
+            error,
+            PythonLowerError::EnumCallableNameCollision {
+                generated_name,
+                ..
+            } if generated_name == "__new__"
         ));
     }
 

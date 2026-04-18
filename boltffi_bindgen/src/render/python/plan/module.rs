@@ -36,7 +36,11 @@ impl PythonModule {
         self.enums
             .iter()
             .map(PythonCStyleEnum::class_name)
-            .chain(self.functions.iter().map(|function| function.python_name.as_str()))
+            .chain(
+                self.functions
+                    .iter()
+                    .map(|function| function.python_name.as_str()),
+            )
             .collect()
     }
 
@@ -51,12 +55,20 @@ impl PythonModule {
         self.functions
             .iter()
             .map(PythonFunction::native_callable)
-            .chain(self.enums.iter().flat_map(PythonCStyleEnum::native_callables))
+            .chain(
+                self.enums
+                    .iter()
+                    .flat_map(PythonCStyleEnum::native_callables),
+            )
             .collect()
     }
 
     pub fn has_native_callables(&self) -> bool {
-        !self.functions.is_empty() || self.enums.iter().any(PythonCStyleEnum::has_native_callables)
+        !self.functions.is_empty()
+            || self
+                .enums
+                .iter()
+                .any(PythonCStyleEnum::has_native_callables)
     }
 
     pub fn used_primitive_types(&self) -> Vec<PrimitiveType> {
@@ -79,12 +91,8 @@ impl PythonModule {
     }
 
     pub fn uses_string_parameters(&self) -> bool {
-        self.callables().any(|callable| {
-            callable
-                .parameters
-                .iter()
-                .any(PythonParameter::is_string)
-        })
+        self.callables()
+            .any(|callable| callable.parameters.iter().any(PythonParameter::is_string))
     }
 
     pub fn uses_buffer_input_parameters(&self) -> bool {
@@ -122,7 +130,8 @@ impl PythonModule {
     }
 
     pub fn uses_primitive_vector_returns(&self) -> bool {
-        self.callables().any(PythonCallable::returns_primitive_vector)
+        self.callables()
+            .any(PythonCallable::returns_primitive_vector)
     }
 
     pub fn uses_c_style_enum_vector_returns(&self) -> bool {
@@ -194,13 +203,14 @@ impl PythonModule {
     }
 
     pub fn used_enum_vector_return_types(&self) -> Vec<&super::PythonEnumType> {
-        self.callables().fold(Vec::new(), |mut enum_types, callable| {
-            if let Some(enum_type) = callable.return_vector_c_style_enum()
-                && !enum_types.contains(&enum_type)
-            {
-                enum_types.push(enum_type);
-            }
-            enum_types
-        })
+        self.callables()
+            .fold(Vec::new(), |mut enum_types, callable| {
+                if let Some(enum_type) = callable.return_vector_c_style_enum()
+                    && !enum_types.contains(&enum_type)
+                {
+                    enum_types.push(enum_type);
+                }
+                enum_types
+            })
     }
 }
