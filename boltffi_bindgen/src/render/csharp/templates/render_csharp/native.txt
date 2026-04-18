@@ -245,5 +245,15 @@
 {%- endif %}
         internal static extern {{ func.native_return_type() }} {{ func.name }}({{ func.native_param_list() }});
 {%- endfor %}
+{%- for enumeration in module.enums %}
+{%- for method in enumeration.methods %}
+
+        [DllImport(LibName, EntryPoint = "{{ method.ffi_name }}")]
+{%- if method.return_type.is_bool() %}
+        [return: MarshalAs(UnmanagedType.I1)]
+{%- endif %}
+        internal static extern {{ method.native_return_type() }} {{ method.native_method_name }}({{ method.native_param_list(enumeration.class_name, false) }});
+{%- endfor %}
+{%- endfor %}
     }
 }

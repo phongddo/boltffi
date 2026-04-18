@@ -26,6 +26,9 @@ public static class DemoTest
         TestBlittableRecords();
         TestRecordsWithStrings();
         TestNestedRecords();
+        TestCStyleEnums();
+        TestDataEnums();
+        TestRecordsWithEnumFields();
         Console.WriteLine("All tests passed!");
         return 0;
     }
@@ -262,6 +265,192 @@ public static class DemoTest
         Require(echoedRect == rect, "EchoRect round-trip");
 
         Require(Math.Abs(RectArea(rect) - 200.0) < 1e-9, "RectArea 10*20");
+
+        Console.WriteLine("  PASS\n");
+    }
+
+    /// <summary>
+    /// C-style enums (Status, Direction) pass across P/Invoke as their
+    /// backing int — no wire encoding. Instance methods show up as C#
+    /// extension methods; static factories live on a `{Name}Methods`
+    /// companion class.
+    /// </summary>
+    private static void TestCStyleEnums()
+    {
+        Console.WriteLine("Testing C-style enums (Status, Direction)...");
+
+        // Direct P/Invoke round-trip — the CLR marshals the enum as int.
+        Require(EchoStatus(Status.Active) == Status.Active, "EchoStatus(Active)");
+        Require(EchoStatus(Status.Pending) == Status.Pending, "EchoStatus(Pending)");
+        Require(StatusToString(Status.Active) == "active", "StatusToString(Active)");
+        Require(IsActive(Status.Active), "IsActive(Active)");
+        Require(!IsActive(Status.Inactive), "IsActive(Inactive) false");
+
+        Require(EchoDirection(Direction.North) == Direction.North, "EchoDirection(North)");
+        Require(
+            OppositeDirection(Direction.East) == Direction.West,
+            "OppositeDirection(East) == West"
+        );
+
+        // Extension methods generated on the Methods companion class.
+        Require(Direction.North.Opposite() == Direction.South, "North.Opposite()");
+        Require(Direction.East.IsHorizontal(), "East.IsHorizontal()");
+        Require(!Direction.North.IsHorizontal(), "!North.IsHorizontal()");
+        Require(Direction.South.Label() == "S", "South.Label()");
+
+        // Static factories on the companion class.
+        Require(DirectionMethods.Cardinal() == Direction.North, "Cardinal() == North");
+        Require(DirectionMethods.FromDegrees(90.0) == Direction.East, "FromDegrees(90) == East");
+        Require(DirectionMethods.FromDegrees(180.0) == Direction.South, "FromDegrees(180) == South");
+        Require(DirectionMethods.Count() == 4u, "Count() == 4");
+        Require(DirectionMethods.New(2) == Direction.East, "New(2) == East");
+
+        Console.WriteLine("  PASS\n");
+    }
+
+    /// <summary>
+    /// Data enums (Shape, Message, Animal) travel across the wire —
+    /// `WireWriter` on the way in, `FfiBuf` + `WireReader` on the way
+    /// out. Exercises every variant shape the renderer produces: unit,
+    /// single-field, multi-field, and nested-record payloads. Pattern
+    /// matching on the returned value confirms the discriminated-union
+    /// surface is intact.
+    /// </summary>
+    private static void TestDataEnums()
+    {
+        Console.WriteLine("Testing data enums (Shape, Message, Animal)...");
+
+        // Shape — named-field variants, a nested-record variant with a
+        // shadowed outer Point, and a unit variant that collides with
+        // the outer Point record name.
+        Shape circle = new Shape.Circle(5.0);
+        Shape echoedCircle = EchoShape(circle);
+        Require(echoedCircle is Shape.Circle c && c.Radius == 5.0, "EchoShape(Circle)");
+
+        Shape rect = new Shape.Rectangle(3.0, 4.0);
+        Shape echoedRect = EchoShape(rect);
+        Require(
+            echoedRect is Shape.Rectangle r && r.Width == 3.0 && r.Height == 4.0,
+            "EchoShape(Rectangle)"
+        );
+
+        Shape triangle = new Shape.Triangle(
+            new Point(0.0, 0.0),
+            new Point(4.0, 0.0),
+            new Point(0.0, 3.0)
+        );
+        Shape echoedTriangle = EchoShape(triangle);
+        Require(
+            echoedTriangle is Shape.Triangle t
+                && t.A == new Point(0.0, 0.0)
+                && t.B == new Point(4.0, 0.0)
+                && t.C == new Point(0.0, 3.0),
+            "EchoShape(Triangle) with nested Point"
+        );
+
+        Shape point = new Shape.Point();
+        Shape echoedPoint = EchoShape(point);
+        Require(echoedPoint is Shape.Point, "EchoShape(Point) unit variant");
+
+        // Free-function factories producing Shape.
+        Require(MakeCircle(2.0) is Shape.Circle c2 && c2.Radius == 2.0, "MakeCircle");
+        Require(
+            MakeRectangle(5.0, 10.0) is Shape.Rectangle r2 && r2.Width == 5.0 && r2.Height == 10.0,
+            "MakeRectangle"
+        );
+
+        // Instance methods on the data enum — wire-encode self, call
+        // native, decode return.
+        Require(Math.Abs(new Shape.Circle(1.0).Area() - Math.PI) < 1e-9, "Circle(1).Area() == PI");
+        Require(new Shape.Rectangle(3.0, 4.0).Area() == 12.0, "Rectangle(3,4).Area()");
+        Require(new Shape.Point().Area() == 0.0, "Point.Area() == 0");
+        Require(new Shape.Circle(2.0).Describe() == "circle r=2", "Circle.Describe()");
+        Require(new Shape.Point().Describe() == "point", "Point.Describe()");
+
+        // Static methods / factories on the data enum.
+        Require(Shape.UnitCircle() is Shape.Circle uc && uc.Radius == 1.0, "Shape.UnitCircle()");
+        Require(
+            Shape.Square(7.0) is Shape.Rectangle sq && sq.Width == 7.0 && sq.Height == 7.0,
+            "Shape.Square(7)"
+        );
+        Require(Shape.VariantCount() == 4u, "Shape.VariantCount() == 4");
+        Require(Shape.New(3.0) is Shape.Circle sn && sn.Radius == 3.0, "Shape.New(3)");
+
+        // Message — mixes string, primitive, and unit variants.
+        Message text = new Message.Text("hello");
+        Require(
+            EchoMessage(text) is Message.Text et && et.Body == "hello",
+            "EchoMessage(Text)"
+        );
+
+        Message image = new Message.Image("https://example.com/a.png", 1920, 1080);
+        Require(
+            EchoMessage(image) is Message.Image ei
+                && ei.Url == "https://example.com/a.png"
+                && ei.Width == 1920u
+                && ei.Height == 1080u,
+            "EchoMessage(Image)"
+        );
+
+        Message ping = new Message.Ping();
+        Require(EchoMessage(ping) is Message.Ping, "EchoMessage(Ping)");
+
+        Require(
+            MessageSummary(new Message.Text("hi")) == "text: hi",
+            "MessageSummary(Text)"
+        );
+        Require(MessageSummary(new Message.Ping()) == "ping", "MessageSummary(Ping)");
+
+        // Animal — three struct variants, one with a bool field.
+        Animal dog = new Animal.Dog("Rex", "Labrador");
+        Require(
+            EchoAnimal(dog) is Animal.Dog d && d.Name == "Rex" && d.Breed == "Labrador",
+            "EchoAnimal(Dog)"
+        );
+
+        Animal cat = new Animal.Cat("Whiskers", true);
+        Require(
+            EchoAnimal(cat) is Animal.Cat ca && ca.Name == "Whiskers" && ca.Indoor,
+            "EchoAnimal(Cat indoor)"
+        );
+
+        Animal fish = new Animal.Fish(3u);
+        Require(
+            EchoAnimal(fish) is Animal.Fish f && f.Count == 3u,
+            "EchoAnimal(Fish)"
+        );
+
+        Require(AnimalName(new Animal.Dog("Rex", "Lab")) == "Rex", "AnimalName(Dog)");
+        Require(AnimalName(new Animal.Fish(5u)) == "5 fish", "AnimalName(Fish)");
+
+        Console.WriteLine("  PASS\n");
+    }
+
+    /// <summary>
+    /// Records that embed a C-style enum field stay on the wire path if
+    /// they also have non-blittable fields (e.g., a string). The enum
+    /// field flows through via `PriorityWire.Decode` / the
+    /// `WireEncodeTo` extension method, uniform with how record fields
+    /// embed other records.
+    /// </summary>
+    private static void TestRecordsWithEnumFields()
+    {
+        Console.WriteLine("Testing records with enum fields (Notification, Task)...");
+
+        // Task is a C# keyword in `System.Threading.Tasks` — the generated
+        // record fully qualifies to avoid collision when addressing it
+        // directly. Using the namespace-qualified form makes the intent
+        // explicit here too.
+        global::Demo.Task task = new global::Demo.Task("Write docs", Priority.High, false);
+        global::Demo.Task echoedTask = EchoTask(task);
+        Require(echoedTask == task, "EchoTask round-trip");
+        Require(echoedTask.Priority == Priority.High, "Task.Priority preserved");
+
+        Notification notification = new Notification("Build failed", Priority.Critical, false);
+        Notification echoedNotification = EchoNotification(notification);
+        Require(echoedNotification == notification, "EchoNotification round-trip");
+        Require(echoedNotification.Priority == Priority.Critical, "Notification.Priority preserved");
+        Require(!echoedNotification.Read, "Notification.Read preserved");
 
         Console.WriteLine("  PASS\n");
     }

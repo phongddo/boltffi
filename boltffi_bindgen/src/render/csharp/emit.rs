@@ -8,8 +8,11 @@
 //! "which ops apply to which field" logic in [`lower`](super::lower))
 //! mirrors the Java backend split.
 
+use std::collections::HashSet;
+
 use askama::Template as _;
 
+use crate::ir::codec::EnumLayout;
 use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
 use crate::ir::types::PrimitiveType;
 use crate::ir::{AbiContract, FfiContract};
@@ -17,8 +20,11 @@ use crate::ir::{AbiContract, FfiContract};
 use super::{
     CSharpOptions, NamingConvention,
     lower::CSharpLowerer,
-    plan::CSharpRecord,
-    templates::{FunctionsTemplate, NativeTemplate, PreambleTemplate, RecordTemplate},
+    plan::{CSharpEnumKind, CSharpRecord},
+    templates::{
+        EnumCStyleTemplate, EnumDataTemplate, FunctionsTemplate, NativeTemplate, PreambleTemplate,
+        RecordTemplate,
+    },
 };
 
 /// A single generated `.cs` file: its file name (relative to the output
@@ -72,9 +78,36 @@ impl CSharpEmitter {
                     namespace: &module.namespace,
                 }
                 .render()
-                .expect("record template failed"),
+                .unwrap_or_else(|err| panic!("record {} render failed: {err}", record.class_name)),
             })
             .collect();
+
+        files.extend(module.enums.iter().map(|enumeration| {
+            CSharpFile {
+                file_name: format!("{}.cs", enumeration.class_name),
+                source: match enumeration.kind {
+                    CSharpEnumKind::CStyle => EnumCStyleTemplate {
+                        enumeration,
+                        namespace: &module.namespace,
+                    }
+                    .render()
+                    .unwrap_or_else(|err| {
+                        panic!(
+                            "c-style enum {} render failed: {err}",
+                            enumeration.class_name
+                        )
+                    }),
+                    CSharpEnumKind::Data => EnumDataTemplate {
+                        enumeration,
+                        namespace: &module.namespace,
+                    }
+                    .render()
+                    .unwrap_or_else(|err| {
+                        panic!("data enum {} render failed: {err}", enumeration.class_name)
+                    }),
+                },
+            }
+        }));
 
         let mut main_source = String::new();
         main_source.push_str(&PreambleTemplate { module: &module }.render().unwrap());
@@ -165,12 +198,28 @@ pub fn primitive_write_method(primitive: PrimitiveType) -> &'static str {
     }
 }
 
+/// Names shadowed by a nested scope in the rendering site. Passed to
+/// [`emit_reader_read`] when emitting decode expressions inside a data
+/// enum body, where nested `sealed record Foo() : E` variants shadow
+/// module-level types of the same name. Any class reference whose name
+/// appears in `shadowed` gets qualified as `{namespace}.{ClassName}` so
+/// it resolves past the nested variant.
+pub struct ShadowScope<'a> {
+    pub shadowed: &'a HashSet<String>,
+    pub namespace: &'a str,
+}
+
 /// Render the first op of a [`ReadSeq`] as a decode expression.
 ///
+/// `scope` is `None` when rendering in a context where no name shadowing
+/// can happen (record bodies, top-level function returns) and `Some` when
+/// rendering inside a data enum body whose nested variants may shadow
+/// module-level types.
+///
 /// Today each [`ReadSeq`] we handle has exactly one top-level op — either
-/// a primitive, a string, or a nested record. Container ops (Option, Vec,
-/// Enum, Result) will land in follow-up PRs.
-pub fn emit_reader_read(seq: &ReadSeq) -> String {
+/// a primitive, a string, or a nested record/enum. Container ops (Option,
+/// Vec, Result) will land in follow-up PRs.
+pub fn emit_reader_read(seq: &ReadSeq, scope: Option<&ShadowScope>) -> String {
     let op = seq.ops.first().expect("read ops");
     match op {
         ReadOp::Primitive { primitive, .. } => {
@@ -179,12 +228,47 @@ pub fn emit_reader_read(seq: &ReadSeq) -> String {
         ReadOp::String { .. } => "reader.ReadString()".to_string(),
         ReadOp::Bytes { .. } => "reader.ReadBytes()".to_string(),
         ReadOp::Record { id, .. } => {
+            let class_name = NamingConvention::class_name(id.as_str());
+            format!("{}.Decode(reader)", qualify_if_shadowed(&class_name, scope))
+        }
+        ReadOp::Enum {
+            id,
+            layout: EnumLayout::CStyle { .. },
+            ..
+        } => {
+            // The generated helper is `{Name}Wire`, not `{Name}`, so the
+            // `Wire` suffix is already unambiguous against variant names
+            // that match `{Name}` alone — no shadowing fix needed here.
             format!(
-                "{}.Decode(reader)",
+                "{}Wire.Decode(reader)",
                 NamingConvention::class_name(id.as_str())
             )
         }
+        ReadOp::Enum {
+            id,
+            layout: EnumLayout::Data { .. },
+            ..
+        } => {
+            let class_name = NamingConvention::class_name(id.as_str());
+            format!("{}.Decode(reader)", qualify_if_shadowed(&class_name, scope))
+        }
         other => panic!("unsupported C# read op: {:?}", other),
+    }
+}
+
+/// If `class_name` is shadowed by an enclosing scope, return the
+/// fully-qualified `"global::{namespace}.{class_name}"`; otherwise
+/// return `class_name` bare. The `global::` prefix skips both the
+/// nested-type shadow *and* any same-named class in the current
+/// namespace (the generated top-level wrapper class shares its name
+/// with the namespace itself, which would otherwise catch a bare
+/// `{namespace}.{class_name}` lookup).
+fn qualify_if_shadowed(class_name: &str, scope: Option<&ShadowScope>) -> String {
+    match scope {
+        Some(s) if s.shadowed.contains(class_name) => {
+            format!("global::{}.{}", s.namespace, class_name)
+        }
+        _ => class_name.to_string(),
     }
 }
 
@@ -210,6 +294,11 @@ pub fn emit_write_expr(seq: &WriteSeq, writer_name: &str) -> String {
         WriteOp::Record { value, .. } => {
             format!("{}.WireEncodeTo({})", render_value(value), writer_name)
         }
+        WriteOp::Enum {
+            value,
+            layout: EnumLayout::CStyle { .. } | EnumLayout::Data { .. },
+            ..
+        } => format!("{}.WireEncodeTo({})", render_value(value), writer_name),
         other => panic!("unsupported C# write op: {:?}", other),
     }
 }
@@ -256,11 +345,17 @@ const _: fn(&CSharpRecord) = |_| {};
 mod tests {
     use super::*;
     use crate::ir::Lowerer as IrLowerer;
+    use crate::ir::codec::EnumLayout;
     use crate::ir::contract::{FfiContract, PackageInfo};
-    use crate::ir::definitions::{FunctionDef, ParamDef, ParamPassing, ReturnDef};
-    use crate::ir::ids::{FunctionId, ParamName};
+    use crate::ir::definitions::{
+        CStyleVariant, DataVariant, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef,
+        ParamPassing, Receiver, RecordDef, ReturnDef, VariantPayload,
+    };
+    use crate::ir::ids::{EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId};
+    use crate::ir::ops::{OffsetExpr, SizeExpr, ValueExpr, WireShape};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use boltffi_ffi_rules::callable::ExecutionKind;
+    use boltffi_ffi_rules::transport::EnumTagStrategy;
 
     fn empty_contract() -> FfiContract {
         FfiContract {
@@ -643,9 +738,6 @@ mod tests {
     /// field's wire size is over-counted by 4 bytes.
     #[test]
     fn emit_size_expr_for_string_len_renders_payload_only() {
-        use crate::ir::ids::ParamName;
-        use crate::ir::ops::{SizeExpr, ValueExpr};
-
         let size = SizeExpr::Sum(vec![
             SizeExpr::Fixed(4),
             SizeExpr::StringLen(ValueExpr::Named(
@@ -658,10 +750,108 @@ mod tests {
         );
     }
 
-    // ----- Record tests -----
+    /// A `ReadOp::Enum` with a C-style layout routes to the generated
+    /// `{Name}Wire.Decode(reader)` helper rather than inlining the cast.
+    /// Keeps the tag-width choice in one place — the enum's wire helper —
+    /// so field-level emit code stays oblivious to i32-vs-i16 changes.
+    #[test]
+    fn emit_reader_read_c_style_enum_calls_wire_helper() {
+        let seq = ReadSeq {
+            size: SizeExpr::Fixed(4),
+            ops: vec![ReadOp::Enum {
+                id: EnumId::new("status"),
+                offset: OffsetExpr::Fixed(0),
+                layout: EnumLayout::CStyle {
+                    tag_type: PrimitiveType::I32,
+                    tag_strategy: EnumTagStrategy::OrdinalIndex,
+                    is_error: false,
+                },
+            }],
+            shape: WireShape::Value,
+        };
 
-    use crate::ir::definitions::{FieldDef, RecordDef};
-    use crate::ir::ids::{FieldName, RecordId};
+        assert_eq!(emit_reader_read(&seq, None), "StatusWire.Decode(reader)");
+    }
+
+    /// A record decode inside a data-enum body must name-qualify to the
+    /// module namespace when the outer type collides with a sibling
+    /// variant name. Without the fix, `Point.Decode(reader)` would
+    /// resolve to the nested `sealed record Point()` (no Decode method),
+    /// breaking compilation.
+    #[test]
+    fn emit_reader_read_qualifies_record_when_shadowed_by_sibling_variant() {
+        let seq = ReadSeq {
+            size: SizeExpr::Fixed(16),
+            ops: vec![ReadOp::Record {
+                id: RecordId::new("point"),
+                offset: OffsetExpr::Fixed(0),
+                fields: vec![],
+            }],
+            shape: WireShape::Value,
+        };
+        let shadowed: HashSet<String> = ["Point".to_string()].into_iter().collect();
+        let scope = ShadowScope {
+            shadowed: &shadowed,
+            namespace: "Demo",
+        };
+
+        assert_eq!(
+            emit_reader_read(&seq, Some(&scope)),
+            "global::Demo.Point.Decode(reader)"
+        );
+    }
+
+    /// The shadowing pass is inert when the referenced class name is not
+    /// in the shadow set — record decodes stay unqualified so we don't
+    /// pollute call sites that don't need the namespace prefix.
+    #[test]
+    fn emit_reader_read_leaves_record_unqualified_when_not_shadowed() {
+        let seq = ReadSeq {
+            size: SizeExpr::Fixed(16),
+            ops: vec![ReadOp::Record {
+                id: RecordId::new("point"),
+                offset: OffsetExpr::Fixed(0),
+                fields: vec![],
+            }],
+            shape: WireShape::Value,
+        };
+        let shadowed: HashSet<String> = ["Circle".to_string()].into_iter().collect();
+        let scope = ShadowScope {
+            shadowed: &shadowed,
+            namespace: "Demo",
+        };
+
+        assert_eq!(emit_reader_read(&seq, Some(&scope)), "Point.Decode(reader)");
+    }
+
+    /// A `WriteOp::Enum` with a C-style layout emits the same call shape
+    /// as a record field — `{value}.WireEncodeTo(wire)`. The extension
+    /// method on the generated `{Name}Wire` class lets the enum slot into
+    /// that uniform shape at no runtime cost.
+    #[test]
+    fn emit_write_expr_c_style_enum_field_matches_record_call_shape() {
+        let value = ValueExpr::Field(Box::new(ValueExpr::Instance), FieldName::new("status"));
+        let seq = WriteSeq {
+            size: SizeExpr::Fixed(4),
+            ops: vec![WriteOp::Enum {
+                id: EnumId::new("status"),
+                value,
+                layout: EnumLayout::CStyle {
+                    tag_type: PrimitiveType::I32,
+                    tag_strategy: EnumTagStrategy::OrdinalIndex,
+                    is_error: false,
+                },
+            }],
+            shape: WireShape::Value,
+        };
+
+        assert_eq!(
+            emit_write_expr(&seq, "wire"),
+            "this.Status.WireEncodeTo(wire)"
+        );
+    }
+
+    // ----- Record tests -----
 
     /// Build a record with the given fields. `is_repr_c = true` lets the
     /// IR classify it as blittable when every field is a primitive.
@@ -995,6 +1185,265 @@ mod tests {
             &src,
             "internal static extern FfiBuf RepeatString(byte[] v, UIntPtr vLen, uint count);",
             "the P/Invoke signature to split only the string into byte[]+UIntPtr, keeping the primitive uint direct",
+        );
+    }
+
+    fn c_style_enum(id: &str, variants: Vec<&str>) -> EnumDef {
+        EnumDef {
+            id: EnumId::new(id),
+            repr: EnumRepr::CStyle {
+                tag_type: PrimitiveType::I32,
+                variants: variants
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, name)| CStyleVariant {
+                        name: name.into(),
+                        discriminant: i as i128,
+                        doc: None,
+                    })
+                    .collect(),
+            },
+            is_error: false,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    fn emit_files_for(contract: &FfiContract) -> Vec<(String, String)> {
+        let output = emit_contract(contract);
+        output
+            .files
+            .into_iter()
+            .map(|f| (f.file_name, f.source))
+            .collect()
+    }
+
+    /// A `#[repr(C)]` record whose fields are primitives + C-style enums
+    /// keeps the zero-copy `[StructLayout(Sequential)]` path even though
+    /// the IR's own blittability check (which predates enum support) says
+    /// otherwise. The C# backend extends the rule locally because the CLR
+    /// lays `enum : int` out bit-for-bit identically to `int`.
+    #[test]
+    fn emit_repr_c_record_with_c_style_enum_field_stays_blittable() {
+        let mut contract = empty_contract();
+        contract
+            .catalog
+            .insert_enum(c_style_enum("status", vec!["Active", "Inactive"]));
+        contract.catalog.insert_record(record_with_fields(
+            "flag",
+            true,
+            vec![
+                ("status", TypeExpr::Enum(EnumId::new("status"))),
+                ("count", TypeExpr::Primitive(PrimitiveType::U32)),
+            ],
+        ));
+
+        let src = emit_contract(&contract).combined_source();
+
+        assert_source_contains(
+            &src,
+            "[StructLayout(LayoutKind.Sequential)]",
+            "the zero-copy struct-layout attribute when only primitive + C-style enum fields are present",
+        );
+        assert_source_contains(
+            &src,
+            "public readonly record struct Flag(",
+            "the C# record-struct declaration",
+        );
+        assert_source_contains(
+            &src,
+            "Status Status,",
+            "the enum field rendered with its C# enum type name, not the backing int",
+        );
+    }
+
+    fn data_enum_single_variant(id: &str, variant_name: &str, field: (&str, TypeExpr)) -> EnumDef {
+        EnumDef {
+            id: EnumId::new(id),
+            repr: EnumRepr::Data {
+                tag_type: PrimitiveType::I32,
+                variants: vec![DataVariant {
+                    name: variant_name.into(),
+                    discriminant: 0,
+                    payload: VariantPayload::Struct(vec![FieldDef {
+                        name: field.0.into(),
+                        type_expr: field.1,
+                        doc: None,
+                        default: None,
+                    }]),
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        }
+    }
+
+    /// A function taking and returning a data enum travels through the
+    /// wire codec just like a non-blittable record — the public wrapper
+    /// allocates a `WireWriter`, encodes the input, calls the native
+    /// DllImport with `(byte[], UIntPtr)`, and decodes the returned
+    /// `FfiBuf` via `Shape.Decode(new WireReader(_buf))`. Same shape as
+    /// the record path, one rendering.
+    #[test]
+    fn emit_function_with_data_enum_param_and_return_goes_through_wire() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(data_enum_single_variant(
+            "shape",
+            "Circle",
+            ("radius", TypeExpr::Primitive(PrimitiveType::F64)),
+        ));
+        contract.functions.push(function_with_types(
+            "echo_shape",
+            vec![("s", TypeExpr::Enum(EnumId::new("shape")))],
+            ReturnDef::Value(TypeExpr::Enum(EnumId::new("shape"))),
+        ));
+
+        let src = emit_contract(&contract).combined_source();
+
+        assert_source_contains(
+            &src,
+            "public static Shape EchoShape(Shape s)",
+            "the public wrapper signature to name the Shape data enum on both sides",
+        );
+        assert_source_contains(
+            &src,
+            "internal static extern FfiBuf EchoShape(byte[] s, UIntPtr sLen);",
+            "the DllImport signature to split the data enum param into (byte[], UIntPtr) and return an FfiBuf",
+        );
+        assert_source_contains(
+            &src,
+            "using var _wire_s = new WireWriter(s.WireEncodedSize());",
+            "the wrapper body to allocate a WireWriter sized to the input value before the native call",
+        );
+        assert_source_contains(
+            &src,
+            "s.WireEncodeTo(_wire_s);",
+            "the wrapper body to drive the data enum's own WireEncodeTo — same call shape as records",
+        );
+        assert_source_contains(
+            &src,
+            "return Shape.Decode(new WireReader(_buf));",
+            "the wrapper body to decode the returned FfiBuf through the data enum's static Decode",
+        );
+    }
+
+    /// An instance method on a C-style enum travels as a C# extension
+    /// method `{Name}(this Direction self, …)` with `self` passed
+    /// directly to the DllImport. The DllImport's C# method name gets
+    /// the enum-class prefix so it doesn't collide with same-named
+    /// methods on other enums.
+    #[test]
+    fn emit_c_style_enum_instance_method_renders_as_extension_with_prefixed_native_name() {
+        let mut enum_def = c_style_enum("direction", vec!["North", "South"]);
+        enum_def.methods.push(MethodDef {
+            id: MethodId::new("opposite"),
+            receiver: Receiver::RefSelf,
+            params: vec![],
+            returns: ReturnDef::Value(TypeExpr::Enum(EnumId::new("direction"))),
+            execution_kind: ExecutionKind::Sync,
+            doc: None,
+            deprecated: None,
+        });
+
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(enum_def);
+
+        let src = emit_contract(&contract).combined_source();
+
+        assert_source_contains(
+            &src,
+            "public static Direction Opposite(this Direction self)",
+            "an instance method on a C-style enum to render as a C# extension method",
+        );
+        assert_source_contains(
+            &src,
+            "return NativeMethods.DirectionOpposite(self);",
+            "the extension-method body to call the prefixed native entry with `self` passed directly",
+        );
+        assert_source_contains(
+            &src,
+            "internal static extern Direction DirectionOpposite(Direction self);",
+            "the DllImport to declare the prefixed native name, return the enum type directly, and take the enum-typed self param",
+        );
+    }
+
+    /// A function that takes and returns a C-style enum marshals through
+    /// P/Invoke with zero ceremony — the DllImport signature names the
+    /// enum type directly, and the public wrapper is a one-line pass-
+    /// through. No cast, no byte buffer, no FfiBuf.
+    #[test]
+    fn emit_function_with_c_style_enum_param_and_return_marshals_direct() {
+        let mut contract = empty_contract();
+        contract
+            .catalog
+            .insert_enum(c_style_enum("status", vec!["Active", "Inactive"]));
+        contract.functions.push(function_with_types(
+            "echo_status",
+            vec![("s", TypeExpr::Enum(EnumId::new("status")))],
+            ReturnDef::Value(TypeExpr::Enum(EnumId::new("status"))),
+        ));
+
+        let src = emit_contract(&contract).combined_source();
+
+        assert_source_contains(
+            &src,
+            "public static Status EchoStatus(Status s)",
+            "the public wrapper signature to name the Status enum on both sides, not the backing int",
+        );
+        assert_source_contains(
+            &src,
+            "internal static extern Status EchoStatus(Status s);",
+            "the DllImport signature to declare the enum type directly so the CLR marshals it transparently as its backing int",
+        );
+        assert_source_contains(
+            &src,
+            "return NativeMethods.EchoStatus(s);",
+            "the wrapper body to pass the enum through unchanged — no cast required",
+        );
+        assert_source_lacks(
+            &src,
+            "(int)s",
+            "no explicit int cast since the CLR handles enum marshaling",
+        );
+    }
+
+    /// A C-style enum in the catalog produces its own `.cs` file containing
+    /// both the native `enum` declaration and the `Wire` helper class used
+    /// when the enum is embedded in a wire-encoded context.
+    #[test]
+    fn emit_c_style_enum_produces_per_enum_file() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(c_style_enum(
+            "status",
+            vec!["Active", "Inactive", "Pending"],
+        ));
+
+        let files = emit_files_for(&contract);
+
+        let status_cs = files
+            .iter()
+            .find(|(name, _)| name == "Status.cs")
+            .expect("expecting Status.cs to be generated for the status enum");
+        assert_source_contains(
+            &status_cs.1,
+            "public enum Status : int",
+            "the native C# enum declaration with explicit int backing type",
+        );
+        assert_source_contains(
+            &status_cs.1,
+            "Active = 0",
+            "variant tags as ordinal indices matching EnumTagStrategy::OrdinalIndex",
+        );
+        assert_source_contains(
+            &status_cs.1,
+            "internal static class StatusWire",
+            "the paired static helper class with Decode and the WireEncodeTo extension",
         );
     }
 }

@@ -8,7 +8,7 @@
 
 use askama::Template;
 
-use super::plan::{CSharpModule, CSharpRecord};
+use super::plan::{CSharpEnum, CSharpModule, CSharpRecord};
 
 /// Renders the file header: auto-generated comment, `using` directives,
 /// and namespace declaration.
@@ -45,10 +45,37 @@ pub struct RecordTemplate<'a> {
     pub namespace: &'a str,
 }
 
+/// Renders a single C-style enum as a standalone `.cs` file: the native
+/// `public enum` declaration plus the `*Wire` static helper class that
+/// supplies `Decode` and the `WireEncodeTo` extension method. The enum
+/// itself passes across P/Invoke as its backing `int`; the wire helpers
+/// exist so records and data-enum variants embedding the enum can stay
+/// on the same `this.Field.WireEncodeTo(wire)` call shape as records.
+#[derive(Template)]
+#[template(path = "render_csharp/enum_c_style.txt", escape = "none")]
+pub struct EnumCStyleTemplate<'a> {
+    pub enumeration: &'a CSharpEnum,
+    pub namespace: &'a str,
+}
+
+/// Renders a data enum as an `abstract record` with nested `sealed record`
+/// variants. Closed hierarchy (private constructor), value equality per
+/// variant, and pattern-matching wire codec using switch expressions for
+/// the pure paths and a switch statement for the side-effecting encode.
+#[derive(Template)]
+#[template(path = "render_csharp/enum_data.txt", escape = "none")]
+pub struct EnumDataTemplate<'a> {
+    pub enumeration: &'a CSharpEnum,
+    pub namespace: &'a str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::render::csharp::plan::{CSharpRecord, CSharpRecordField, CSharpType};
+    use crate::render::csharp::plan::{
+        CSharpEnum, CSharpEnumKind, CSharpEnumVariant, CSharpMethod, CSharpParam, CSharpParamKind,
+        CSharpReceiver, CSharpRecord, CSharpRecordField, CSharpReturnKind, CSharpType,
+    };
 
     fn record_field(
         name: &str,
@@ -176,6 +203,317 @@ mod tests {
         };
         let template = RecordTemplate {
             record: &record,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    /// Flag: the canonical "blittable record with a C-style enum field."
+    /// Status is an `enum : int` at the CLR level, so embedding it
+    /// alongside a `uint` keeps the record on the zero-copy P/Invoke path
+    /// with `[StructLayout(Sequential)]`. The wire helpers are still
+    /// emitted — they exist so non-blittable records that embed `Flag`
+    /// can reach its wire encoder without a second rendering shape.
+    #[test]
+    fn snapshot_blittable_record_with_cstyle_enum_field() {
+        let record = CSharpRecord {
+            class_name: "Flag".to_string(),
+            is_blittable: true,
+            fields: vec![
+                record_field(
+                    "Status",
+                    CSharpType::CStyleEnum("Status".to_string()),
+                    "StatusWire.Decode(reader)",
+                    "4",
+                    "this.Status.WireEncodeTo(wire)",
+                ),
+                record_field(
+                    "Count",
+                    CSharpType::UInt,
+                    "reader.ReadU32()",
+                    "4",
+                    "wire.WriteU32(this.Count)",
+                ),
+            ],
+        };
+        let template = RecordTemplate {
+            record: &record,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    fn method(
+        owner_class_name: &str,
+        name: &str,
+        ffi_name: &str,
+        receiver: CSharpReceiver,
+        params: Vec<CSharpParam>,
+        return_type: CSharpType,
+        return_kind: CSharpReturnKind,
+    ) -> CSharpMethod {
+        CSharpMethod {
+            name: name.to_string(),
+            native_method_name: format!("{owner_class_name}{name}"),
+            ffi_name: ffi_name.to_string(),
+            receiver,
+            params,
+            return_type,
+            return_kind,
+            wire_writers: vec![],
+        }
+    }
+
+    fn param(name: &str, csharp_type: CSharpType) -> CSharpParam {
+        CSharpParam {
+            name: name.to_string(),
+            csharp_type,
+            kind: CSharpParamKind::Direct,
+        }
+    }
+
+    /// Direction: C-style enum with a mix of static factories and
+    /// instance methods. Renders alongside the `DirectionWire` helper
+    /// plus a `DirectionMethods` companion static class; instance
+    /// methods become C# extension methods (`this Direction self`) so
+    /// `d.Opposite()` works without members on the enum itself.
+    #[test]
+    fn snapshot_c_style_enum_with_methods_direction() {
+        let enumeration = CSharpEnum {
+            class_name: "Direction".to_string(),
+            kind: CSharpEnumKind::CStyle,
+            variants: vec![
+                CSharpEnumVariant {
+                    name: "North".to_string(),
+                    tag: 0,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "South".to_string(),
+                    tag: 1,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "East".to_string(),
+                    tag: 2,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "West".to_string(),
+                    tag: 3,
+                    fields: vec![],
+                },
+            ],
+            methods: vec![
+                method(
+                    "Direction",
+                    "FromDegrees",
+                    "boltffi_direction_from_degrees",
+                    CSharpReceiver::Static,
+                    vec![param("degrees", CSharpType::Double)],
+                    CSharpType::CStyleEnum("Direction".to_string()),
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Direction",
+                    "Count",
+                    "boltffi_direction_count",
+                    CSharpReceiver::Static,
+                    vec![],
+                    CSharpType::UInt,
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Direction",
+                    "Opposite",
+                    "boltffi_direction_opposite",
+                    CSharpReceiver::InstanceExtension,
+                    vec![],
+                    CSharpType::CStyleEnum("Direction".to_string()),
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Direction",
+                    "IsHorizontal",
+                    "boltffi_direction_is_horizontal",
+                    CSharpReceiver::InstanceExtension,
+                    vec![],
+                    CSharpType::Bool,
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Direction",
+                    "Label",
+                    "boltffi_direction_label",
+                    CSharpReceiver::InstanceExtension,
+                    vec![],
+                    CSharpType::String,
+                    CSharpReturnKind::WireDecodeString,
+                ),
+            ],
+        };
+        let template = EnumCStyleTemplate {
+            enumeration: &enumeration,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    /// Status: the canonical C-style enum. Three unit variants with
+    /// ordinal-index tags. Renders as a native `public enum : int` plus
+    /// the `StatusWire` static helper with the `WireEncodeTo` extension.
+    #[test]
+    fn snapshot_c_style_enum_status() {
+        let enumeration = CSharpEnum {
+            class_name: "Status".to_string(),
+            kind: CSharpEnumKind::CStyle,
+            variants: vec![
+                CSharpEnumVariant {
+                    name: "Active".to_string(),
+                    tag: 0,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Inactive".to_string(),
+                    tag: 1,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Pending".to_string(),
+                    tag: 2,
+                    fields: vec![],
+                },
+            ],
+            methods: vec![],
+        };
+        let template = EnumCStyleTemplate {
+            enumeration: &enumeration,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    /// Shape: the canonical data enum exercising every payload shape —
+    /// a single-field variant (Circle), a multi-field variant (Rectangle),
+    /// and a unit variant (Point). Renders as `abstract record Shape`
+    /// with nested `sealed record` variants, switch-expression Decode,
+    /// and pattern-match WireEncodeTo. Field wire expressions reference
+    /// the switch-bound local `_v`, not `this`.
+    #[test]
+    fn snapshot_data_enum_shape() {
+        let enumeration = CSharpEnum {
+            class_name: "Shape".to_string(),
+            kind: CSharpEnumKind::Data,
+            variants: vec![
+                CSharpEnumVariant {
+                    name: "Circle".to_string(),
+                    tag: 0,
+                    fields: vec![record_field(
+                        "Radius",
+                        CSharpType::Double,
+                        "reader.ReadF64()",
+                        "8",
+                        "wire.WriteF64(_v.Radius)",
+                    )],
+                },
+                CSharpEnumVariant {
+                    name: "Rectangle".to_string(),
+                    tag: 1,
+                    fields: vec![
+                        record_field(
+                            "Width",
+                            CSharpType::Double,
+                            "reader.ReadF64()",
+                            "8",
+                            "wire.WriteF64(_v.Width)",
+                        ),
+                        record_field(
+                            "Height",
+                            CSharpType::Double,
+                            "reader.ReadF64()",
+                            "8",
+                            "wire.WriteF64(_v.Height)",
+                        ),
+                    ],
+                },
+                CSharpEnumVariant {
+                    name: "Point".to_string(),
+                    tag: 2,
+                    fields: vec![],
+                },
+            ],
+            methods: vec![],
+        };
+        let template = EnumDataTemplate {
+            enumeration: &enumeration,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
+    /// Shape with methods: a data enum carrying both static factories
+    /// (UnitCircle, VariantCount) and instance methods (Area, Describe).
+    /// Methods render inside the abstract record body — instance ones
+    /// wire-encode `this` into `_selfBytes` before the native call.
+    #[test]
+    fn snapshot_data_enum_with_methods_shape() {
+        let enumeration = CSharpEnum {
+            class_name: "Shape".to_string(),
+            kind: CSharpEnumKind::Data,
+            variants: vec![CSharpEnumVariant {
+                name: "Circle".to_string(),
+                tag: 0,
+                fields: vec![record_field(
+                    "Radius",
+                    CSharpType::Double,
+                    "reader.ReadF64()",
+                    "8",
+                    "wire.WriteF64(_v.Radius)",
+                )],
+            }],
+            methods: vec![
+                method(
+                    "Shape",
+                    "UnitCircle",
+                    "boltffi_shape_unit_circle",
+                    CSharpReceiver::Static,
+                    vec![],
+                    CSharpType::DataEnum("Shape".to_string()),
+                    CSharpReturnKind::WireDecodeObject {
+                        class_name: "Shape".to_string(),
+                    },
+                ),
+                method(
+                    "Shape",
+                    "VariantCount",
+                    "boltffi_shape_variant_count",
+                    CSharpReceiver::Static,
+                    vec![],
+                    CSharpType::UInt,
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Shape",
+                    "Area",
+                    "boltffi_shape_area",
+                    CSharpReceiver::InstanceNative,
+                    vec![],
+                    CSharpType::Double,
+                    CSharpReturnKind::Direct,
+                ),
+                method(
+                    "Shape",
+                    "Describe",
+                    "boltffi_shape_describe",
+                    CSharpReceiver::InstanceNative,
+                    vec![],
+                    CSharpType::String,
+                    CSharpReturnKind::WireDecodeString,
+                ),
+            ],
+        };
+        let template = EnumDataTemplate {
+            enumeration: &enumeration,
             namespace: "Demo",
         };
         insta::assert_snapshot!(template.render().unwrap());

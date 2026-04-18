@@ -152,6 +152,16 @@ pub enum TaskStatus {
     Failed { error_code: i32, retry_count: i32 },
 }
 
+/// Returns the given data enum unchanged — measures the full wire
+/// round-trip for a value with a variable-width payload. Paired with
+/// `echo_direction` so benchmarks can price the wire-encoding overhead
+/// against the direct-marshaling baseline.
+#[export]
+#[benchmark_candidate(function, uniffi)]
+pub fn echo_task_status(status: TaskStatus) -> TaskStatus {
+    status
+}
+
 #[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn get_status_progress(status: TaskStatus) -> i32 {

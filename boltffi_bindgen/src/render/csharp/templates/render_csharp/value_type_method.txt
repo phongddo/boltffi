@@ -1,0 +1,39 @@
+
+{%- if method.receiver.is_static() %}
+        public static {{ method.return_type }} {{ method.name }}({{ method.wrapper_param_list() }})
+{%- else if method.receiver.is_instance_extension() %}
+{%- if method.params.is_empty() %}
+        public static {{ method.return_type }} {{ method.name }}(this {{ enumeration.class_name }} self)
+{%- else %}
+        public static {{ method.return_type }} {{ method.name }}(this {{ enumeration.class_name }} self, {{ method.wrapper_param_list() }})
+{%- endif %}
+{%- else %}
+        public {{ method.return_type }} {{ method.name }}({{ method.wrapper_param_list() }})
+{%- endif %}
+        {
+{%- if method.receiver.is_instance_native() %}
+            using var _wire_self = new WireWriter(this.WireEncodedSize());
+            this.WireEncodeTo(_wire_self);
+            byte[] _selfBytes = _wire_self.ToArray();
+{%- endif %}
+{%- for writer in method.wire_writers %}
+            using var {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }});
+            {{ writer.encode_expr }};
+            byte[] {{ writer.bytes_binding_name }} = {{ writer.binding_name }}.ToArray();
+{%- endfor %}
+{%- if method.return_kind.is_void() %}
+            NativeMethods.{{ method.native_method_name }}({{ method.full_native_call_args() }});
+{%- else if method.return_kind.is_direct() %}
+            return NativeMethods.{{ method.native_method_name }}({{ method.full_native_call_args() }});
+{%- else %}
+            FfiBuf _buf = NativeMethods.{{ method.native_method_name }}({{ method.full_native_call_args() }});
+            try
+            {
+                {{ method.return_kind.wire_decode_return("_buf").unwrap() }}
+            }
+            finally
+            {
+                NativeMethods.FreeBuf(_buf);
+            }
+{%- endif %}
+        }

@@ -17,6 +17,10 @@ pub struct CSharpModule {
     /// Records exposed by the module. Each record is rendered to its own
     /// `.cs` file as a `readonly record struct`.
     pub records: Vec<CSharpRecord>,
+    /// Enums exposed by the module. Each enum is rendered to its own `.cs`
+    /// file — C-style as a native `enum`, data-carrying as an
+    /// `abstract record` with nested `sealed record` variants.
+    pub enums: Vec<CSharpEnum>,
     /// Top-level primitive functions. Used by both the public wrapper class
     /// and the `[DllImport]` native declarations — C# P/Invoke passes
     /// primitives directly, so one struct serves both layers.
@@ -59,22 +63,24 @@ impl CSharpModule {
     }
 
     /// Whether the `FfiBuf` struct and `FreeBuf` DllImport are emitted.
-    /// Needed for wire-encoded returns, and pulled in whenever a record
-    /// exists so the `WireReader` (which takes `FfiBuf`) compiles.
+    /// Needed for wire-encoded returns, and pulled in whenever a record or
+    /// enum exists so the `WireReader` (which takes `FfiBuf`) compiles.
     pub fn needs_ffi_buf(&self) -> bool {
-        self.has_ffi_buf_returns() || !self.records.is_empty()
+        self.has_ffi_buf_returns() || !self.records.is_empty() || !self.enums.is_empty()
     }
 
     /// Whether the stateful `WireReader` helper is emitted. Needed for
-    /// wire-decoded returns and for any record's `Decode` method.
+    /// wire-decoded returns, for any record's `Decode` method, and for the
+    /// enum wire helpers (`StatusWire.Decode`, `Shape.Decode`).
     pub fn needs_wire_reader(&self) -> bool {
-        self.has_ffi_buf_returns() || !self.records.is_empty()
+        self.has_ffi_buf_returns() || !self.records.is_empty() || !self.enums.is_empty()
     }
 
     /// Whether the `WireWriter` helper is emitted. Needed for wire-encoded
-    /// params and for any record's `WireEncodeTo` method.
+    /// params, for any record's `WireEncodeTo` method, and for the enum
+    /// encode helpers.
     pub fn needs_wire_writer(&self) -> bool {
-        self.has_wire_params() || !self.records.is_empty()
+        self.has_wire_params() || !self.records.is_empty() || !self.enums.is_empty()
     }
 }
 
@@ -101,6 +107,16 @@ pub enum CSharpType {
     /// A user-defined record, identified by its rendered PascalCase class
     /// name (e.g., `"Point"`).
     Record(String),
+    /// A user-defined C-style enum (all variants are unit). Renders as a
+    /// C# `enum` with an `int` backing type. Blittable — passes directly
+    /// across P/Invoke as its underlying integer, and stays blittable when
+    /// embedded in a `[StructLayout(Sequential)]` record.
+    CStyleEnum(String),
+    /// A user-defined data enum (at least one variant carries a payload).
+    /// Renders as an `abstract record` with nested `sealed record` variants.
+    /// Always wire-encoded — never blittable — because variant payloads
+    /// are variable-width.
+    DataEnum(String),
 }
 
 impl CSharpType {
@@ -122,6 +138,8 @@ impl CSharpType {
             Self::Double => "double",
             Self::String => "string",
             Self::Record(name) => name.as_str(),
+            Self::CStyleEnum(name) => name.as_str(),
+            Self::DataEnum(name) => name.as_str(),
         }
     }
 
@@ -139,6 +157,69 @@ impl CSharpType {
 
     pub fn is_record(&self) -> bool {
         matches!(self, Self::Record(_))
+    }
+
+    pub fn is_c_style_enum(&self) -> bool {
+        matches!(self, Self::CStyleEnum(_))
+    }
+
+    pub fn is_data_enum(&self) -> bool {
+        matches!(self, Self::DataEnum(_))
+    }
+
+    /// If `self` is a user-defined named type (record or enum) whose
+    /// class name is shadowed by an enclosing scope, return a variant
+    /// wrapping the fully-qualified `global::{namespace}.{ClassName}`.
+    /// Primitives and unnamed types pass through unchanged. The
+    /// `global::` prefix dodges both nested-type shadowing *and* any
+    /// same-named class in the current namespace (the generated
+    /// top-level wrapper class, typically).
+    pub fn qualify_if_shadowed(
+        self,
+        shadowed: &std::collections::HashSet<String>,
+        namespace: &str,
+    ) -> Self {
+        let needs_qualification = match &self {
+            Self::Record(n) | Self::CStyleEnum(n) | Self::DataEnum(n) => shadowed.contains(n),
+            _ => false,
+        };
+        if !needs_qualification {
+            return self;
+        }
+        match self {
+            Self::Record(n) => Self::Record(format!("global::{}.{}", namespace, n)),
+            Self::CStyleEnum(n) => Self::CStyleEnum(format!("global::{}.{}", namespace, n)),
+            Self::DataEnum(n) => Self::DataEnum(format!("global::{}.{}", namespace, n)),
+            other => other,
+        }
+    }
+
+    /// Whether this type is blittable in the CLR's sense — i.e. it can
+    /// live inside a `[StructLayout(Sequential)]` record field and pass
+    /// across P/Invoke without wire encoding. Primitives all qualify;
+    /// `bool` does not (P/Invoke defaults to a 4-byte Win32 BOOL, so
+    /// records with bool fields go through the wire path today). Strings
+    /// and data enums are always wire-encoded. C-style enums are `int`
+    /// underneath and ride the zero-copy path. Records are blittable or
+    /// not based on their own field contents, decided elsewhere — this
+    /// predicate only answers "is this *leaf* type blittable?".
+    pub fn is_blittable_leaf(&self) -> bool {
+        match self {
+            Self::SByte
+            | Self::Byte
+            | Self::Short
+            | Self::UShort
+            | Self::Int
+            | Self::UInt
+            | Self::Long
+            | Self::ULong
+            | Self::NInt
+            | Self::NUInt
+            | Self::Float
+            | Self::Double
+            | Self::CStyleEnum(_) => true,
+            Self::Void | Self::Bool | Self::String | Self::Record(_) | Self::DataEnum(_) => false,
+        }
     }
 }
 
@@ -206,6 +287,260 @@ pub struct CSharpRecordField {
     /// Statement that writes this field to a `WireWriter` named `wire`
     /// (e.g., `"wire.WriteF64(this.X)"`).
     pub wire_encode_expr: String,
+}
+
+/// A Rust enum lifted into the C# type surface. C-style enums (all unit
+/// variants) render as native `enum` declarations and ride the CLR's
+/// transparent int-marshaling; data enums render as `abstract record`
+/// hierarchies and travel wire-encoded.
+#[derive(Debug, Clone)]
+pub struct CSharpEnum {
+    /// PascalCase class name (e.g., `"Shape"`, `"Status"`).
+    pub class_name: String,
+    /// Whether this is a C-style or data enum — drives the rendering shape.
+    pub kind: CSharpEnumKind,
+    /// Variants, in declaration order. The wire tag is the variant's index
+    /// in this list (per `EnumTagStrategy::OrdinalIndex`), so order is
+    /// load-bearing.
+    pub variants: Vec<CSharpEnumVariant>,
+    /// Methods and factory constructors declared via `#[data(impl)]`. For
+    /// C-style enums these render as a companion `{Name}Methods` static
+    /// class; for data enums they go directly on the abstract record.
+    /// The Rust IR separates constructors from methods, but at the C#
+    /// call site they're both just static or instance methods — merged
+    /// into one list here.
+    pub methods: Vec<CSharpMethod>,
+}
+
+/// The two flavors the enum renderer knows how to produce. The `#[repr]`
+/// type could inform the C# backing type of a C-style enum, but for now
+/// we always use `int` — matches the i32 wire tag and keeps the DllImport
+/// signatures uniform with the free-function enum param/return shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CSharpEnumKind {
+    /// Every variant is a unit variant. Renders as `public enum Name : int`
+    /// plus a `NameWire` static helper class with `Decode` and a
+    /// `WireEncodeTo` extension method for when the enum embeds inside a
+    /// wire-encoded record.
+    CStyle,
+    /// At least one variant carries fields. Renders as
+    /// `public abstract record Name` with nested `sealed record` variants
+    /// and switch-expression wire codec.
+    Data,
+}
+
+/// One variant of a [`CSharpEnum`]. For C-style enums, `fields` is always
+/// empty; for data enums, a unit variant also has empty `fields` (and
+/// renders as `sealed record Name() : Enum`).
+#[derive(Debug, Clone)]
+pub struct CSharpEnumVariant {
+    /// PascalCase variant name (e.g., `"Circle"`, `"Active"`).
+    pub name: String,
+    /// Wire tag — always the ordinal index (0, 1, 2…) matching
+    /// `EnumTagStrategy::OrdinalIndex`. Rendered as `i32` literals on both
+    /// encode and decode sides.
+    pub tag: i32,
+    /// Variant fields. Empty for unit variants and for every C-style
+    /// variant. Reuses [`CSharpRecordField`] because variant payloads are
+    /// structurally identical to record fields — same name, type, and
+    /// pre-rendered wire expressions.
+    pub fields: Vec<CSharpRecordField>,
+}
+
+impl CSharpEnum {
+    pub fn is_c_style(&self) -> bool {
+        self.kind == CSharpEnumKind::CStyle
+    }
+
+    pub fn is_data(&self) -> bool {
+        self.kind == CSharpEnumKind::Data
+    }
+
+    pub fn has_methods(&self) -> bool {
+        !self.methods.is_empty()
+    }
+
+    /// Whether any variant payload field is a `string`. Drives the
+    /// `using System.Text;` import in the data enum template — needed
+    /// because string-valued wire-size expressions call
+    /// `Encoding.UTF8.GetByteCount(...)`, which lives in `System.Text`.
+    pub fn has_string_fields(&self) -> bool {
+        self.variants
+            .iter()
+            .flat_map(|v| v.fields.iter())
+            .any(|f| f.csharp_type.is_string())
+    }
+}
+
+impl CSharpEnumVariant {
+    /// Whether this variant carries no payload. True for every C-style
+    /// variant, and for data enum "unit" variants like `Shape::Point`.
+    pub fn is_unit(&self) -> bool {
+        self.fields.is_empty()
+    }
+}
+
+/// A method or factory constructor on a value type — today always an
+/// enum, eventually also records. Renders as a static method, a C#
+/// extension method (for C-style enum instance methods, since C# enums
+/// can't have members), or a native instance method on the owning type.
+/// The dispatch is driven by [`CSharpReceiver`].
+#[derive(Debug, Clone)]
+pub struct CSharpMethod {
+    /// PascalCase method name as it appears on the owning type's public
+    /// API (e.g., `"Opposite"`, `"UnitCircle"`).
+    pub name: String,
+    /// Name used for this method's DllImport entry inside the shared
+    /// `NativeMethods` class. Prefixed with the owning class name (e.g.,
+    /// `"DirectionOpposite"`, `"ShapeArea"`) because two types may
+    /// declare methods of the same name, and the DllImport class is
+    /// flat.
+    pub native_method_name: String,
+    /// The C FFI symbol implementing this method (e.g.,
+    /// `"boltffi_direction_opposite"`).
+    pub ffi_name: String,
+    /// How `self` (if any) participates in the call.
+    pub receiver: CSharpReceiver,
+    /// Explicit params — does not include `self` for instance methods.
+    pub params: Vec<CSharpParam>,
+    /// C# return type of the public-facing method.
+    pub return_type: CSharpType,
+    /// How the return value crosses the ABI.
+    pub return_kind: CSharpReturnKind,
+    /// For each non-blittable record/data-enum param, the setup block
+    /// that wire-encodes it into a `byte[]` before the native call.
+    pub wire_writers: Vec<CSharpWireWriter>,
+}
+
+/// How a method's receiver (`self`) participates in the rendered C#.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CSharpReceiver {
+    /// Static method — no `self`. Lives on whichever container the
+    /// owning type uses: a companion `{Name}Methods` class for C-style
+    /// enums, the abstract record for data enums, the record struct for
+    /// records. Renders as `public static {ReturnType} {Name}({params})`.
+    Static,
+    /// Instance method on a C-style enum. Renders as a C# *extension*
+    /// method `public static {ReturnType} {Name}(this {EnumType} self,
+    /// {params})` in the companion class — giving `d.Name(args)` call
+    /// syntax without requiring members on the enum itself. `self`
+    /// passes directly to the DllImport since the CLR marshals the enum
+    /// as its backing int.
+    InstanceExtension,
+    /// Instance method on a type that can hold its own members — data
+    /// enums (on the abstract record) and records. Renders as a native
+    /// method: `public {ReturnType} {Name}({params})`. When the owning
+    /// type is wire-encoded (data enums, non-blittable records), the
+    /// body wire-encodes `this` into a `byte[]` before the native call;
+    /// blittable records pass `this` by value through P/Invoke.
+    InstanceNative,
+}
+
+impl CSharpReceiver {
+    pub fn is_static(&self) -> bool {
+        matches!(self, Self::Static)
+    }
+
+    pub fn is_instance_extension(&self) -> bool {
+        matches!(self, Self::InstanceExtension)
+    }
+
+    pub fn is_instance_native(&self) -> bool {
+        matches!(self, Self::InstanceNative)
+    }
+}
+
+impl CSharpMethod {
+    pub fn is_void(&self) -> bool {
+        matches!(self.return_kind, CSharpReturnKind::Void)
+    }
+
+    /// Comma-joined param declarations for the method signature —
+    /// excludes `self`, which the template handles separately based on
+    /// the receiver kind.
+    pub fn wrapper_param_list(&self) -> String {
+        self.params
+            .iter()
+            .map(CSharpParam::wrapper_declaration)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Comma-joined call arguments for the native DllImport invocation,
+    /// excluding `self`. Matches [`CSharpFunction::native_call_args`].
+    pub fn native_call_args(&self) -> String {
+        self.params
+            .iter()
+            .map(CSharpParam::native_call_arg)
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// The return type used in the DllImport signature. Wire-decoded
+    /// returns (strings, non-blittable records, data enums) come back
+    /// as an `FfiBuf`; everything else uses the C# type directly.
+    pub fn native_return_type(&self) -> String {
+        if self.return_kind.native_returns_ffi_buf() {
+            "FfiBuf".to_string()
+        } else {
+            self.return_type.to_string()
+        }
+    }
+
+    /// Param list used in the DllImport signature, including the
+    /// receiver-dependent self declaration prepended when the method is
+    /// an instance method:
+    /// - `InstanceExtension` — prepends `{OwnerClass} self`, relying on
+    ///   the CLR to marshal the enum as its backing int.
+    /// - `InstanceNative` — prepends `byte[] self, UIntPtr selfLen` for
+    ///   wire-encoded `this`; passes `{OwnerClass} self` for blittable
+    ///   types.
+    /// - `Static` — no self declaration.
+    ///
+    /// `owner_is_blittable` distinguishes the two `InstanceNative` sub-
+    /// cases. For wire-encoded owners it's `false`; for blittable
+    /// records it will be `true` once record instance methods land.
+    pub fn native_param_list(&self, owner_class_name: &str, owner_is_blittable: bool) -> String {
+        let explicit: Vec<String> = self
+            .params
+            .iter()
+            .map(CSharpParam::native_declaration)
+            .collect();
+        let self_decl: Option<String> = match self.receiver {
+            CSharpReceiver::Static => None,
+            CSharpReceiver::InstanceExtension => Some(format!("{} self", owner_class_name)),
+            CSharpReceiver::InstanceNative if owner_is_blittable => {
+                Some(format!("{} self", owner_class_name))
+            }
+            CSharpReceiver::InstanceNative => Some("byte[] self, UIntPtr selfLen".to_string()),
+        };
+        match self_decl {
+            Some(d) => std::iter::once(d)
+                .chain(explicit)
+                .collect::<Vec<_>>()
+                .join(", "),
+            None => explicit.join(", "),
+        }
+    }
+
+    /// Comma-joined call arguments *including* the receiver's
+    /// self-argument where the receiver needs one. Extension methods
+    /// prepend the bound `self` local; data-enum instance methods
+    /// prepend the pre-encoded `_selfBytes, (UIntPtr)_selfBytes.Length`
+    /// pair that the surrounding method body set up.
+    pub fn full_native_call_args(&self) -> String {
+        let explicit = self.native_call_args();
+        let self_prefix: &str = match self.receiver {
+            CSharpReceiver::Static => "",
+            CSharpReceiver::InstanceExtension => "self",
+            CSharpReceiver::InstanceNative => "_selfBytes, (UIntPtr)_selfBytes.Length",
+        };
+        match (self_prefix.is_empty(), explicit.is_empty()) {
+            (true, _) => explicit,
+            (false, true) => self_prefix.to_string(),
+            (false, false) => format!("{self_prefix}, {explicit}"),
+        }
+    }
 }
 
 /// A primitive function binding. Serves double duty: the template uses `name`
@@ -291,9 +626,12 @@ pub enum CSharpReturnKind {
     /// frees the buffer.
     WireDecodeString,
     /// The native function returns an `FfiBuf` carrying a wire-encoded
-    /// record. The wrapper wraps it in a `WireReader` and calls
-    /// `{class_name}.Decode(reader)` to reconstruct the record.
-    WireDecodeRecord { class_name: String },
+    /// value with a static `Decode(WireReader)` method. The wrapper wraps
+    /// it in a `WireReader` and calls `{class_name}.Decode(reader)` to
+    /// reconstruct the value. Used for non-blittable records and data
+    /// enums, whose rendered C# types both expose the same `Decode` API
+    /// at the call site.
+    WireDecodeObject { class_name: String },
 }
 
 impl CSharpReturnKind {
@@ -309,21 +647,21 @@ impl CSharpReturnKind {
         matches!(self, Self::WireDecodeString)
     }
 
-    pub fn is_wire_decode_record(&self) -> bool {
-        matches!(self, Self::WireDecodeRecord { .. })
+    pub fn is_wire_decode_object(&self) -> bool {
+        matches!(self, Self::WireDecodeObject { .. })
     }
 
     /// Whether the native (DllImport) signature returns an `FfiBuf`.
     pub fn native_returns_ffi_buf(&self) -> bool {
-        matches!(self, Self::WireDecodeString | Self::WireDecodeRecord { .. })
+        matches!(self, Self::WireDecodeString | Self::WireDecodeObject { .. })
     }
 
-    /// For `WireDecodeRecord`, the decoded class name (e.g., `"Point"`);
-    /// `None` for every other kind. Templates use this to emit
-    /// `{class_name}.Decode`.
+    /// For `WireDecodeObject`, the decoded C# class name (e.g., `"Point"`
+    /// for a record, `"Shape"` for a data enum); `None` for every other
+    /// kind. Templates use this to emit `{class_name}.Decode`.
     pub fn decode_class_name(&self) -> Option<&str> {
         match self {
-            Self::WireDecodeRecord { class_name } => Some(class_name),
+            Self::WireDecodeObject { class_name } => Some(class_name),
             _ => None,
         }
     }
@@ -338,7 +676,7 @@ impl CSharpReturnKind {
             Self::WireDecodeString => {
                 Some(format!("return new WireReader({}).ReadString();", buf_var))
             }
-            Self::WireDecodeRecord { class_name } => Some(format!(
+            Self::WireDecodeObject { class_name } => Some(format!(
                 "return {}.Decode(new WireReader({}));",
                 class_name, buf_var
             )),
@@ -500,6 +838,92 @@ mod tests {
         let ty = CSharpType::Record("Point".to_string());
         assert_eq!(ty.to_string(), "Point");
         assert!(ty.is_record());
+    }
+
+    #[test]
+    fn c_style_enum_type_display_uses_class_name() {
+        let ty = CSharpType::CStyleEnum("Status".to_string());
+        assert_eq!(ty.to_string(), "Status");
+        assert!(ty.is_c_style_enum());
+        assert!(!ty.is_data_enum());
+    }
+
+    #[test]
+    fn data_enum_type_display_uses_class_name() {
+        let ty = CSharpType::DataEnum("Shape".to_string());
+        assert_eq!(ty.to_string(), "Shape");
+        assert!(ty.is_data_enum());
+        assert!(!ty.is_c_style_enum());
+    }
+
+    /// A variant with no payload fields is a unit — true for every C-style
+    /// variant and for data-enum unit variants like `Shape::Point`.
+    #[test]
+    fn variant_with_empty_fields_is_unit() {
+        let variant = CSharpEnumVariant {
+            name: "Active".to_string(),
+            tag: 0,
+            fields: vec![],
+        };
+        assert!(variant.is_unit());
+    }
+
+    /// A variant with at least one payload field is not a unit — the
+    /// renderer emits a positional `sealed record Foo(double Radius)`
+    /// rather than the empty-paren `sealed record Foo()` shape.
+    #[test]
+    fn variant_with_payload_is_not_unit() {
+        let variant = CSharpEnumVariant {
+            name: "Circle".to_string(),
+            tag: 0,
+            fields: vec![CSharpRecordField {
+                name: "Radius".to_string(),
+                csharp_type: CSharpType::Double,
+                wire_decode_expr: "reader.ReadF64()".to_string(),
+                wire_size_expr: "8".to_string(),
+                wire_encode_expr: "wire.WriteF64(this.Radius)".to_string(),
+            }],
+        };
+        assert!(!variant.is_unit());
+    }
+
+    #[test]
+    fn c_style_kind_is_c_style_and_not_data() {
+        let enumeration = CSharpEnum {
+            class_name: "Status".to_string(),
+            kind: CSharpEnumKind::CStyle,
+            variants: vec![],
+            methods: vec![],
+        };
+        assert!(enumeration.is_c_style());
+        assert!(!enumeration.is_data());
+    }
+
+    #[test]
+    fn data_kind_is_data_and_not_c_style() {
+        let enumeration = CSharpEnum {
+            class_name: "Shape".to_string(),
+            kind: CSharpEnumKind::Data,
+            variants: vec![],
+            methods: vec![],
+        };
+        assert!(enumeration.is_data());
+        assert!(!enumeration.is_c_style());
+    }
+
+    /// C-style enums ride P/Invoke as their backing `int`, so they count as
+    /// blittable leaves alongside the numeric primitives. Data enums never
+    /// do — their payloads are variable-width and must wire-encode.
+    #[rstest]
+    #[case::int(CSharpType::Int, true)]
+    #[case::double(CSharpType::Double, true)]
+    #[case::cstyle_enum(CSharpType::CStyleEnum("Status".to_string()), true)]
+    #[case::bool(CSharpType::Bool, false)]
+    #[case::string(CSharpType::String, false)]
+    #[case::record(CSharpType::Record("Point".to_string()), false)]
+    #[case::data_enum(CSharpType::DataEnum("Shape".to_string()), false)]
+    fn is_blittable_leaf_matches_marshaling_story(#[case] ty: CSharpType, #[case] expected: bool) {
+        assert_eq!(ty.is_blittable_leaf(), expected);
     }
 
     // ----- CSharpParam render helpers -----
@@ -720,7 +1144,7 @@ mod tests {
     #[case::string(CSharpType::String, CSharpReturnKind::WireDecodeString, "FfiBuf")]
     #[case::wire_record(
         CSharpType::Record("Person".to_string()),
-        CSharpReturnKind::WireDecodeRecord { class_name: "Person".to_string() },
+        CSharpReturnKind::WireDecodeObject { class_name: "Person".to_string() },
         "FfiBuf",
     )]
     fn native_return_type_reflects_ffi_buf_paths(
@@ -744,8 +1168,8 @@ mod tests {
     }
 
     #[test]
-    fn wire_decode_return_for_record_calls_decode() {
-        let kind = CSharpReturnKind::WireDecodeRecord {
+    fn wire_decode_return_for_object_calls_decode() {
+        let kind = CSharpReturnKind::WireDecodeObject {
             class_name: "Person".to_string(),
         };
         assert_eq!(
@@ -762,9 +1186,9 @@ mod tests {
     }
 
     #[test]
-    fn decode_class_name_some_only_for_wire_decode_record() {
+    fn decode_class_name_some_only_for_wire_decode_object() {
         assert_eq!(
-            CSharpReturnKind::WireDecodeRecord {
+            CSharpReturnKind::WireDecodeObject {
                 class_name: "Point".to_string()
             }
             .decode_class_name(),
