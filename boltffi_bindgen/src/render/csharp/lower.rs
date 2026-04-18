@@ -63,8 +63,9 @@ impl<'a> CSharpLowerer<'a> {
     /// both grow together in one fixed-point loop — each iteration tries
     /// to admit every not-yet-supported record and every not-yet-supported
     /// data enum against the current state of both sets, terminating when
-    /// a pass produces no new admissions. C-style enums have no payload
-    /// so they seed the enum set unconditionally before iteration begins.
+    /// a pass produces no new admissions. C-style enums have no payload,
+    /// so any whose repr is a legal C# enum backing type seed the enum set
+    /// before iteration begins.
     ///
     /// Termination: every non-breaking iteration admits at least one new
     /// record or data enum; both catalogs are finite; admissions are
@@ -76,7 +77,12 @@ impl<'a> CSharpLowerer<'a> {
         let mut enums: HashSet<String> = ffi
             .catalog
             .all_enums()
-            .filter(|e| matches!(e.repr, EnumRepr::CStyle { .. }))
+            .filter(|e| match &e.repr {
+                EnumRepr::CStyle { tag_type, .. } => {
+                    mappings::csharp_enum_backing_type(*tag_type).is_some()
+                }
+                EnumRepr::Data { .. } => false,
+            })
             .map(|e| e.id.as_str().to_string())
             .collect();
         let mut records: HashSet<String> = HashSet::new();
@@ -256,11 +262,11 @@ impl<'a> CSharpLowerer<'a> {
     /// `[StructLayout(Sequential)]` and no wire encoding. The IR's own
     /// `is_blittable` flag admits all-primitive `#[repr(C)]` records only —
     /// the conservative, language-neutral answer. C# goes further: a
-    /// `public enum Status : int` is bit-for-bit its backing int at
-    /// runtime, so a `#[repr(C)]` record whose fields are primitives or
-    /// C-style enums lays out identically across the CLR and Rust. The
-    /// extension stays C#-local because Java/Kotlin represent enums as
-    /// heap objects and can't claim the same equivalence.
+    /// `public enum Status : byte|short|int|long|...` is bit-for-bit its
+    /// backing primitive at runtime, so a `#[repr(C)]` record whose fields
+    /// are primitives or C-style enums lays out identically across the CLR
+    /// and Rust. The extension stays C#-local because Java/Kotlin represent
+    /// enums as heap objects and can't claim the same equivalence.
     fn is_blittable_record(&self, id: &RecordId) -> bool {
         if self.abi_record_for(id).is_some_and(|r| r.is_blittable) {
             return true;
@@ -381,7 +387,7 @@ impl<'a> CSharpLowerer<'a> {
         let class_name = NamingConvention::class_name(enum_def.id.as_str());
         let methods = self.lower_enum_methods(enum_def, &class_name);
         match &enum_def.repr {
-            EnumRepr::CStyle { variants, .. } => {
+            EnumRepr::CStyle { tag_type, variants } => {
                 let lowered_variants = variants
                     .iter()
                     .enumerate()
@@ -394,6 +400,7 @@ impl<'a> CSharpLowerer<'a> {
                 Some(CSharpEnum {
                     class_name,
                     kind: CSharpEnumKind::CStyle,
+                    c_style_tag_type: Some(*tag_type),
                     variants: lowered_variants,
                     methods,
                 })
@@ -426,6 +433,7 @@ impl<'a> CSharpLowerer<'a> {
                 Some(CSharpEnum {
                     class_name,
                     kind: CSharpEnumKind::Data,
+                    c_style_tag_type: None,
                     variants,
                     methods,
                 })
@@ -984,6 +992,44 @@ mod tests {
         assert!(
             enums.contains("outer"),
             "expecting the data enum referencing another data enum to join on a later fixed-point iteration",
+        );
+    }
+
+    /// C# enums only support fixed-width integral backing types. A Rust
+    /// `#[repr(usize)]` C-style enum therefore stays out of the supported
+    /// set so the backend never tries to render an illegal `enum : nuint`.
+    #[test]
+    fn c_style_enum_with_usize_repr_is_not_admitted() {
+        let mut contract = FfiContract {
+            package: PackageInfo {
+                name: "demo_lib".to_string(),
+                version: None,
+            },
+            functions: vec![],
+            catalog: Default::default(),
+        };
+        contract.catalog.insert_enum(EnumDef {
+            id: EnumId::new("platform_status"),
+            repr: EnumRepr::CStyle {
+                tag_type: PrimitiveType::USize,
+                variants: vec![crate::ir::definitions::CStyleVariant {
+                    name: "Ready".into(),
+                    discriminant: 0,
+                    doc: None,
+                }],
+            },
+            is_error: false,
+            constructors: vec![],
+            methods: vec![],
+            doc: None,
+            deprecated: None,
+        });
+
+        let (_records, enums) = CSharpLowerer::compute_supported_sets(&contract);
+
+        assert!(
+            !enums.contains("platform_status"),
+            "expecting repr(usize) C-style enums to stay unsupported until the backend has a legal C# projection",
         );
     }
 }

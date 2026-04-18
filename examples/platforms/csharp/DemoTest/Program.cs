@@ -270,16 +270,17 @@ public static class DemoTest
     }
 
     /// <summary>
-    /// C-style enums (Status, Direction) pass across P/Invoke as their
-    /// backing int — no wire encoding. Instance methods show up as C#
+    /// C-style enums (Status, Direction, LogLevel) pass across P/Invoke as
+    /// their declared backing type — no wire encoding. Instance methods show up as C#
     /// extension methods; static factories live on a `{Name}Methods`
     /// companion class.
     /// </summary>
     private static void TestCStyleEnums()
     {
-        Console.WriteLine("Testing C-style enums (Status, Direction)...");
+        Console.WriteLine("Testing C-style enums (Status, Direction, LogLevel)...");
 
-        // Direct P/Invoke round-trip — the CLR marshals the enum as int.
+        // Direct P/Invoke round-trip — the CLR marshals the enum as its
+        // declared backing type.
         Require(EchoStatus(Status.Active) == Status.Active, "EchoStatus(Active)");
         Require(EchoStatus(Status.Pending) == Status.Pending, "EchoStatus(Pending)");
         Require(StatusToString(Status.Active) == "active", "StatusToString(Active)");
@@ -304,6 +305,14 @@ public static class DemoTest
         Require(DirectionMethods.FromDegrees(180.0) == Direction.South, "FromDegrees(180) == South");
         Require(DirectionMethods.Count() == 4u, "Count() == 4");
         Require(DirectionMethods.New(2) == Direction.East, "New(2) == East");
+
+        // Non-default backing type: LogLevel is #[repr(u8)] on the Rust side,
+        // so these direct P/Invoke calls catch any accidental `enum : int`
+        // projection in the generated C# surface.
+        Require(EchoLogLevel(LogLevel.Trace) == LogLevel.Trace, "EchoLogLevel(Trace)");
+        Require(EchoLogLevel(LogLevel.Error) == LogLevel.Error, "EchoLogLevel(Error)");
+        Require(ShouldLog(LogLevel.Error, LogLevel.Warn), "ShouldLog(Error, Warn)");
+        Require(!ShouldLog(LogLevel.Debug, LogLevel.Info), "!ShouldLog(Debug, Info)");
 
         Console.WriteLine("  PASS\n");
     }

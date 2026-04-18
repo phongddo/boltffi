@@ -1,5 +1,6 @@
 use std::fmt;
 
+use crate::ir::types::PrimitiveType;
 use boltffi_ffi_rules::naming::{LibraryName, Name};
 
 /// Represents a lowered C# module, containing everything the templates need
@@ -299,6 +300,10 @@ pub struct CSharpEnum {
     pub class_name: String,
     /// Whether this is a C-style or data enum — drives the rendering shape.
     pub kind: CSharpEnumKind,
+    /// For C-style enums, the declared integral repr primitive. `None` for
+    /// data enums, whose public surface is always a reference type and whose
+    /// wire tag stays an implementation detail of the codec.
+    pub c_style_tag_type: Option<PrimitiveType>,
     /// Variants, in declaration order. The wire tag is the variant's index
     /// in this list (per `EnumTagStrategy::OrdinalIndex`), so order is
     /// load-bearing.
@@ -358,6 +363,72 @@ impl CSharpEnum {
 
     pub fn has_methods(&self) -> bool {
         !self.methods.is_empty()
+    }
+
+    fn c_style_tag_type(&self) -> PrimitiveType {
+        self.c_style_tag_type
+            .expect("c-style enum helpers only apply to C-style enums")
+    }
+
+    /// The C# enum backing type keyword (`byte`, `short`, `int`, `long`,
+    /// etc.). C# does not permit `nint` / `nuint` enum base types, so those
+    /// reprs are filtered out before a plan is ever constructed.
+    pub fn c_style_backing_type(&self) -> &'static str {
+        match self.c_style_tag_type() {
+            PrimitiveType::I8 => "sbyte",
+            PrimitiveType::U8 => "byte",
+            PrimitiveType::I16 => "short",
+            PrimitiveType::U16 => "ushort",
+            PrimitiveType::I32 => "int",
+            PrimitiveType::U32 => "uint",
+            PrimitiveType::I64 => "long",
+            PrimitiveType::U64 => "ulong",
+            PrimitiveType::Bool
+            | PrimitiveType::ISize
+            | PrimitiveType::USize
+            | PrimitiveType::F32
+            | PrimitiveType::F64 => panic!("unsupported C# enum backing type"),
+        }
+    }
+
+    pub fn c_style_wire_size(&self) -> usize {
+        self.c_style_tag_type().wire_size_bytes()
+    }
+
+    pub fn c_style_read_method(&self) -> &'static str {
+        match self.c_style_tag_type() {
+            PrimitiveType::I8 => "ReadI8",
+            PrimitiveType::U8 => "ReadU8",
+            PrimitiveType::I16 => "ReadI16",
+            PrimitiveType::U16 => "ReadU16",
+            PrimitiveType::I32 => "ReadI32",
+            PrimitiveType::U32 => "ReadU32",
+            PrimitiveType::I64 => "ReadI64",
+            PrimitiveType::U64 => "ReadU64",
+            PrimitiveType::Bool
+            | PrimitiveType::ISize
+            | PrimitiveType::USize
+            | PrimitiveType::F32
+            | PrimitiveType::F64 => panic!("unsupported C# enum backing type"),
+        }
+    }
+
+    pub fn c_style_write_method(&self) -> &'static str {
+        match self.c_style_tag_type() {
+            PrimitiveType::I8 => "WriteI8",
+            PrimitiveType::U8 => "WriteU8",
+            PrimitiveType::I16 => "WriteI16",
+            PrimitiveType::U16 => "WriteU16",
+            PrimitiveType::I32 => "WriteI32",
+            PrimitiveType::U32 => "WriteU32",
+            PrimitiveType::I64 => "WriteI64",
+            PrimitiveType::U64 => "WriteU64",
+            PrimitiveType::Bool
+            | PrimitiveType::ISize
+            | PrimitiveType::USize
+            | PrimitiveType::F32
+            | PrimitiveType::F64 => panic!("unsupported C# enum backing type"),
+        }
     }
 
     /// Whether any variant payload field is a `string`. Drives the
@@ -425,7 +496,7 @@ pub enum CSharpReceiver {
     /// {params})` in the companion class — giving `d.Name(args)` call
     /// syntax without requiring members on the enum itself. `self`
     /// passes directly to the DllImport since the CLR marshals the enum
-    /// as its backing int.
+    /// as its declared backing integral type.
     InstanceExtension,
     /// Instance method on a type that can hold its own members — data
     /// enums (on the abstract record) and records. Renders as a native
@@ -491,7 +562,7 @@ impl CSharpMethod {
     /// receiver-dependent self declaration prepended when the method is
     /// an instance method:
     /// - `InstanceExtension` — prepends `{OwnerClass} self`, relying on
-    ///   the CLR to marshal the enum as its backing int.
+    ///   the CLR to marshal the enum as its declared backing integral type.
     /// - `InstanceNative` — prepends `byte[] self, UIntPtr selfLen` for
     ///   wire-encoded `this`; passes `{OwnerClass} self` for blittable
     ///   types.
@@ -892,6 +963,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Status".to_string(),
             kind: CSharpEnumKind::CStyle,
+            c_style_tag_type: Some(PrimitiveType::I32),
             variants: vec![],
             methods: vec![],
         };
@@ -904,6 +976,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Shape".to_string(),
             kind: CSharpEnumKind::Data,
+            c_style_tag_type: None,
             variants: vec![],
             methods: vec![],
         };
@@ -911,9 +984,26 @@ mod tests {
         assert!(!enumeration.is_c_style());
     }
 
-    /// C-style enums ride P/Invoke as their backing `int`, so they count as
-    /// blittable leaves alongside the numeric primitives. Data enums never
-    /// do — their payloads are variable-width and must wire-encode.
+    #[test]
+    fn c_style_enum_helpers_use_u8_backing_type() {
+        let enumeration = CSharpEnum {
+            class_name: "LogLevel".to_string(),
+            kind: CSharpEnumKind::CStyle,
+            c_style_tag_type: Some(PrimitiveType::U8),
+            variants: vec![],
+            methods: vec![],
+        };
+
+        assert_eq!(enumeration.c_style_backing_type(), "byte");
+        assert_eq!(enumeration.c_style_wire_size(), 1);
+        assert_eq!(enumeration.c_style_read_method(), "ReadU8");
+        assert_eq!(enumeration.c_style_write_method(), "WriteU8");
+    }
+
+    /// C-style enums ride P/Invoke as their declared backing integral type,
+    /// so they count as blittable leaves alongside the numeric primitives.
+    /// Data enums never do — their payloads are variable-width and must
+    /// wire-encode.
     #[rstest]
     #[case::int(CSharpType::Int, true)]
     #[case::double(CSharpType::Double, true)]

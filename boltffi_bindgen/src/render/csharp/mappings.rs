@@ -27,11 +27,35 @@ pub fn csharp_type(primitive: PrimitiveType) -> CSharpType {
     }
 }
 
+/// Maps a Rust C-style enum repr primitive to a valid C# enum backing type.
+///
+/// C# enums may only be backed by the fixed-width integral primitives —
+/// `nint` / `nuint` are not legal enum base types, so `isize` / `usize`
+/// stay unsupported for now.
+pub fn csharp_enum_backing_type(tag_type: PrimitiveType) -> Option<CSharpType> {
+    match tag_type {
+        PrimitiveType::I8 => Some(CSharpType::SByte),
+        PrimitiveType::U8 => Some(CSharpType::Byte),
+        PrimitiveType::I16 => Some(CSharpType::Short),
+        PrimitiveType::U16 => Some(CSharpType::UShort),
+        PrimitiveType::I32 => Some(CSharpType::Int),
+        PrimitiveType::U32 => Some(CSharpType::UInt),
+        PrimitiveType::I64 => Some(CSharpType::Long),
+        PrimitiveType::U64 => Some(CSharpType::ULong),
+        PrimitiveType::Bool
+        | PrimitiveType::ISize
+        | PrimitiveType::USize
+        | PrimitiveType::F32
+        | PrimitiveType::F64 => None,
+    }
+}
+
 /// Maps a resolved enum definition to the corresponding [`CSharpType`].
 ///
 /// The `EnumRepr` drives the split: a C-style enum (all unit variants)
-/// becomes [`CSharpType::CStyleEnum`] and rides P/Invoke as its backing
-/// `int`; a data enum (at least one payload-carrying variant) becomes
+/// becomes [`CSharpType::CStyleEnum`] and rides P/Invoke as its declared
+/// backing integral type; a data enum (at least one payload-carrying
+/// variant) becomes
 /// [`CSharpType::DataEnum`] and wire-encodes. Everything downstream — the
 /// return-kind dispatch, param marshaling, record blittability — keys off
 /// this one decision.
@@ -116,5 +140,18 @@ mod tests {
             csharp_enum_type(&def),
             CSharpType::CStyleEnum("LogLevel".to_string())
         );
+    }
+
+    #[test]
+    fn enum_backing_type_maps_u8_to_byte() {
+        assert_eq!(
+            csharp_enum_backing_type(PrimitiveType::U8),
+            Some(CSharpType::Byte)
+        );
+    }
+
+    #[test]
+    fn enum_backing_type_rejects_usize() {
+        assert_eq!(csharp_enum_backing_type(PrimitiveType::USize), None);
     }
 }

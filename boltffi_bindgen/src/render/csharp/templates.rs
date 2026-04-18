@@ -48,9 +48,10 @@ pub struct RecordTemplate<'a> {
 /// Renders a single C-style enum as a standalone `.cs` file: the native
 /// `public enum` declaration plus the `*Wire` static helper class that
 /// supplies `Decode` and the `WireEncodeTo` extension method. The enum
-/// itself passes across P/Invoke as its backing `int`; the wire helpers
-/// exist so records and data-enum variants embedding the enum can stay
-/// on the same `this.Field.WireEncodeTo(wire)` call shape as records.
+/// itself passes across P/Invoke as its declared integral backing type;
+/// the wire helpers exist so records and data-enum variants embedding the
+/// enum can stay on the same `this.Field.WireEncodeTo(wire)` call shape
+/// as records.
 #[derive(Template)]
 #[template(path = "render_csharp/enum_c_style.txt", escape = "none")]
 pub struct EnumCStyleTemplate<'a> {
@@ -209,11 +210,11 @@ mod tests {
     }
 
     /// Flag: the canonical "blittable record with a C-style enum field."
-    /// Status is an `enum : int` at the CLR level, so embedding it
-    /// alongside a `uint` keeps the record on the zero-copy P/Invoke path
-    /// with `[StructLayout(Sequential)]`. The wire helpers are still
-    /// emitted — they exist so non-blittable records that embed `Flag`
-    /// can reach its wire encoder without a second rendering shape.
+    /// Status is an `enum : int` here, so embedding it alongside a `uint`
+    /// keeps the record on the zero-copy P/Invoke path with
+    /// `[StructLayout(Sequential)]`. The wire helpers are still emitted —
+    /// they exist so non-blittable records that embed `Flag` can reach its
+    /// wire encoder without a second rendering shape.
     #[test]
     fn snapshot_blittable_record_with_cstyle_enum_field() {
         let record = CSharpRecord {
@@ -282,6 +283,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Direction".to_string(),
             kind: CSharpEnumKind::CStyle,
+            c_style_tag_type: Some(crate::ir::types::PrimitiveType::I32),
             variants: vec![
                 CSharpEnumVariant {
                     name: "North".to_string(),
@@ -367,6 +369,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Status".to_string(),
             kind: CSharpEnumKind::CStyle,
+            c_style_tag_type: Some(crate::ir::types::PrimitiveType::I32),
             variants: vec![
                 CSharpEnumVariant {
                     name: "Active".to_string(),
@@ -393,6 +396,52 @@ mod tests {
         insta::assert_snapshot!(template.render().unwrap());
     }
 
+    /// LogLevel: a non-default C-style enum backing type. The C# surface
+    /// must preserve the `byte` backing type so direct P/Invoke matches
+    /// Rust's `#[repr(u8)]`, and the wire helper must use the 1-byte read /
+    /// write ops rather than hard-coding `I32`.
+    #[test]
+    fn snapshot_c_style_enum_log_level_u8() {
+        let enumeration = CSharpEnum {
+            class_name: "LogLevel".to_string(),
+            kind: CSharpEnumKind::CStyle,
+            c_style_tag_type: Some(crate::ir::types::PrimitiveType::U8),
+            variants: vec![
+                CSharpEnumVariant {
+                    name: "Trace".to_string(),
+                    tag: 0,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Debug".to_string(),
+                    tag: 1,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Info".to_string(),
+                    tag: 2,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Warn".to_string(),
+                    tag: 3,
+                    fields: vec![],
+                },
+                CSharpEnumVariant {
+                    name: "Error".to_string(),
+                    tag: 4,
+                    fields: vec![],
+                },
+            ],
+            methods: vec![],
+        };
+        let template = EnumCStyleTemplate {
+            enumeration: &enumeration,
+            namespace: "Demo",
+        };
+        insta::assert_snapshot!(template.render().unwrap());
+    }
+
     /// Shape: the canonical data enum exercising every payload shape —
     /// a single-field variant (Circle), a multi-field variant (Rectangle),
     /// and a unit variant (Point). Renders as `abstract record Shape`
@@ -404,6 +453,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Shape".to_string(),
             kind: CSharpEnumKind::Data,
+            c_style_tag_type: None,
             variants: vec![
                 CSharpEnumVariant {
                     name: "Circle".to_string(),
@@ -460,6 +510,7 @@ mod tests {
         let enumeration = CSharpEnum {
             class_name: "Shape".to_string(),
             kind: CSharpEnumKind::Data,
+            c_style_tag_type: None,
             variants: vec![CSharpEnumVariant {
                 name: "Circle".to_string(),
                 tag: 0,

@@ -12,7 +12,7 @@ using UniffiPoint = uniffi.demo.Point;
 
 namespace BoltFFIBench;
 
-internal interface IWireReaderBindings<TPoint, TAddress, TPerson, TLine>
+public interface IWireReaderBindings<TPoint, TAddress, TPerson, TLine>
 {
     void Noop();
     int EchoI32(int value);
@@ -28,7 +28,7 @@ internal interface IWireReaderBindings<TPoint, TAddress, TPerson, TLine>
     TLine EchoLine(TLine line);
 }
 
-internal sealed class BoltffiWireReaderBindings : IWireReaderBindings<BoltffiPoint, BoltffiAddress, BoltffiPerson, BoltffiLine>
+public sealed class BoltffiWireReaderBindings : IWireReaderBindings<BoltffiPoint, BoltffiAddress, BoltffiPerson, BoltffiLine>
 {
     public static readonly BoltffiWireReaderBindings Instance = new();
 
@@ -59,7 +59,7 @@ internal sealed class BoltffiWireReaderBindings : IWireReaderBindings<BoltffiPoi
     public BoltffiLine EchoLine(BoltffiLine line) => BoltffiBindings.EchoLine(line);
 }
 
-internal sealed class UniffiWireReaderBindings : IWireReaderBindings<UniffiPoint, UniffiAddress, UniffiPerson, UniffiLine>
+public sealed class UniffiWireReaderBindings : IWireReaderBindings<UniffiPoint, UniffiAddress, UniffiPerson, UniffiLine>
 {
     public static readonly UniffiWireReaderBindings Instance = new();
 
@@ -145,14 +145,14 @@ public abstract class WireReaderBenchmarks<TPoint, TAddress, TPerson, TLine>
 }
 
 [MemoryDiagnoser]
-public sealed class BoltffiWireReaderBenchmarks : WireReaderBenchmarks<BoltffiPoint, BoltffiAddress, BoltffiPerson, BoltffiLine>
+public class BoltffiWireReaderBenchmarks : WireReaderBenchmarks<BoltffiPoint, BoltffiAddress, BoltffiPerson, BoltffiLine>
 {
     protected override IWireReaderBindings<BoltffiPoint, BoltffiAddress, BoltffiPerson, BoltffiLine> Bindings =>
         BoltffiWireReaderBindings.Instance;
 }
 
 [MemoryDiagnoser]
-public sealed class UniffiWireReaderBenchmarks : WireReaderBenchmarks<UniffiPoint, UniffiAddress, UniffiPerson, UniffiLine>
+public class UniffiWireReaderBenchmarks : WireReaderBenchmarks<UniffiPoint, UniffiAddress, UniffiPerson, UniffiLine>
 {
     protected override IWireReaderBindings<UniffiPoint, UniffiAddress, UniffiPerson, UniffiLine> Bindings =>
         UniffiWireReaderBindings.Instance;

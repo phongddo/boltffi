@@ -6,7 +6,7 @@ using System;
 
 namespace {{ namespace }}
 {
-    public enum {{ enumeration.class_name }} : int
+    public enum {{ enumeration.class_name }} : {{ enumeration.c_style_backing_type() }}
     {
 {%- for variant in enumeration.variants %}
         {{ variant.name }} = {{ variant.tag }}{% if !loop.last %},{% endif %}
@@ -15,13 +15,13 @@ namespace {{ namespace }}
 
     internal static class {{ enumeration.class_name }}Wire
     {
-        internal const int WireEncodedSize = 4;
+        internal const int WireEncodedSize = {{ enumeration.c_style_wire_size() }};
 
         internal static {{ enumeration.class_name }} Decode(WireReader reader) =>
-            ({{ enumeration.class_name }})reader.ReadI32();
+            ({{ enumeration.class_name }})reader.{{ enumeration.c_style_read_method() }}();
 
         internal static void WireEncodeTo(this {{ enumeration.class_name }} value, WireWriter wire) =>
-            wire.WriteI32((int)value);
+            wire.{{ enumeration.c_style_write_method() }}(({{ enumeration.c_style_backing_type() }})value);
     }
 {%- if enumeration.has_methods() %}
 

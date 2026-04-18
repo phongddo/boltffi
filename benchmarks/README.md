@@ -135,7 +135,7 @@ Benchmarks are defined in Rust in `examples/demo`. You do **not** touch separate
    - Kotlin (JNI + JNA/UniFFI): [`harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt`](./harnesses/kotlin-jvm-bench/src/main/kotlin/com/example/bench_compare/JmhBenchmarks.kt)
    - Java FFM: [`harnesses/java-jvm-bench/src/main/java/com/example/bench_compare/{BoltffiJavaBench,UniffiJavaBench}.java`](./harnesses/java-jvm-bench/src/main/java/com/example/bench_compare)
    - WASM: [`harnesses/wasm-bench/bench.mjs`](./harnesses/wasm-bench/bench.mjs)
-   - .NET: [`harnesses/dotnet-bench/WireReaderBenchmarks.cs`](./harnesses/dotnet-bench/WireReaderBenchmarks.cs)
+   - .NET: [`harnesses/dotnet-bench/{WireReaderBenchmarks,EnumWireBenchmarks}.cs`](./harnesses/dotnet-bench)
    - iOS / Android: the harness apps under [`harnesses/ios-app`](./harnesses/ios-app) and [`harnesses/android-app`](./harnesses/android-app)
 5. **Verify discovery and coverage**:
 

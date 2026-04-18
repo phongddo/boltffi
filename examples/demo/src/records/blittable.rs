@@ -89,6 +89,7 @@ pub fn try_make_point(x: f64, y: f64) -> Option<Point> {
 }
 
 #[export]
+#[benchmark_candidate(function, uniffi)]
 pub fn make_point(x: f64, y: f64) -> Point {
     Point { x, y }
 }

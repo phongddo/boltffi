@@ -1188,11 +1188,15 @@ mod tests {
         );
     }
 
-    fn c_style_enum(id: &str, variants: Vec<&str>) -> EnumDef {
+    fn c_style_enum_with_tag_type(
+        id: &str,
+        tag_type: PrimitiveType,
+        variants: Vec<&str>,
+    ) -> EnumDef {
         EnumDef {
             id: EnumId::new(id),
             repr: EnumRepr::CStyle {
-                tag_type: PrimitiveType::I32,
+                tag_type,
                 variants: variants
                     .into_iter()
                     .enumerate()
@@ -1211,6 +1215,10 @@ mod tests {
         }
     }
 
+    fn c_style_enum(id: &str, variants: Vec<&str>) -> EnumDef {
+        c_style_enum_with_tag_type(id, PrimitiveType::I32, variants)
+    }
+
     fn emit_files_for(contract: &FfiContract) -> Vec<(String, String)> {
         let output = emit_contract(contract);
         output
@@ -1224,7 +1232,8 @@ mod tests {
     /// keeps the zero-copy `[StructLayout(Sequential)]` path even though
     /// the IR's own blittability check (which predates enum support) says
     /// otherwise. The C# backend extends the rule locally because the CLR
-    /// lays `enum : int` out bit-for-bit identically to `int`.
+    /// lays fixed-width `enum : T` values out bit-for-bit identically to
+    /// their declared integral backing type.
     #[test]
     fn emit_repr_c_record_with_c_style_enum_field_stays_blittable() {
         let mut contract = empty_contract();
@@ -1444,6 +1453,43 @@ mod tests {
             &status_cs.1,
             "internal static class StatusWire",
             "the paired static helper class with Decode and the WireEncodeTo extension",
+        );
+    }
+
+    #[test]
+    fn emit_u8_c_style_enum_uses_byte_backing_type_and_u8_wire_helpers() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_enum(c_style_enum_with_tag_type(
+            "log_level",
+            PrimitiveType::U8,
+            vec!["Trace", "Debug", "Info", "Warn", "Error"],
+        ));
+
+        let files = emit_files_for(&contract);
+
+        let log_level_cs = files
+            .iter()
+            .find(|(name, _)| name == "LogLevel.cs")
+            .expect("expecting LogLevel.cs to be generated for the log_level enum");
+        assert_source_contains(
+            &log_level_cs.1,
+            "public enum LogLevel : byte",
+            "the native C# enum declaration with the repr(u8) backing type preserved",
+        );
+        assert_source_contains(
+            &log_level_cs.1,
+            "internal const int WireEncodedSize = 1;",
+            "the wire helper to size non-i32 C-style enums from their actual backing type",
+        );
+        assert_source_contains(
+            &log_level_cs.1,
+            "(LogLevel)reader.ReadU8()",
+            "the decode helper to use the matching 1-byte wire reader",
+        );
+        assert_source_contains(
+            &log_level_cs.1,
+            "wire.WriteU8((byte)value);",
+            "the encode helper to cast through the enum's declared byte backing type",
         );
     }
 }

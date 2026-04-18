@@ -67,7 +67,10 @@ HARNESS_SOURCES: tuple[HarnessSource, ...] = (
     ),
     HarnessSource(
         name="dotnet_benchmarkdotnet",
-        path=REPO_ROOT / "benchmarks/harnesses/dotnet-bench/WireReaderBenchmarks.cs",
+        path=(
+            REPO_ROOT / "benchmarks/harnesses/dotnet-bench/WireReaderBenchmarks.cs",
+            REPO_ROOT / "benchmarks/harnesses/dotnet-bench/EnumWireBenchmarks.cs",
+        ),
         pattern=re.compile(r"\[Benchmark\]\s+public\s+[^\n(]+?\s+([A-Za-z0-9_]+)\(", re.MULTILINE),
     ),
 )

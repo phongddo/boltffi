@@ -15,6 +15,11 @@ METHOD_CASE_IDS: dict[str, str] = {
     "EchoAddress": "echo_address",
     "EchoPerson": "echo_person",
     "EchoLine": "echo_line",
+    "EchoDirection_North": "echo_direction_north",
+    "EchoDirection_West": "echo_direction_west",
+    "EchoTaskStatus_UnitVariant": "echo_task_status_unit_variant",
+    "EchoTaskStatus_SmallPayload": "echo_task_status_small_payload",
+    "EchoTaskStatus_CompletedPayload": "echo_task_status_completed_payload",
 }
 
 
