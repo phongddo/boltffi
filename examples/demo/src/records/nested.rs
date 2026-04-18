@@ -11,11 +11,13 @@ pub struct Line {
     pub end: Point,
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn echo_line(l: Line) -> Line {
     l
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn make_line(x1: f64, y1: f64, x2: f64, y2: f64) -> Line {
     Line {
@@ -24,6 +26,7 @@ pub fn make_line(x1: f64, y1: f64, x2: f64, y2: f64) -> Line {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn line_length(l: Line) -> f64 {
     let dx = l.end.x - l.start.x;
@@ -47,11 +50,13 @@ pub struct Rect {
     pub dimensions: Dimensions,
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn echo_rect(r: Rect) -> Rect {
     r
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn rect_area(r: Rect) -> f64 {
     r.dimensions.width * r.dimensions.height

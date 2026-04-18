@@ -10,16 +10,19 @@ pub struct Person {
     pub age: u32,
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn echo_person(p: Person) -> Person {
     p
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn make_person(name: String, age: u32) -> Person {
     Person { name, age }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn greet_person(p: Person) -> String {
     format!("Hello, {}! You are {} years old.", p.name, p.age)
@@ -34,11 +37,13 @@ pub struct Address {
     pub zip: String,
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn echo_address(a: Address) -> Address {
     a
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn format_address(a: Address) -> String {
     format!("{}, {}, {}", a.street, a.city, a.zip)

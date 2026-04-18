@@ -102,11 +102,13 @@ impl Direction {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn echo_direction(d: Direction) -> Direction {
     d
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn opposite_direction(d: Direction) -> Direction {
     match d {
@@ -117,6 +119,7 @@ pub fn opposite_direction(d: Direction) -> Direction {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn direction_to_degrees(direction: Direction) -> i32 {
     match direction {
@@ -127,6 +130,7 @@ pub fn direction_to_degrees(direction: Direction) -> i32 {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn generate_directions(count: i32) -> Vec<Direction> {
     let directions = [
@@ -140,6 +144,7 @@ pub fn generate_directions(count: i32) -> Vec<Direction> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn count_north(directions: Vec<Direction>) -> i32 {
     directions
@@ -148,6 +153,7 @@ pub fn count_north(directions: Vec<Direction>) -> i32 {
         .count() as i32
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn find_direction(id: i32) -> Option<Direction> {
     match id {
@@ -159,6 +165,7 @@ pub fn find_direction(id: i32) -> Option<Direction> {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn find_directions(count: i32) -> Option<Vec<Direction>> {
     if count > 0 {

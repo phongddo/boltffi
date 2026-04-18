@@ -114,6 +114,7 @@ pub struct BenchmarkUserProfile {
     pub is_active: bool,
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn generate_user_profiles(count: i32) -> Vec<BenchmarkUserProfile> {
     (0..count as i64)
@@ -141,11 +142,13 @@ pub fn generate_user_profiles(count: i32) -> Vec<BenchmarkUserProfile> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn sum_user_scores(users: Vec<BenchmarkUserProfile>) -> f64 {
     users.iter().map(|user| user.score).sum()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn count_active_users(users: Vec<BenchmarkUserProfile>) -> i32 {
     users.iter().filter(|user| user.is_active).count() as i32

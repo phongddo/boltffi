@@ -152,6 +152,7 @@ pub enum TaskStatus {
     Failed { error_code: i32, retry_count: i32 },
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn get_status_progress(status: TaskStatus) -> i32 {
     match status {
@@ -162,6 +163,7 @@ pub fn get_status_progress(status: TaskStatus) -> i32 {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn is_status_complete(status: TaskStatus) -> bool {
     matches!(status, TaskStatus::Completed { .. })

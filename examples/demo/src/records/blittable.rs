@@ -296,6 +296,7 @@ impl DataPoint {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn generate_locations(count: i32) -> Vec<Location> {
     (0..count)
@@ -310,16 +311,19 @@ pub fn generate_locations(count: i32) -> Vec<Location> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn process_locations(locations: Vec<Location>) -> i32 {
     locations.len() as i32
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn sum_ratings(locations: Vec<Location>) -> f64 {
     locations.iter().map(|location| location.rating).sum()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn generate_trades(count: i32) -> Vec<Trade> {
     (0..count)
@@ -337,11 +341,13 @@ pub fn generate_trades(count: i32) -> Vec<Trade> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn sum_trade_volumes(trades: Vec<Trade>) -> i64 {
     trades.iter().map(|trade| trade.volume).sum()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn generate_particles(count: i32) -> Vec<Particle> {
     (0..count)
@@ -360,11 +366,13 @@ pub fn generate_particles(count: i32) -> Vec<Particle> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn sum_particle_masses(particles: Vec<Particle>) -> f64 {
     particles.iter().map(|particle| particle.mass).sum()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn generate_sensor_readings(count: i32) -> Vec<SensorReading> {
     (0..count)
@@ -382,6 +390,7 @@ pub fn generate_sensor_readings(count: i32) -> Vec<SensorReading> {
         .collect()
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi, wasm_bindgen)]
 pub fn avg_sensor_temperature(readings: Vec<SensorReading>) -> f64 {
     let count = readings.len();
@@ -396,6 +405,7 @@ pub fn avg_sensor_temperature(readings: Vec<SensorReading>) -> f64 {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn find_location(id: i32) -> Option<Location> {
     if id > 0 {
@@ -412,6 +422,7 @@ pub fn find_location(id: i32) -> Option<Location> {
     }
 }
 
+#[export]
 #[benchmark_candidate(function, uniffi)]
 pub fn find_locations(count: i32) -> Option<Vec<Location>> {
     if count > 0 {

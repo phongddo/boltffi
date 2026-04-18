@@ -255,6 +255,7 @@ pub fn invoke_boxed_offset_callback(
     callback.offset(value, delta)
 }
 
+#[export]
 #[benchmark_candidate(callback_interface, uniffi)]
 pub trait DataProvider: Send + Sync {
     fn get_count(&self) -> u32;
@@ -272,6 +273,7 @@ impl Default for DataConsumer {
     }
 }
 
+#[export]
 #[benchmark_candidate(impl, uniffi, constructor = "new")]
 impl DataConsumer {
     pub fn new() -> Self {
