@@ -258,6 +258,8 @@ pub struct AppleConfig {
     pub xcframework: XcframeworkConfig,
     #[serde(default)]
     pub spm: SpmConfig,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -276,11 +278,38 @@ pub struct AndroidConfig {
     pub header: HeaderConfig,
     #[serde(default)]
     pub pack: AndroidPackConfig,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
 pub struct HeaderConfig {
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum DebugSymbolsFormat {
+    #[default]
+    Zip,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum DebugSymbolsBundle {
+    #[default]
+    Unstripped,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Default)]
+pub struct DebugSymbolsConfig {
+    #[serde(default)]
+    pub enabled: bool,
+    pub output: Option<PathBuf>,
+    #[serde(default)]
+    pub format: DebugSymbolsFormat,
+    #[serde(default)]
+    pub bundle: DebugSymbolsBundle,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone, Default)]
@@ -336,6 +365,8 @@ pub struct JavaJvmConfig {
     pub host_targets: Option<Vec<JavaHostTarget>>,
     #[serde(default)]
     pub strip_symbols: bool,
+    #[serde(default)]
+    pub debug_symbols: DebugSymbolsConfig,
 }
 
 impl Default for JavaJvmConfig {
@@ -345,6 +376,7 @@ impl Default for JavaJvmConfig {
             output: default_java_jvm_output(),
             host_targets: None,
             strip_symbols: false,
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -501,6 +533,7 @@ impl Default for AppleConfig {
             header: HeaderConfig::default(),
             xcframework: XcframeworkConfig::default(),
             spm: SpmConfig::default(),
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -516,6 +549,7 @@ impl Default for AndroidConfig {
             kotlin: AndroidKotlinConfig::default(),
             header: HeaderConfig::default(),
             pack: AndroidPackConfig::default(),
+            debug_symbols: DebugSymbolsConfig::default(),
         }
     }
 }
@@ -929,6 +963,27 @@ impl Config {
             .unwrap_or_else(|| self.targets.apple.output.clone())
     }
 
+    pub fn apple_debug_symbols_enabled(&self) -> bool {
+        self.targets.apple.debug_symbols.enabled
+    }
+
+    pub fn apple_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .apple
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.apple.output.join("symbols"))
+    }
+
+    pub fn apple_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.apple.debug_symbols.format
+    }
+
+    pub fn apple_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.apple.debug_symbols.bundle
+    }
+
     pub fn apple_spm_layout(&self) -> SpmLayout {
         self.targets.apple.spm.layout
     }
@@ -1019,6 +1074,27 @@ impl Config {
             .output
             .clone()
             .unwrap_or_else(|| self.targets.android.output.join("jniLibs"))
+    }
+
+    pub fn android_debug_symbols_enabled(&self) -> bool {
+        self.targets.android.debug_symbols.enabled
+    }
+
+    pub fn android_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .android
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.android.output.join("symbols"))
+    }
+
+    pub fn android_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.android.debug_symbols.format
+    }
+
+    pub fn android_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.android.debug_symbols.bundle
     }
 
     pub fn kotlin_class_name(&self) -> String {
@@ -1141,6 +1217,28 @@ impl Config {
 
     pub fn java_jvm_strip_symbols(&self) -> bool {
         self.targets.java.jvm.strip_symbols
+    }
+
+    pub fn java_jvm_debug_symbols_enabled(&self) -> bool {
+        self.targets.java.jvm.debug_symbols.enabled
+    }
+
+    pub fn java_jvm_debug_symbols_output(&self) -> PathBuf {
+        self.targets
+            .java
+            .jvm
+            .debug_symbols
+            .output
+            .clone()
+            .unwrap_or_else(|| self.targets.java.jvm.output.join("symbols"))
+    }
+
+    pub fn java_jvm_debug_symbols_format(&self) -> DebugSymbolsFormat {
+        self.targets.java.jvm.debug_symbols.format
+    }
+
+    pub fn java_jvm_debug_symbols_bundle(&self) -> DebugSymbolsBundle {
+        self.targets.java.jvm.debug_symbols.bundle
     }
 
     pub fn java_jvm_requested_host_targets(&self) -> &[JavaHostTarget] {
@@ -1810,6 +1908,80 @@ enabled = true
                 .expect("resolved current host")
                 .len(),
             1
+        );
+    }
+
+    #[test]
+    fn resolves_default_debug_symbols_outputs() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.java.jvm]
+enabled = true
+"#,
+        );
+
+        assert_eq!(
+            config.apple_debug_symbols_output(),
+            PathBuf::from("dist/apple/symbols")
+        );
+        assert_eq!(
+            config.android_debug_symbols_output(),
+            PathBuf::from("dist/android/symbols")
+        );
+        assert_eq!(
+            config.java_jvm_debug_symbols_output(),
+            PathBuf::from("dist/java/symbols")
+        );
+    }
+
+    #[test]
+    fn parses_target_debug_symbols_configuration() {
+        let config = parse_config(
+            r#"
+[package]
+name = "mylib"
+
+[targets.apple.debug_symbols]
+enabled = true
+output = "dist/apple/debug-artifacts"
+format = "zip"
+bundle = "unstripped"
+
+[targets.android.debug_symbols]
+enabled = true
+output = "dist/android/debug-artifacts"
+
+[targets.java.jvm]
+enabled = true
+
+[targets.java.jvm.debug_symbols]
+enabled = true
+output = "dist/java/debug-artifacts"
+"#,
+        );
+
+        assert!(config.apple_debug_symbols_enabled());
+        assert!(config.android_debug_symbols_enabled());
+        assert!(config.java_jvm_debug_symbols_enabled());
+        assert_eq!(
+            config.apple_debug_symbols_output(),
+            PathBuf::from("dist/apple/debug-artifacts")
+        );
+        assert_eq!(
+            config.android_debug_symbols_output(),
+            PathBuf::from("dist/android/debug-artifacts")
+        );
+        assert_eq!(
+            config.java_jvm_debug_symbols_output(),
+            PathBuf::from("dist/java/debug-artifacts")
+        );
+        assert_eq!(config.apple_debug_symbols_format(), DebugSymbolsFormat::Zip);
+        assert_eq!(
+            config.apple_debug_symbols_bundle(),
+            DebugSymbolsBundle::Unstripped
         );
     }
 

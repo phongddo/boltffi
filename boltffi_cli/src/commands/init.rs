@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 use crate::cli::Result;
 use crate::config::{
     AndroidConfig, AndroidKotlinConfig, AndroidPackConfig, AppleConfig, AppleSwiftConfig,
-    CSharpConfig, CargoConfig, Config, DartConfig, ErrorStyle, FactoryStyle, HeaderConfig,
-    JavaConfig, PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig,
+    CSharpConfig, CargoConfig, Config, DartConfig, DebugSymbolsConfig, ErrorStyle, FactoryStyle,
+    HeaderConfig, JavaConfig, PackageConfig, PythonConfig, SpmConfig, TargetsConfig, WasmConfig,
     XcframeworkConfig,
 };
 
@@ -105,6 +105,7 @@ fn create_default_config(package_name: &str) -> Config {
                     wrapper_sources: None,
                     skip_package_swift: false,
                 },
+                debug_symbols: DebugSymbolsConfig::default(),
             },
             android: AndroidConfig {
                 enabled: true,
@@ -124,6 +125,7 @@ fn create_default_config(package_name: &str) -> Config {
                 },
                 header: HeaderConfig { output: None },
                 pack: AndroidPackConfig { output: None },
+                debug_symbols: DebugSymbolsConfig::default(),
             },
             wasm: WasmConfig::default(),
             java: JavaConfig::default(),

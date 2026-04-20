@@ -6,6 +6,9 @@ use crate::commands::generate::{GenerateOptions, GenerateTarget, run_generate_wi
 use crate::commands::pack::PackAndroidOptions;
 use crate::config::Config;
 use crate::pack::PackError;
+use crate::pack::symbols::{
+    ensure_debug_symbols_profile_has_debuginfo, ensure_existing_debug_symbol_artifacts_are_usable,
+};
 use crate::reporter::Reporter;
 use crate::target::Platform;
 
@@ -36,6 +39,17 @@ pub(crate) fn pack_android(
     let android_targets = config.android_targets();
 
     if !options.execution.no_build {
+        if config.android_debug_symbols_enabled() {
+            ensure_debug_symbols_profile_has_debuginfo(
+                &build_cargo_args,
+                &build_profile,
+                "targets.android.debug_symbols",
+                &android_targets
+                    .iter()
+                    .map(|target| target.triple().to_string())
+                    .collect::<Vec<_>>(),
+            )?;
+        }
         let step = reporter.step("Building Android targets");
         build_android_targets(
             config,
@@ -88,6 +102,16 @@ pub(crate) fn pack_android(
             targets: missing_targets,
         }
         .into());
+    }
+
+    if options.execution.no_build && config.android_debug_symbols_enabled() {
+        ensure_existing_debug_symbol_artifacts_are_usable(
+            &android_libraries
+                .iter()
+                .map(|library| library.path.clone())
+                .collect::<Vec<_>>(),
+            "targets.android.debug_symbols",
+        )?;
     }
 
     let packager = AndroidPackager::new(config, android_libraries, build_profile.is_release_like());

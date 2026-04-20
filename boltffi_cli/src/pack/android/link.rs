@@ -5,6 +5,7 @@ use std::process::Command;
 use crate::cli::{CliError, Result};
 use crate::config::Config;
 use crate::pack::PackError;
+use crate::pack::symbols::{DebugSymbolArtifact, DebugSymbolArtifactKind, write_debug_symbols_zip};
 use crate::target::{BuiltLibrary, Platform, RustTarget};
 use crate::toolchain::AndroidToolchain;
 
@@ -15,6 +16,12 @@ pub struct AndroidPackager<'a> {
 }
 
 pub struct AndroidOutput;
+
+struct AndroidLinkedOutput {
+    target: RustTarget,
+    abi: &'static str,
+    path: PathBuf,
+}
 
 impl<'a> AndroidPackager<'a> {
     pub fn new(config: &'a Config, libraries: Vec<BuiltLibrary>, release: bool) -> Self {
@@ -55,14 +62,19 @@ impl<'a> AndroidPackager<'a> {
             return Err(CliError::FileNotFound(header_path));
         }
 
+        let mut linked_outputs = Vec::with_capacity(android_libs.len());
         for lib in &android_libs {
-            self.link_shared_library(
+            linked_outputs.push(self.link_shared_library(
                 lib,
                 &jnilibs_path,
                 &android_toolchain,
                 &jni_glue_path,
                 &header_include_dir,
-            )?;
+            )?);
+        }
+
+        if self.config.android_debug_symbols_enabled() {
+            write_android_debug_symbols(self.config, &linked_outputs)?;
         }
 
         self.remove_stale_packaged_libraries(&jnilibs_path, &android_libs)?;
@@ -126,7 +138,7 @@ impl<'a> AndroidPackager<'a> {
         android_toolchain: &AndroidToolchain,
         jni_glue_path: &Path,
         header_include_dir: &Path,
-    ) -> Result<PathBuf> {
+    ) -> Result<AndroidLinkedOutput> {
         let abi = library.target.architecture().android_abi();
         let abi_dir = jnilibs_path.join(abi);
 
@@ -151,15 +163,13 @@ impl<'a> AndroidPackager<'a> {
         let object_path = build_dir.join("jni_glue.o");
 
         let mut compile = Command::new(&clang);
-        compile
-            .arg("-c")
-            .arg("-fPIC")
-            .arg(if self.release { "-O3" } else { "-O0" })
-            .arg("-I")
-            .arg(header_include_dir)
-            .arg(jni_glue_path)
-            .arg("-o")
-            .arg(&object_path);
+        compile.args(android_jni_compile_args(
+            &object_path,
+            header_include_dir,
+            jni_glue_path,
+            self.release,
+            self.config.android_debug_symbols_enabled(),
+        ));
         run_command(compile)?;
 
         let mut link = Command::new(&clang);
@@ -170,8 +180,75 @@ impl<'a> AndroidPackager<'a> {
         ));
         run_command(link)?;
 
-        Ok(dest_path)
+        Ok(AndroidLinkedOutput {
+            target: library.target,
+            abi,
+            path: dest_path,
+        })
     }
+}
+
+fn android_jni_compile_args(
+    object_path: &Path,
+    header_include_dir: &Path,
+    jni_glue_path: &Path,
+    release: bool,
+    emit_debug_info: bool,
+) -> Vec<OsString> {
+    let mut args = vec![
+        OsString::from("-c"),
+        OsString::from("-fPIC"),
+        OsString::from(if release { "-O3" } else { "-O0" }),
+    ];
+    if emit_debug_info {
+        args.push(OsString::from("-g"));
+    }
+    args.extend([
+        OsString::from("-I"),
+        header_include_dir.as_os_str().to_os_string(),
+        jni_glue_path.as_os_str().to_os_string(),
+        OsString::from("-o"),
+        object_path.as_os_str().to_os_string(),
+    ]);
+    args
+}
+
+fn write_android_debug_symbols(
+    config: &Config,
+    linked_outputs: &[AndroidLinkedOutput],
+) -> Result<PathBuf> {
+    let artifacts = linked_outputs
+        .iter()
+        .map(|output| DebugSymbolArtifact {
+            source_path: output.path.clone(),
+            archive_path: PathBuf::from("jniLibs").join(output.abi).join(
+                output
+                    .path
+                    .file_name()
+                    .expect("android library should have a filename"),
+            ),
+            kind: DebugSymbolArtifactKind::Shared,
+            target_triple: Some(output.target.triple().to_string()),
+            platform: Some(output.target.platform()),
+            architecture: Some(output.target.architecture()),
+            abi: Some(output.abi.to_string()),
+            host_target: None,
+        })
+        .collect::<Vec<_>>();
+
+    write_debug_symbols_zip(
+        &config.android_debug_symbols_output(),
+        &match config.android_debug_symbols_format() {
+            crate::config::DebugSymbolsFormat::Zip => {
+                format!("{}.android.symbols.zip", config.crate_artifact_name())
+            }
+        },
+        "android",
+        match config.android_debug_symbols_bundle() {
+            crate::config::DebugSymbolsBundle::Unstripped => "unstripped",
+        },
+        &artifacts,
+    )
 }
 
 fn android_shared_link_args(
@@ -213,7 +290,7 @@ fn run_command(mut command: Command) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AndroidPackager, android_shared_link_args};
+    use super::{AndroidPackager, android_jni_compile_args, android_shared_link_args};
     use crate::config::Config;
     use crate::target::{BuiltLibrary, RustTarget};
     use std::ffi::OsString;
@@ -287,6 +364,19 @@ output = "{}"
 
         assert!(args.contains(&OsString::from("-Wl,--exclude-libs,ALL")));
         assert!(args.contains(&OsString::from("-Wl,--gc-sections")));
+    }
+
+    #[test]
+    fn android_jni_compile_args_include_debug_info_when_requested() {
+        let args = android_jni_compile_args(
+            Path::new("/tmp/out/jni_glue.o"),
+            Path::new("/tmp/include"),
+            Path::new("/tmp/jni/jni_glue.c"),
+            true,
+            true,
+        );
+
+        assert!(args.contains(&OsString::from("-g")));
     }
 
     #[cfg(unix)]

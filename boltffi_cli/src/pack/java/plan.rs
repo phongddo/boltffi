@@ -4,8 +4,12 @@ use crate::build::CargoBuildProfile;
 use crate::cargo::Cargo;
 use crate::cli::{CliError, Result};
 use crate::commands::generate::run_generate_java_with_output_from_source_dir;
-use crate::config::{Config, Target};
+use crate::config::{Config, DebugSymbolsBundle, DebugSymbolsFormat, Target};
 use crate::pack::resolve_build_cargo_args;
+use crate::pack::symbols::{
+    DebugSymbolArtifact, DebugSymbolArtifactKind, ensure_debug_symbols_profile_has_debuginfo,
+    write_debug_symbols_zip,
+};
 use crate::reporter::Reporter;
 use crate::target::JavaHostTarget;
 use crate::toolchain::NativeHostToolchain;
@@ -148,6 +152,11 @@ pub(crate) fn pack_java(
     }
 
     let artifact_name = selected_jvm_package_artifact_name(&packaging_targets)?;
+    if config.java_jvm_debug_symbols_enabled() {
+        let step = reporter.step("Bundling JVM debug symbols");
+        write_jvm_debug_symbols(config, artifact_name, &packaged_outputs)?;
+        step.finish_success();
+    }
     remove_stale_requested_jvm_shared_library_copies_after_success(
         &config.java_jvm_output(),
         &packaged_outputs,
@@ -184,6 +193,17 @@ pub(crate) fn prepare_java_packaging(
         build_profile,
         &java_host_targets,
     )?;
+    if config.java_jvm_debug_symbols_enabled() {
+        ensure_debug_symbols_profile_has_debuginfo(
+            &build_cargo_args,
+            &packaging_targets[0].cargo_context.build_profile,
+            "targets.java.jvm.debug_symbols",
+            &packaging_targets
+                .iter()
+                .map(|target| target.cargo_context.rust_target_triple.clone())
+                .collect::<Vec<_>>(),
+        )?;
+    }
 
     Ok(PreparedJavaPackaging {
         java_host_targets,
@@ -287,6 +307,85 @@ pub(crate) fn generate_java_header(
     Ok(())
 }
 
+fn write_jvm_debug_symbols(
+    config: &Config,
+    artifact_name: &str,
+    outputs: &[super::link::JvmPackagedNativeOutput],
+) -> Result<()> {
+    let mut artifacts = Vec::with_capacity(outputs.len() * 2);
+    for output in outputs {
+        artifacts.push(DebugSymbolArtifact {
+            source_path: output.jni_library_path.clone(),
+            archive_path: PathBuf::from("native")
+                .join(output.host_target.canonical_name())
+                .join(
+                    output
+                        .jni_library_path
+                        .file_name()
+                        .expect("jni library should have a filename"),
+                ),
+            kind: DebugSymbolArtifactKind::Jni,
+            target_triple: None,
+            platform: None,
+            architecture: None,
+            abi: None,
+            host_target: Some(output.host_target.canonical_name().to_string()),
+        });
+
+        if let Some(shared_library_path) = output.shared_library_path.as_ref() {
+            artifacts.push(DebugSymbolArtifact {
+                source_path: shared_library_path.clone(),
+                archive_path: PathBuf::from("native")
+                    .join(output.host_target.canonical_name())
+                    .join(
+                        shared_library_path
+                            .file_name()
+                            .expect("shared library should have a filename"),
+                    ),
+                kind: DebugSymbolArtifactKind::Shared,
+                target_triple: None,
+                platform: None,
+                architecture: None,
+                abi: None,
+                host_target: Some(output.host_target.canonical_name().to_string()),
+            });
+        }
+
+        for sidecar_path in &output.debug_info_sidecars {
+            artifacts.push(DebugSymbolArtifact {
+                source_path: sidecar_path.clone(),
+                archive_path: PathBuf::from("native")
+                    .join(output.host_target.canonical_name())
+                    .join(
+                        sidecar_path
+                            .file_name()
+                            .expect("debug info sidecar should have a filename"),
+                    ),
+                kind: DebugSymbolArtifactKind::DebugInfo,
+                target_triple: None,
+                platform: None,
+                architecture: None,
+                abi: None,
+                host_target: Some(output.host_target.canonical_name().to_string()),
+            });
+        }
+    }
+
+    write_debug_symbols_zip(
+        &config.java_jvm_debug_symbols_output(),
+        &match config.java_jvm_debug_symbols_format() {
+            DebugSymbolsFormat::Zip => format!("{artifact_name}.jvm.symbols.zip"),
+        },
+        "java-jvm",
+        match config.java_jvm_debug_symbols_bundle() {
+            DebugSymbolsBundle::Unstripped => "unstripped",
+        },
+        &artifacts,
+    )?;
+
+    Ok(())
+}
+
 fn resolve_java_host_targets_for_packaging(config: &Config) -> Result<Vec<JavaHostTarget>> {
     config
         .java_jvm_host_targets()
@@ -362,18 +461,29 @@ fn resolve_jvm_packaging_targets(
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use super::{
         JvmCargoContext, JvmCrateOutputs, JvmPackagingTarget, ensure_java_no_build_supported,
         ensure_java_pack_cargo_args_supported, resolve_jvm_packaging_targets,
-        selected_jvm_package_source_directory,
+        selected_jvm_package_source_directory, write_jvm_debug_symbols,
     };
     use crate::build::CargoBuildProfile;
     use crate::cli::CliError;
     use crate::config::{CargoConfig, Config, PackageConfig, TargetsConfig};
+    use crate::pack::java::link::JvmPackagedNativeOutput;
     use crate::target::JavaHostTarget;
     use crate::toolchain::NativeHostToolchain;
+
+    fn temporary_directory(prefix: &str) -> PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("time went backwards")
+            .as_nanos();
+        std::env::temp_dir().join(format!("{prefix}-{unique}"))
+    }
 
     fn config(java_enabled: bool) -> Config {
         Config {
@@ -498,5 +608,214 @@ mod tests {
             selected_jvm_package_source_directory(&packaging_targets).expect("source directory");
 
         assert_eq!(source_directory, PathBuf::from("/tmp/workspace/member"));
+    }
+
+    #[test]
+    fn jvm_debug_symbols_archive_uses_selected_artifact_name_and_includes_bundled_cdylib() {
+        let temp_root = temporary_directory("boltffi-jvm-debug-symbols");
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        let jni_library = temp_root.join("libdemo_jni.dylib");
+        let shared_library = temp_root.join("libdemo.dylib");
+        fs::write(&jni_library, b"jni").expect("write jni library");
+        fs::write(&shared_library, b"shared").expect("write shared library");
+
+        let config = Config {
+            experimental: Vec::new(),
+            cargo: CargoConfig::default(),
+            package: PackageConfig {
+                name: "workspace-root".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig {
+                java: crate::config::JavaConfig {
+                    jvm: crate::config::JavaJvmConfig {
+                        enabled: true,
+                        output: temp_root.join("java"),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+
+        write_jvm_debug_symbols(
+            &config,
+            "workspace_member",
+            &[JvmPackagedNativeOutput {
+                host_target: JavaHostTarget::DarwinArm64,
+                has_shared_library_copy: true,
+                jni_library_path: jni_library,
+                shared_library_path: Some(shared_library),
+                debug_info_sidecars: Vec::new(),
+            }],
+        )
+        .expect("write jvm debug symbols");
+
+        let archive_path = config
+            .java_jvm_debug_symbols_output()
+            .join("workspace_member.jvm.symbols.zip");
+        let archive_file = fs::File::open(&archive_path).expect("open archive");
+        let mut archive = zip::ZipArchive::new(archive_file).expect("read zip archive");
+        let bundle_root = "workspace_member.jvm.symbols";
+
+        archive
+            .by_name(&format!(
+                "{bundle_root}/native/darwin-arm64/libdemo_jni.dylib"
+            ))
+            .expect("jni entry");
+        archive
+            .by_name(&format!("{bundle_root}/native/darwin-arm64/libdemo.dylib"))
+            .expect("shared entry");
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn jvm_debug_symbols_archive_includes_windows_pdb_sidecars() {
+        let temp_root = temporary_directory("boltffi-jvm-debug-symbols-pdb");
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        let jni_library = temp_root.join("demo_jni.dll");
+        let jni_pdb = temp_root.join("demo_jni.pdb");
+        let shared_library = temp_root.join("demo.dll");
+        let shared_pdb = temp_root.join("demo.pdb");
+        fs::write(&jni_library, b"jni").expect("write jni library");
+        fs::write(&jni_pdb, b"jni-pdb").expect("write jni pdb");
+        fs::write(&shared_library, b"shared").expect("write shared library");
+        fs::write(&shared_pdb, b"shared-pdb").expect("write shared pdb");
+
+        let config = Config {
+            experimental: Vec::new(),
+            cargo: CargoConfig::default(),
+            package: PackageConfig {
+                name: "workspace-root".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig {
+                java: crate::config::JavaConfig {
+                    jvm: crate::config::JavaJvmConfig {
+                        enabled: true,
+                        output: temp_root.join("java"),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+
+        write_jvm_debug_symbols(
+            &config,
+            "workspace_member",
+            &[JvmPackagedNativeOutput {
+                host_target: JavaHostTarget::WindowsX86_64,
+                has_shared_library_copy: true,
+                jni_library_path: jni_library,
+                shared_library_path: Some(shared_library),
+                debug_info_sidecars: vec![jni_pdb, shared_pdb],
+            }],
+        )
+        .expect("write jvm debug symbols");
+
+        let archive_path = config
+            .java_jvm_debug_symbols_output()
+            .join("workspace_member.jvm.symbols.zip");
+        let archive_file = fs::File::open(&archive_path).expect("open archive");
+        let mut archive = zip::ZipArchive::new(archive_file).expect("read zip archive");
+        let bundle_root = "workspace_member.jvm.symbols";
+
+        archive
+            .by_name(&format!("{bundle_root}/native/windows-x86_64/demo_jni.dll"))
+            .expect("jni entry");
+        archive
+            .by_name(&format!("{bundle_root}/native/windows-x86_64/demo_jni.pdb"))
+            .expect("jni pdb entry");
+        archive
+            .by_name(&format!("{bundle_root}/native/windows-x86_64/demo.dll"))
+            .expect("shared entry");
+        archive
+            .by_name(&format!("{bundle_root}/native/windows-x86_64/demo.pdb"))
+            .expect("shared pdb entry");
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
+    }
+
+    #[test]
+    fn jvm_debug_symbols_archive_includes_directory_sidecars() {
+        let temp_root = temporary_directory("boltffi-jvm-debug-symbols-dsym");
+        fs::create_dir_all(&temp_root).expect("create temp root");
+        let jni_library = temp_root.join("libdemo_jni.dylib");
+        let dsym_dir = temp_root.join("libdemo_jni.dylib.dSYM");
+        let dsym_dwarf_dir = dsym_dir.join("Contents").join("Resources").join("DWARF");
+        fs::write(&jni_library, b"jni").expect("write jni library");
+        fs::create_dir_all(&dsym_dwarf_dir).expect("create dsym dwarf dir");
+        fs::write(dsym_dir.join("Contents").join("Info.plist"), "<plist />")
+            .expect("write dsym plist");
+        fs::write(dsym_dwarf_dir.join("libdemo_jni.dylib"), b"debug").expect("write dsym dwarf");
+
+        let config = Config {
+            experimental: Vec::new(),
+            cargo: CargoConfig::default(),
+            package: PackageConfig {
+                name: "workspace-root".to_string(),
+                crate_name: None,
+                version: None,
+                description: None,
+                license: None,
+                repository: None,
+            },
+            targets: TargetsConfig {
+                java: crate::config::JavaConfig {
+                    jvm: crate::config::JavaJvmConfig {
+                        enabled: true,
+                        output: temp_root.join("java"),
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        };
+
+        write_jvm_debug_symbols(
+            &config,
+            "workspace_member",
+            &[JvmPackagedNativeOutput {
+                host_target: JavaHostTarget::DarwinArm64,
+                has_shared_library_copy: false,
+                jni_library_path: jni_library,
+                shared_library_path: None,
+                debug_info_sidecars: vec![dsym_dir],
+            }],
+        )
+        .expect("write jvm debug symbols");
+
+        let archive_path = config
+            .java_jvm_debug_symbols_output()
+            .join("workspace_member.jvm.symbols.zip");
+        let archive_file = fs::File::open(&archive_path).expect("open archive");
+        let mut archive = zip::ZipArchive::new(archive_file).expect("read zip archive");
+        let bundle_root = "workspace_member.jvm.symbols";
+
+        archive
+            .by_name(&format!(
+                "{bundle_root}/native/darwin-arm64/libdemo_jni.dylib.dSYM/Contents/Info.plist"
+            ))
+            .expect("dsym plist entry");
+        archive
+            .by_name(&format!(
+                "{bundle_root}/native/darwin-arm64/libdemo_jni.dylib.dSYM/Contents/Resources/DWARF/libdemo_jni.dylib"
+            ))
+            .expect("dsym dwarf entry");
+
+        fs::remove_dir_all(&temp_root).expect("cleanup temp dir");
     }
 }

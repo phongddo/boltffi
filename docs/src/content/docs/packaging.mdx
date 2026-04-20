@@ -185,6 +185,10 @@ This builds for arm64 (device) and arm64/x86_64 (simulator), generates Swift bin
 
 Those slices come from `targets.apple.ios_architectures` and `targets.apple.simulator_architectures`. If you enable macOS, `targets.apple.macos_architectures` is included too.
 
+If you enable `[targets.apple.debug_symbols]`, BoltFFI also writes `{XcframeworkName}.xcframework.symbols.zip` under `dist/apple/symbols/`. That companion archive contains the unstripped slice libraries plus a `symbols.json` manifest.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled, for example via `[profile.release] debug = true`.
+
 ### Output Structure
 
 ```
@@ -299,6 +303,10 @@ boltffi pack android --release
 
 This builds for all Android ABIs (arm64-v8a, armeabi-v7a, x86, x86_64), generates Kotlin bindings and JNI glue, and copies the shared libraries to jniLibs.
 
+If you enable `[targets.android.debug_symbols]`, BoltFFI also writes `{crate_artifact_name}.android.symbols.zip` under `dist/android/symbols/`. That archive mirrors the `jniLibs/<abi>/` layout and includes a `symbols.json` manifest.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled.
+
 ### Output Structure
 
 ```
@@ -362,6 +370,10 @@ boltffi pack java --release
 ```
 
 This builds the host Rust library, generates Java bindings and a C header, links the JNI glue against the Rust `staticlib` when available, and writes the native output to `dist/java/native/<host-target>/`. A flat current-host `_jni` copy is kept in `dist/java/` for compatibility during the transition.
+
+If you enable `[targets.java.jvm.debug_symbols]`, BoltFFI also writes `{selected_artifact_name}.jvm.symbols.zip` under `dist/java/symbols/`. That archive mirrors `native/<host-target>/` and includes a `symbols.json` manifest for host-target mapping.
+
+For release-style packaging, BoltFFI rejects this option unless the selected Cargo profile has debuginfo enabled. On Windows MSVC hosts, BoltFFI also archives `.pdb` sidecars for the packaged JNI DLL and bundled Rust DLL when present.
 
 ### Prerequisites
 

@@ -140,6 +140,20 @@ Uuid = { type = "UUID", conversion = "uuid_string" }
 - `skip_package_swift` (bool, optional): Skip generating `Package.swift`.
   - Default: `false`
 
+### `[targets.apple.debug_symbols]` (optional)
+
+Companion archive output for Apple slice libraries collected by `boltffi pack apple`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside Apple packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.apple.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
+
 ## Android
 
 ### `[targets.android]` (optional)
@@ -196,6 +210,20 @@ Uuid = { type = "java.util.UUID", conversion = "uuid_string" }
 - `output` (path, optional): Where `boltffi pack android` writes the `jniLibs/` folder.
   - Default: `{targets.android.output}/jniLibs`
 
+### `[targets.android.debug_symbols]` (optional)
+
+Companion archive output for Android JNI libraries collected by `boltffi pack android`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside Android packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.android.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
+
 ## Java
 
 ### `[targets.java]` (optional)
@@ -227,6 +255,20 @@ Desktop JVM target configuration.
   - Phase 3 behavior: all configured values must resolve to the current host target after `current` expansion and deduping
   - Packaging layout: `boltffi pack java` writes the JNI library to `dist/java/native/<host-target>/` and also keeps a flat current-host `_jni` copy in `dist/java/`
   - `boltffi pack java --no-build` is unsupported in Phase 3; rerun without `--no-build`
+
+### `[targets.java.jvm.debug_symbols]` (optional)
+
+Companion archive output for desktop JNI libraries collected by `boltffi pack java`.
+
+- `enabled` (bool): Emit a debug-symbol archive alongside JVM packaging output.
+  - Default: `false`
+  - Validation: release-like packaging profiles must enable Cargo debuginfo or packaging fails
+- `output` (path, optional): Directory where the debug-symbol archive is written.
+  - Default: `{targets.java.jvm.output}/symbols`
+- `format` (`zip`): Archive format.
+  - Default: `zip`
+- `bundle` (`unstripped`): Bundle kind for the archived payloads.
+  - Default: `unstripped`
 
 ### `[targets.java.android]` (optional)
 

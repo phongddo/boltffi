@@ -120,6 +120,25 @@ This name appears in your Swift import statements: `import MyLibrary`.
 
 The layout determines how BoltFFI structures the SwiftPM package. This is the most important configuration choice for Apple because it affects how you integrate the library into your Xcode project.
 
+### Debug Symbols
+
+If you want a companion archive of the unstripped Apple slice libraries, enable `debug_symbols`:
+
+```toml
+[targets.apple.debug_symbols]
+enabled = true
+output = "dist/apple/symbols"
+```
+
+`boltffi pack apple` writes `{XcframeworkName}.xcframework.symbols.zip` to that directory. The archive includes a `symbols.json` manifest plus one unstripped static library per discovered Apple target slice.
+
+For release-like packaging profiles, BoltFFI now requires Cargo debuginfo to be enabled before it will emit this archive. In practice that usually means:
+
+```toml
+[profile.release]
+debug = true
+```
+
 #### ffi-only Layout
 
 This is the default and simplest option. BoltFFI creates a self-contained SwiftPM package with everything inside:
@@ -403,6 +422,20 @@ dist/android/
 
 Copy `jniLibs` to your Android project's `src/main/` directory. Copy the Kotlin sources to your source set. The native libraries are loaded automatically when you first use the Kotlin bindings.
 
+### Android Debug Symbols
+
+To keep a companion archive of the unstripped JNI libraries per ABI:
+
+```toml
+[targets.android.debug_symbols]
+enabled = true
+output = "dist/android/symbols"
+```
+
+`boltffi pack android` writes `{crate_artifact_name}.android.symbols.zip` to that directory. The archive mirrors the `jniLibs/<abi>/` layout and includes a `symbols.json` manifest with ABI and target mappings.
+
+For release-like packaging profiles, BoltFFI requires Cargo debuginfo to be enabled before it will emit this archive.
+
 ## Java Configuration
 
 The `[targets.java]` section controls Java bindings for both JVM and Android.
@@ -459,6 +492,20 @@ host_targets = ["current", "linux-x86_64"]
 The default output is `dist/java`. This produces Java sources, a C header, JNI glue, a structured native output under `dist/java/native/<host-target>/`, and a flat current-host `_jni` compatibility copy in `dist/java/`. `host_targets` defaults to `["current"]`, supports aliases such as `darwin-aarch64` and `linux-x86-64`, resolves `current` to the active host, and dedupes repeated entries. Requires `JAVA_HOME` and `clang`.
 
 Phase 4 extends JVM packaging from current-host-only output to explicit desktop host matrices. Current-host packaging works on `darwin-arm64`, `darwin-x86_64`, `linux-x86_64`, `linux-aarch64`, and `windows-x86_64`. The initial cross-host parity path is macOS packaging `linux-x86_64`, which requires the Rust target, a configured Linux linker such as `CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER` or `BOLTFFI_JAVA_LINKER_X86_64_UNKNOWN_LINUX_GNU`, and target-appropriate JNI headers via either `BOLTFFI_JAVA_HOME_X86_64_UNKNOWN_LINUX_GNU` or `BOLTFFI_JAVA_INCLUDE_X86_64_UNKNOWN_LINUX_GNU`. `pack java` rejects explicit Cargo `--target` passthrough args because the host matrix is controlled by `host_targets`.
+
+### JVM Debug Symbols
+
+To archive the unstripped desktop JNI libraries per packaged host target:
+
+```toml
+[targets.java.jvm.debug_symbols]
+enabled = true
+output = "dist/java/symbols"
+```
+
+`boltffi pack java` writes `{selected_artifact_name}.jvm.symbols.zip` to that directory. The archive mirrors `native/<host-target>/` and includes a `symbols.json` manifest with host-target mappings.
+
+For release-like packaging profiles, BoltFFI requires Cargo debuginfo to be enabled before it will emit this archive. On Windows MSVC hosts, the archive also includes sibling `.pdb` files for the JNI DLL and any bundled Rust DLL when those sidecars exist.
 
 ### Android Target
 

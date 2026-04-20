@@ -11,6 +11,8 @@ use super::Cargo;
 pub(crate) struct CargoMetadata {
     pub(crate) packages: Vec<CargoMetadataPackage>,
     pub(crate) target_directory: PathBuf,
+    #[serde(default)]
+    pub(crate) workspace_root: Option<PathBuf>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -253,6 +255,18 @@ mod tests {
                 .expect("expected target directory");
 
         assert_eq!(target_directory, PathBuf::from("/tmp/boltffi-target"));
+    }
+
+    #[test]
+    fn parses_workspace_root_from_cargo_metadata() {
+        let metadata = metadata_fixture()
+            .workspace_root("/tmp/workspace")
+            .metadata();
+
+        assert_eq!(
+            metadata.workspace_root,
+            Some(PathBuf::from("/tmp/workspace"))
+        );
     }
 
     #[test]
