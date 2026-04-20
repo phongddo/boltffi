@@ -83,13 +83,32 @@ mod tests {
     use crate::render::python::{
         PythonCStyleEnum, PythonCStyleEnumVariant, PythonCallable, PythonEnumConstructor,
         PythonEnumMethod, PythonEnumType, PythonFunction, PythonModule, PythonParameter,
-        PythonSequenceType, PythonType,
+        PythonRecord, PythonRecordConstructor, PythonRecordField, PythonRecordMethod,
+        PythonRecordType, PythonSequenceType, PythonType,
     };
 
     struct NativePythonPackageFixture;
 
     impl NativePythonPackageFixture {
+        fn point_type() -> PythonRecordType {
+            PythonRecordType {
+                native_name_stem: "point".to_string(),
+                class_name: "Point".to_string(),
+                c_type_name: "___Point".to_string(),
+            }
+        }
+
+        fn color_type() -> PythonRecordType {
+            PythonRecordType {
+                native_name_stem: "color".to_string(),
+                class_name: "Color".to_string(),
+                c_type_name: "___Color".to_string(),
+            }
+        }
+
         fn module() -> PythonModule {
+            let point_type = Self::point_type();
+            let color_type = Self::color_type();
             let status_enum = PythonCStyleEnum {
                 type_ref: PythonEnumType {
                     native_name_stem: "status".to_string(),
@@ -186,8 +205,139 @@ mod tests {
                 package_version: Some("0.1.0".to_string()),
                 library_name: "demo".to_string(),
                 free_buffer_symbol: "boltffi_free_buf".to_string(),
+                records: vec![
+                    PythonRecord::new(
+                        point_type.clone(),
+                        vec![
+                            PythonRecordField {
+                                python_name: "x".to_string(),
+                                native_name: "x".to_string(),
+                                primitive: PrimitiveType::F64,
+                            },
+                            PythonRecordField {
+                                python_name: "y".to_string(),
+                                native_name: "y".to_string(),
+                                primitive: PrimitiveType::F64,
+                            },
+                        ],
+                        vec![
+                            PythonRecordConstructor {
+                                python_name: "new".to_string(),
+                                callable: PythonCallable {
+                                    native_name: "_boltffi_point_new".to_string(),
+                                    ffi_symbol: "boltffi_point_new".to_string(),
+                                    parameters: vec![
+                                        PythonParameter {
+                                            name: "x".to_string(),
+                                            type_ref: PythonType::Primitive(PrimitiveType::F64),
+                                        },
+                                        PythonParameter {
+                                            name: "y".to_string(),
+                                            type_ref: PythonType::Primitive(PrimitiveType::F64),
+                                        },
+                                    ],
+                                    return_type: PythonType::Record(point_type.clone()),
+                                },
+                            },
+                            PythonRecordConstructor {
+                                python_name: "origin".to_string(),
+                                callable: PythonCallable {
+                                    native_name: "_boltffi_point_origin".to_string(),
+                                    ffi_symbol: "boltffi_point_origin".to_string(),
+                                    parameters: vec![],
+                                    return_type: PythonType::Record(point_type.clone()),
+                                },
+                            },
+                        ],
+                        vec![
+                            PythonRecordMethod {
+                                python_name: "distance".to_string(),
+                                callable: PythonCallable {
+                                    native_name: "_boltffi_point_distance".to_string(),
+                                    ffi_symbol: "boltffi_point_distance".to_string(),
+                                    parameters: vec![PythonParameter {
+                                        name: "self".to_string(),
+                                        type_ref: PythonType::Record(point_type.clone()),
+                                    }],
+                                    return_type: PythonType::Primitive(PrimitiveType::F64),
+                                },
+                                is_static: false,
+                            },
+                            PythonRecordMethod {
+                                python_name: "scale".to_string(),
+                                callable: PythonCallable {
+                                    native_name: "_boltffi_point_scale".to_string(),
+                                    ffi_symbol: "boltffi_point_scale".to_string(),
+                                    parameters: vec![
+                                        PythonParameter {
+                                            name: "self".to_string(),
+                                            type_ref: PythonType::Record(point_type.clone()),
+                                        },
+                                        PythonParameter {
+                                            name: "factor".to_string(),
+                                            type_ref: PythonType::Primitive(PrimitiveType::F64),
+                                        },
+                                    ],
+                                    return_type: PythonType::Record(point_type.clone()),
+                                },
+                                is_static: false,
+                            },
+                            PythonRecordMethod {
+                                python_name: "dimensions".to_string(),
+                                callable: PythonCallable {
+                                    native_name: "_boltffi_point_dimensions".to_string(),
+                                    ffi_symbol: "boltffi_point_dimensions".to_string(),
+                                    parameters: vec![],
+                                    return_type: PythonType::Primitive(PrimitiveType::U32),
+                                },
+                                is_static: true,
+                            },
+                        ],
+                    )
+                    .expect("point record fixture should be valid"),
+                    PythonRecord::new(
+                        color_type.clone(),
+                        vec![
+                            PythonRecordField {
+                                python_name: "r".to_string(),
+                                native_name: "r".to_string(),
+                                primitive: PrimitiveType::U8,
+                            },
+                            PythonRecordField {
+                                python_name: "g".to_string(),
+                                native_name: "g".to_string(),
+                                primitive: PrimitiveType::U8,
+                            },
+                            PythonRecordField {
+                                python_name: "b".to_string(),
+                                native_name: "b".to_string(),
+                                primitive: PrimitiveType::U8,
+                            },
+                            PythonRecordField {
+                                python_name: "a".to_string(),
+                                native_name: "a".to_string(),
+                                primitive: PrimitiveType::U8,
+                            },
+                        ],
+                        vec![],
+                        vec![],
+                    )
+                    .expect("color record fixture should be valid"),
+                ],
                 enums: vec![status_enum, direction_enum],
                 functions: vec![
+                    PythonFunction {
+                        python_name: "echo_point".to_string(),
+                        callable: PythonCallable {
+                            native_name: "echo_point".to_string(),
+                            ffi_symbol: "boltffi_echo_point".to_string(),
+                            parameters: vec![PythonParameter {
+                                name: "value".to_string(),
+                                type_ref: PythonType::Record(point_type.clone()),
+                            }],
+                            return_type: PythonType::Record(point_type),
+                        },
+                    },
                     PythonFunction {
                         python_name: "echo_i32".to_string(),
                         callable: PythonCallable {
@@ -344,10 +494,23 @@ mod tests {
         assert!(setup_source.contains("Extension("));
         assert!(setup_source.contains("\"demo_lib._native\""));
         assert!(setup_source.contains("\"*.pyi\""));
+        assert!(init_source.contains("from dataclasses import dataclass"));
         assert!(init_source.contains("from enum import IntEnum"));
         assert!(init_source.contains("from pathlib import Path"));
         assert!(init_source.contains("from . import _native"));
         assert!(init_source.contains("_native._initialize_loader"));
+        assert!(init_source.contains("@dataclass(frozen=True, slots=True)"));
+        assert!(init_source.contains("class Point:"));
+        assert!(init_source.contains("x: float"));
+        assert!(init_source.contains("y: float"));
+        assert!(init_source.contains("def new(cls, x: float, y: float) -> Point:"));
+        assert!(init_source.contains("return _native._boltffi_point_new(x, y)"));
+        assert!(init_source.contains("def scale(self, factor: float) -> Point:"));
+        assert!(init_source.contains("return _native._boltffi_point_scale(self, factor)"));
+        assert!(init_source.contains("def dimensions() -> int:"));
+        assert!(init_source.contains("_native._register_point(Point)"));
+        assert!(init_source.contains("class Color:"));
+        assert!(init_source.contains("_native._register_color(Color)"));
         assert!(init_source.contains("class Status(IntEnum):"));
         assert!(init_source.contains("ACTIVE = 0"));
         assert!(init_source.contains("_native._register_status(Status)"));
@@ -356,7 +519,12 @@ mod tests {
         assert!(init_source.contains("return _native._boltffi_direction_opposite(self)"));
         assert!(init_source.contains("echo_string = _native.echo_string"));
         assert!(init_source.contains("PACKAGE_NAME = \"demo-lib\""));
+        assert!(init_source.contains("\"Point\""));
         assert!(init_source.contains("\"Status\""));
+        assert!(
+            native_source
+                .contains("typedef ___Point (*boltffi_python_symbol_echo_point_fn)(___Point);")
+        );
         assert!(
             native_source
                 .contains("typedef int32_t (*boltffi_python_symbol_echo_i32_fn)(int32_t);")
@@ -379,6 +547,10 @@ mod tests {
         ));
         assert!(native_source.contains("static PyObject *boltffi_python_initialize_loader"));
         assert!(native_source.contains("static int boltffi_python_parse_i32"));
+        assert!(native_source.contains("static int boltffi_python_parse_point"));
+        assert!(native_source.contains("static PyObject *boltffi_python_box_point"));
+        assert!(native_source.contains("static PyObject *boltffi_python_wrapper_register_point"));
+        assert!(native_source.contains("static PyObject *boltffi_python_wrapper_register_color"));
         assert!(native_source.contains("static int boltffi_python_parse_status"));
         assert!(native_source.contains("static PyObject *boltffi_python_box_status"));
         assert!(native_source.contains("if (boxed_value == NULL) {"));
@@ -408,6 +580,10 @@ mod tests {
         assert!(!native_source.contains("isfinite"));
         assert!(native_source.contains("METH_FASTCALL"));
         assert!(pyproject_source.contains("wheel>=0.43"));
+        assert!(generated_stub.contains("from dataclasses import dataclass"));
+        assert!(generated_stub.contains("class Point:"));
+        assert!(generated_stub.contains("def new(cls, x: float, y: float) -> Point: ..."));
+        assert!(generated_stub.contains("def scale(self, factor: float) -> Point: ..."));
         assert!(generated_stub.contains("class Status(IntEnum):"));
         assert!(generated_stub.contains("def echo_status"));
         assert!(generated_stub.contains("def opposite(self) -> Direction:"));
