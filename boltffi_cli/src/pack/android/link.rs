@@ -161,6 +161,7 @@ impl<'a> AndroidPackager<'a> {
 
         let clang = android_toolchain.clang_for_target(&library.target)?;
         let object_path = build_dir.join("jni_glue.o");
+        let export_script_path = build_dir.join("exports.map");
 
         let mut compile = Command::new(&clang);
         compile.args(android_jni_compile_args(
@@ -172,11 +173,14 @@ impl<'a> AndroidPackager<'a> {
         ));
         run_command(compile)?;
 
+        write_android_export_version_script(&export_script_path)?;
+
         let mut link = Command::new(&clang);
         link.args(android_shared_link_args(
             &dest_path,
             &object_path,
             &library.path,
+            &export_script_path,
         ));
         run_command(link)?;
 
@@ -255,6 +259,7 @@ fn android_shared_link_args(
     dest_path: &Path,
     object_path: &Path,
     library_path: &Path,
+    export_script_path: &Path,
 ) -> Vec<OsString> {
     vec![
         OsString::from("-shared"),
@@ -264,12 +269,37 @@ fn android_shared_link_args(
         OsString::from("-Wl,--whole-archive"),
         library_path.as_os_str().to_os_string(),
         OsString::from("-Wl,--no-whole-archive"),
-        OsString::from("-Wl,--exclude-libs,ALL"),
+        OsString::from("-Xlinker"),
+        OsString::from("--version-script"),
+        OsString::from("-Xlinker"),
+        export_script_path.as_os_str().to_os_string(),
         OsString::from("-Wl,--gc-sections"),
         OsString::from("-lm"),
         OsString::from("-llog"),
         OsString::from("-ldl"),
     ]
+}
+
+fn write_android_export_version_script(path: &Path) -> Result<()> {
+    std::fs::write(path, android_export_version_script()).map_err(|source| {
+        CliError::CommandFailed {
+            command: format!("write android linker version script {}", path.display()),
+            status: source.raw_os_error(),
+        }
+    })
+}
+
+fn android_export_version_script() -> &'static str {
+    r#"{
+    global:
+        Java_*;
+        JNI_OnLoad*;
+        JNI_OnUnload*;
+        boltffi_*;
+    local:
+        *;
+};
+"#
 }
 
 fn run_command(mut command: Command) -> Result<()> {
@@ -290,7 +320,10 @@ fn run_command(mut command: Command) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AndroidPackager, android_jni_compile_args, android_shared_link_args};
+    use super::{
+        AndroidPackager, android_export_version_script, android_jni_compile_args,
+        android_shared_link_args,
+    };
     use crate::config::Config;
     use crate::target::{BuiltLibrary, RustTarget};
     use std::ffi::OsString;
@@ -355,15 +388,30 @@ output = "{}"
     }
 
     #[test]
-    fn android_linker_hides_archive_symbols_and_collects_unused_sections() {
+    fn android_linker_uses_export_map_and_collects_unused_sections() {
         let args = android_shared_link_args(
             Path::new("/tmp/out/libdemo.so"),
             Path::new("/tmp/out/jni_glue.o"),
             Path::new("/tmp/out/libdemo.a"),
+            Path::new("/tmp/out/exports.map"),
         );
 
-        assert!(args.contains(&OsString::from("-Wl,--exclude-libs,ALL")));
+        assert!(!args.contains(&OsString::from("-Wl,--exclude-libs,ALL")));
+        assert!(args.contains(&OsString::from("--version-script")));
+        assert!(args.contains(&OsString::from("/tmp/out/exports.map")));
         assert!(args.contains(&OsString::from("-Wl,--gc-sections")));
+    }
+
+    #[test]
+    fn android_export_map_keeps_public_jni_and_boltffi_symbols() {
+        let script = android_export_version_script();
+
+        assert!(script.contains("Java_*;"));
+        assert!(script.contains("JNI_OnLoad*;"));
+        assert!(script.contains("JNI_OnUnload*;"));
+        assert!(script.contains("boltffi_*;"));
+        assert!(script.contains("local:"));
+        assert!(script.contains("*;"));
     }
 
     #[test]
@@ -385,7 +433,10 @@ output = "{}"
         let dest_path = PathBuf::from(OsString::from_vec(b"/tmp/out-\xFF.so".to_vec()));
         let object_path = PathBuf::from(OsString::from_vec(b"/tmp/jni-\xFE.o".to_vec()));
         let library_path = PathBuf::from(OsString::from_vec(b"/tmp/lib-\xFD.a".to_vec()));
-        let args = android_shared_link_args(&dest_path, &object_path, &library_path);
+        let export_script_path =
+            PathBuf::from(OsString::from_vec(b"/tmp/exports-\xFC.map".to_vec()));
+        let args =
+            android_shared_link_args(&dest_path, &object_path, &library_path, &export_script_path);
 
         assert_eq!(
             args[2].as_os_str().as_bytes(),
@@ -398,6 +449,10 @@ output = "{}"
         assert_eq!(
             args[5].as_os_str().as_bytes(),
             library_path.as_os_str().as_bytes()
+        );
+        assert_eq!(
+            args[10].as_os_str().as_bytes(),
+            export_script_path.as_os_str().as_bytes()
         );
     }
 }
