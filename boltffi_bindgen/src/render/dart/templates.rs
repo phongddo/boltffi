@@ -16,3 +16,18 @@ pub struct NativeRecordTemplate<'a> {
     pub name: &'a str,
     pub layout: &'a super::DartBlittableLayout,
 }
+
+#[derive(Template)]
+#[template(path = "render_dart/hook.build.dart.txt", escape = "none")]
+pub struct BuildHookTemplate<'a> {
+    pub artifact_name: &'a str,
+}
+
+#[derive(Template)]
+#[template(path = "render_dart/pubspec.yaml.txt", escape = "none")]
+pub struct PubspecTemplate<'a> {
+    pub artifact_name: &'a str,
+    pub description: Option<&'a str>,
+    pub version: Option<&'a str>,
+    pub repository: Option<&'a str>,
+}

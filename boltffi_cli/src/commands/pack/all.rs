@@ -3,9 +3,9 @@ use crate::config::{Config, Target};
 use crate::reporter::Reporter;
 
 use super::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackJavaOptions, PackPythonOptions,
-    PackWasmOptions, pack_android, pack_apple, pack_java, pack_python, pack_wasm,
-    prepare_java_packaging,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackDartOptions, PackJavaOptions,
+    PackPythonOptions, PackWasmOptions, pack_android, pack_apple, pack_dart, pack_java,
+    pack_python, pack_wasm, prepare_java_packaging,
 };
 
 pub(super) fn pack_all(
@@ -89,6 +89,18 @@ pub(super) fn pack_all(
                 execution: options.execution.clone(),
                 experimental: options.experimental,
                 python_interpreters: options.python_interpreters.clone(),
+            },
+            reporter,
+        )?;
+        packed_any = true;
+    }
+
+    if config.should_process(Target::Dart, options.experimental) {
+        pack_dart(
+            config,
+            PackDartOptions {
+                execution: options.execution,
+                experimental: options.experimental,
             },
             reporter,
         )?;

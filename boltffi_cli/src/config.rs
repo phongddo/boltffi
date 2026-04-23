@@ -1,7 +1,8 @@
 use crate::target::{
-    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, JavaHostTarget, RustTarget,
-    resolve_android_targets, resolve_apple_ios_targets, resolve_apple_macos_targets,
-    resolve_apple_simulator_targets, resolve_java_host_targets,
+    AndroidArchitecture, AppleArchitecture, AppleIosArchitecture, DartNativeArchitecture,
+    JavaHostTarget, RustTarget, resolve_android_targets, resolve_apple_ios_targets,
+    resolve_apple_macos_targets, resolve_apple_simulator_targets, resolve_dart_native_targets,
+    resolve_java_host_targets,
 };
 use boltffi_bindgen::render::python::NamingConvention;
 use serde::{Deserialize, Serialize};
@@ -114,6 +115,8 @@ pub struct DartConfig {
     pub output: PathBuf,
     #[serde(default)]
     pub enabled: bool,
+    #[serde(default)]
+    pub native_architectures: Option<Vec<DartNativeArchitecture>>,
 }
 
 impl Default for DartConfig {
@@ -121,6 +124,7 @@ impl Default for DartConfig {
         Self {
             output: default_dart_output(),
             enabled: false,
+            native_architectures: None,
         }
     }
 }
@@ -1462,6 +1466,22 @@ impl Config {
             .repository
             .clone()
             .or_else(|| self.package_repository())
+    }
+
+    pub fn dart_output(&self) -> PathBuf {
+        self.targets.dart.output.clone()
+    }
+
+    pub fn dart_native_architectures(&self) -> &[DartNativeArchitecture] {
+        self.targets
+            .dart
+            .native_architectures
+            .as_deref()
+            .unwrap_or(DartNativeArchitecture::ALL)
+    }
+
+    pub fn dart_targets(&self) -> Vec<RustTarget> {
+        resolve_dart_native_targets(self.dart_native_architectures())
     }
 }
 

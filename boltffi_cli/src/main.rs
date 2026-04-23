@@ -19,8 +19,9 @@ use commands::doctor::{ConfigSummary, DoctorOptions};
 use commands::generate::{GenerateOptions, GenerateTarget, run_generate_with_output};
 use commands::init::InitOptions;
 use commands::pack::{
-    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackExecutionOptions,
-    PackJavaOptions, PackPythonOptions, PackWasmOptions, check_java_packaging_prereqs,
+    PackAllOptions, PackAndroidOptions, PackAppleOptions, PackCommand, PackDartOptions,
+    PackExecutionOptions, PackJavaOptions, PackPythonOptions, PackWasmOptions,
+    check_java_packaging_prereqs,
 };
 use commands::verify::VerifyOptions;
 use commands::{run_build, run_check, run_doctor, run_init, run_pack, run_verify};
@@ -170,7 +171,7 @@ enum GenerateTargetArg {
     Header,
     #[value(help = "Generate TypeScript bindings for WASM")]
     Typescript,
-    #[value(help = "Generate Dart Bindings")]
+    #[value(help = "Generate experimental Dart bindings")]
     Dart,
     #[value(help = "Generate experimental Python bindings")]
     Python,
@@ -188,6 +189,8 @@ enum BuildPlatformArg {
     Android,
     #[value(help = "Build wasm target")]
     Wasm,
+    #[value(help = "Build dart target")]
+    Dart,
     #[value(help = "Build all configured targets")]
     All,
 }
@@ -313,6 +316,24 @@ enum PackTargetArg {
             help = "Python interpreter executable or path (repeatable)"
         )]
         python_interpreters: Vec<String>,
+    },
+
+    #[command(
+        about = "Build + package Dart artifacts",
+        long_about = "Build + package Dart artifacts.\n\nOutputs:\n  - Dart package: {targets.dart.output}\n"
+    )]
+    Dart {
+        #[arg(long)]
+        release: bool,
+
+        #[arg(long, default_value = "true")]
+        regenerate: bool,
+
+        #[arg(long)]
+        no_build: bool,
+
+        #[arg(long, help = "Enable experimental targets/features")]
+        experimental: bool,
     },
 }
 
@@ -466,6 +487,7 @@ fn execute_command(
                         BuildPlatformArg::Apple => BuildPlatform::Apple,
                         BuildPlatformArg::Android => BuildPlatform::Android,
                         BuildPlatformArg::Wasm => BuildPlatform::Wasm,
+                        BuildPlatformArg::Dart => BuildPlatform::Dart,
                         BuildPlatformArg::All => BuildPlatform::All,
                     })
                     .unwrap_or(BuildPlatform::All),
@@ -570,6 +592,15 @@ fn execute_command(
                     ),
                     experimental,
                     python_interpreters,
+                }),
+                PackTargetArg::Dart {
+                    release,
+                    regenerate,
+                    no_build,
+                    experimental,
+                } => PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(release, regenerate, no_build, cargo_args),
+                    experimental,
                 }),
             };
             run_pack(&config, command, reporter)
@@ -772,6 +803,7 @@ fn run_release(
                 BuildPlatformArg::Apple => BuildPlatform::Apple,
                 BuildPlatformArg::Android => BuildPlatform::Android,
                 BuildPlatformArg::Wasm => BuildPlatform::Wasm,
+                BuildPlatformArg::Dart => BuildPlatform::Dart,
                 BuildPlatformArg::All => BuildPlatform::All,
             })
             .unwrap_or(BuildPlatform::All),
@@ -837,6 +869,14 @@ fn release_pack_commands(
                 }));
             }
         }
+        Some(BuildPlatformArg::Dart) => {
+            if config.is_dart_enabled() {
+                commands.push(PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(true, false, true, cargo_args.to_vec()),
+                    experimental: true,
+                }));
+            }
+        }
         Some(BuildPlatformArg::All) | None => {
             if config.is_apple_enabled() {
                 commands.push(PackCommand::Apple(PackAppleOptions {
@@ -867,6 +907,13 @@ fn release_pack_commands(
             if config.should_process(Target::Java, false) {
                 commands.push(PackCommand::Java(PackJavaOptions {
                     execution: pack_execution_options(true, true, false, cargo_args.to_vec()),
+                    experimental: false,
+                }));
+            }
+
+            if config.should_process(Target::Dart, false) {
+                commands.push(PackCommand::Dart(PackDartOptions {
+                    execution: pack_execution_options(true, false, false, cargo_args.to_vec()),
                     experimental: false,
                 }));
             }
