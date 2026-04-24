@@ -15,13 +15,13 @@ use crate::exports::extern_export::{
     DirectBufferCarrier, DualPlatformExternExport, ExportBody, ExportCondition, ExportSafety,
     ExternExport, ReceiverParameter,
 };
+use crate::index::CrateIndex;
 use crate::index::callback_traits::CallbackTraitRegistry;
-use crate::index::{CrateIndex, custom_types};
 use crate::lowering::params::{FfiParams, transform_method_params, transform_method_params_async};
-use crate::lowering::returns::lower::{encoded_return_body, encoded_return_buffer_expression};
+use crate::lowering::returns::lower::encoded_return_body;
 use crate::lowering::returns::model::{
     ResolvedReturn, ReturnInvocationContext, ReturnLoweringContext, ReturnPlatform,
-    ValueReturnStrategy, WasmOptionScalarEncoding,
+    WasmOptionScalarEncoding,
 };
 use boltffi_ffi_rules::transport::EncodedReturnStrategy;
 
@@ -1282,114 +1282,8 @@ fn generate_async_method_export(
         InstanceMethodExport::new(&visibility, export_names.entry(), type_name, ffi_params)
             .render_async_entry(entry_body);
 
-    let wasm_complete = if matches!(
-        return_abi.value_return_strategy(),
-        ValueReturnStrategy::CompositeValue
-    ) {
-        AsyncWasmCompleteExport {
-            params: quote! {
-                out: *mut ::boltffi::__private::FfiBuf,
-                handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus
-            },
-            return_type: quote! {},
-            body: quote! {
-                if out.is_null() {
-                    return;
-                }
-                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                    Ok(result) => {
-                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
-                        ::boltffi::__private::FfiBuf::from_vec(vec![result])
-                    }
-                    Err(status) => {
-                        if !out_status.is_null() { *out_status = status; }
-                        ::boltffi::__private::FfiBuf::empty()
-                    }
-                };
-                out.write(buf);
-            },
-        }
-    } else if return_abi.is_passable_value() {
-        let rust_type = return_abi.rust_type();
-        AsyncWasmCompleteExport {
-            params: quote! {
-                handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus
-            },
-            return_type: quote! { -> <#rust_type as ::boltffi::__private::Passable>::Out },
-            body: quote! {
-                match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                    Ok(result) => {
-                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
-                        ::boltffi::__private::Passable::pack(result)
-                    }
-                    Err(status) => {
-                        if !out_status.is_null() { *out_status = status; }
-                        Default::default()
-                    }
-                }
-            },
-        }
-    } else if let Some(strategy) = return_abi.encoded_return_strategy() {
-        let rust_type = return_abi.rust_type();
-        let registry = custom_types::registry_for_current_crate().ok();
-        let result_ident = syn::Ident::new("result", proc_macro2::Span::call_site());
-        let encode_expression = if matches!(strategy, EncodedReturnStrategy::Utf8String) {
-            quote! { ::boltffi::__private::FfiBuf::wire_encode(&#result_ident) }
-        } else {
-            encoded_return_buffer_expression(rust_type, strategy, &result_ident, registry.as_ref())
-        };
-        AsyncWasmCompleteExport {
-            params: quote! {
-                out: *mut ::boltffi::__private::FfiBuf,
-                handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus
-            },
-            return_type: quote! {},
-            body: quote! {
-                if out.is_null() {
-                    return;
-                }
-                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                    Ok(#result_ident) => {
-                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
-                        #encode_expression
-                    }
-                    Err(status) => {
-                        if !out_status.is_null() { *out_status = status; }
-                        ::boltffi::__private::FfiBuf::empty()
-                    }
-                };
-                out.write(buf);
-            },
-        }
-    } else {
-        AsyncWasmCompleteExport {
-            params: quote! {
-                out: *mut ::boltffi::__private::FfiBuf,
-                handle: ::boltffi::__private::RustFutureHandle,
-                out_status: *mut ::boltffi::__private::FfiStatus
-            },
-            return_type: quote! {},
-            body: quote! {
-                if out.is_null() {
-                    return;
-                }
-                let buf = match ::boltffi::__private::rustfuture::rust_future_complete::<#rust_return_type>(handle) {
-                    Ok(result) => {
-                        if !out_status.is_null() { *out_status = ::boltffi::__private::FfiStatus::OK; }
-                        ::boltffi::__private::FfiBuf::wire_encode(&result)
-                    }
-                    Err(status) => {
-                        if !out_status.is_null() { *out_status = status; }
-                        ::boltffi::__private::FfiBuf::empty()
-                    }
-                };
-                out.write(buf);
-            },
-        }
-    };
+    let wasm_complete =
+        AsyncWasmCompleteExport::from_resolved_return(&return_abi, &rust_return_type);
     let runtime_exports = AsyncRuntimeExports {
         visibility: &visibility,
         names: &export_names,

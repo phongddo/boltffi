@@ -1620,13 +1620,9 @@ impl<'a> TypeScriptLowerer<'a> {
                 Some(ts_type),
                 TsOutputRoute::direct(ts_direct_cast(&abi_type)),
             ),
-            TsExecutionModel::AsyncFunction => (
+            TsExecutionModel::AsyncFunction | TsExecutionModel::AsyncMethod => (
                 Some(ts_type),
                 TsOutputRoute::async_scalar(ts_direct_cast(&abi_type)),
-            ),
-            TsExecutionModel::AsyncMethod => (
-                Some(ts_type),
-                TsOutputRoute::packed(scalar_async_decode_expr(&abi_type)),
             ),
         }
     }
@@ -1881,30 +1877,6 @@ fn ts_direct_cast(abi_type: &AbiType) -> String {
     match abi_type {
         AbiType::Bool => " !== 0".to_string(),
         _ => String::new(),
-    }
-}
-fn scalar_async_decode_expr(abi_type: &AbiType) -> String {
-    match abi_type {
-        AbiType::Bool => "reader.readBool()".to_string(),
-        AbiType::I8 => "reader.readI8()".to_string(),
-        AbiType::U8 => "reader.readU8()".to_string(),
-        AbiType::I16 => "reader.readI16()".to_string(),
-        AbiType::U16 => "reader.readU16()".to_string(),
-        AbiType::I32 => "reader.readI32()".to_string(),
-        AbiType::U32 => "reader.readU32()".to_string(),
-        AbiType::I64 => "reader.readI64()".to_string(),
-        AbiType::U64 => "reader.readU64()".to_string(),
-        AbiType::ISize => "reader.readISize()".to_string(),
-        AbiType::USize => "reader.readUSize()".to_string(),
-        AbiType::F32 => "reader.readF32()".to_string(),
-        AbiType::F64 => "reader.readF64()".to_string(),
-        AbiType::Void
-        | AbiType::Pointer(_)
-        | AbiType::OwnedBuffer
-        | AbiType::InlineCallbackFn { .. }
-        | AbiType::Handle(_)
-        | AbiType::CallbackHandle
-        | AbiType::Struct(_) => "reader.readI32()".to_string(),
     }
 }
 
@@ -3901,7 +3873,7 @@ mod tests {
     }
 
     #[test]
-    fn wasm_async_class_scalar_return_uses_packed_completion() {
+    fn wasm_async_class_scalar_return_uses_direct_completion() {
         let mut contract = empty_contract();
         contract.catalog.insert_class(ClassDef {
             id: ClassId::new("SharedCounter"),
@@ -3935,8 +3907,8 @@ mod tests {
         assert_eq!(method.return_type.as_deref(), Some("number"));
         match &method.mode {
             TsClassMethodMode::Async(async_method) => {
-                assert!(async_method.return_route.is_packed());
-                assert_eq!(async_method.return_route.decode_expr(), "reader.readI32()");
+                assert!(async_method.return_route.is_async_scalar());
+                assert_eq!(async_method.return_route.ts_cast(), "");
             }
             _ => panic!("expected async method"),
         }
