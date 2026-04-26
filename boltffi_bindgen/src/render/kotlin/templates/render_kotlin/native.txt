@@ -3,22 +3,24 @@ private object Native {
     init {
         val preferredLibrary = "{{ lib_name }}_jni"
         val fallbackLibrary = "{{ lib_name }}"
-{%- if desktop_loader %}
         val vmName = System.getProperty("java.vm.name").orEmpty()
         val isAndroidRuntime =
             vmName.contains("dalvik", ignoreCase = true) ||
             vmName.contains("art", ignoreCase = true)
         if (isAndroidRuntime) {
             System.loadLibrary(fallbackLibrary)
+{%- if desktop_loader_bundled %}
         } else {
             loadDesktopLibraries(preferredLibrary, fallbackLibrary)
         }
-{%- else %}
-        System.loadLibrary(fallbackLibrary)
+{%- elif desktop_loader_system %}
+        } else {
+            System.loadLibrary(fallbackLibrary)
+        }
 {%- endif %}
     }
 
-{%- if desktop_loader %}
+{%- if desktop_loader_bundled %}
     @Volatile
     private var bundledLibraryDirectory: java.io.File? = null
 

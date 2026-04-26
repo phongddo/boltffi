@@ -183,6 +183,11 @@ Companion archive output for Apple slice libraries collected by `boltffi pack ap
   - Default: `PascalCase(package.name)`
 - `library_name` (string, optional): Native library name for `System.loadLibrary`.
   - Default: inferred from crate name
+- `desktop_loader` (`bundled` | `system` | `none`): How generated Kotlin loads the native library on non-Android JVMs.
+  - Default: `bundled`
+  - `bundled`: extract bundled desktop natives when present, otherwise fall back to `System.loadLibrary`
+  - `system`: call `System.loadLibrary` on desktop JVMs
+  - `none`: skip desktop JVM loading and assume the host process has already loaded the native library
 - `api_style` (`top_level` | `module_object`): How functions are exposed.
   - Default: `top_level`
 - `factory_style` (`constructors` | `companion_methods`): How factory constructors are exposed.

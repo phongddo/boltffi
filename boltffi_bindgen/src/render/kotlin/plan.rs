@@ -392,7 +392,8 @@ pub struct KotlinCallbackReturn {
 #[derive(Clone)]
 pub struct KotlinNative {
     pub lib_name: Name<LibraryName>,
-    pub desktop_loader: bool,
+    pub desktop_loader_bundled: bool,
+    pub desktop_loader_system: bool,
     pub prefix: String,
     pub functions: Vec<KotlinNativeFunction>,
     pub wire_functions: Vec<KotlinNativeWireFunction>,

@@ -61,7 +61,8 @@ pub struct PreambleTemplate<'a> {
 #[template(path = "render_kotlin/native.txt", escape = "none")]
 pub struct NativeTemplate<'a> {
     pub lib_name: &'a str,
-    pub desktop_loader: bool,
+    pub desktop_loader_bundled: bool,
+    pub desktop_loader_system: bool,
     pub prefix: &'a str,
     pub functions: &'a [super::plan::KotlinNativeFunction],
     pub wire_functions: &'a [super::plan::KotlinNativeWireFunction],
@@ -475,7 +476,8 @@ impl KotlinEmitter {
 
         let native = NativeTemplate {
             lib_name: module.native.lib_name.as_str(),
-            desktop_loader: module.native.desktop_loader,
+            desktop_loader_bundled: module.native.desktop_loader_bundled,
+            desktop_loader_system: module.native.desktop_loader_system,
             prefix: &module.native.prefix,
             functions: &module.native.functions,
             wire_functions: &module.native.wire_functions,
@@ -949,7 +951,8 @@ mod tests {
     fn native_without_async_runtime_omits_future_continuation_callback() {
         let rendered = NativeTemplate {
             lib_name: "repro",
-            desktop_loader: false,
+            desktop_loader_bundled: false,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -968,7 +971,8 @@ mod tests {
     fn native_template_keeps_android_safe_runtime_branch() {
         let rendered = NativeTemplate {
             lib_name: "repro",
-            desktop_loader: true,
+            desktop_loader_bundled: true,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -988,7 +992,8 @@ mod tests {
     fn native_template_keeps_desktop_loader_for_non_android_runtime() {
         let rendered = NativeTemplate {
             lib_name: "repro",
-            desktop_loader: true,
+            desktop_loader_bundled: true,
+            desktop_loader_system: false,
             prefix: "boltffi",
             functions: &[],
             wire_functions: &[],
@@ -1009,6 +1014,52 @@ mod tests {
                 .contains("if (preferredFailure == null) {\n                return\n            }")
         );
         assert!(rendered.contains("throw preferredFailure"));
+    }
+
+    #[test]
+    fn native_template_can_use_system_loader_for_desktop_runtime() {
+        let rendered = NativeTemplate {
+            lib_name: "repro",
+            desktop_loader_bundled: false,
+            desktop_loader_system: true,
+            prefix: "boltffi",
+            functions: &[],
+            wire_functions: &[],
+            classes: &[],
+            callbacks: &[],
+            async_callback_invokers: &[],
+            has_async_runtime: false,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("if (isAndroidRuntime) {"));
+        assert!(rendered.contains("} else {\n            System.loadLibrary(fallbackLibrary)"));
+        assert!(!rendered.contains("loadDesktopLibraries(preferredLibrary, fallbackLibrary)"));
+        assert!(!rendered.contains("bundledLibraryResourceCandidates"));
+    }
+
+    #[test]
+    fn native_template_can_skip_desktop_loading() {
+        let rendered = NativeTemplate {
+            lib_name: "repro",
+            desktop_loader_bundled: false,
+            desktop_loader_system: false,
+            prefix: "boltffi",
+            functions: &[],
+            wire_functions: &[],
+            classes: &[],
+            callbacks: &[],
+            async_callback_invokers: &[],
+            has_async_runtime: false,
+        }
+        .render()
+        .unwrap();
+
+        assert!(rendered.contains("if (isAndroidRuntime) {"));
+        assert!(!rendered.contains("} else {"));
+        assert!(!rendered.contains("loadDesktopLibraries(preferredLibrary, fallbackLibrary)"));
+        assert!(!rendered.contains("bundledLibraryResourceCandidates"));
     }
 
     #[test]

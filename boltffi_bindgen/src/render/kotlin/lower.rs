@@ -31,7 +31,8 @@ use crate::render::kotlin::emit;
 use crate::render::kotlin::plan::*;
 use crate::render::kotlin::templates::{AsyncMethodTemplate, WireMethodTemplate};
 use crate::render::kotlin::{
-    FactoryStyle, KotlinApiStyle as KotlinInputApiStyle, KotlinOptions, NamingConvention,
+    FactoryStyle, KotlinApiStyle as KotlinInputApiStyle, KotlinDesktopLoader, KotlinOptions,
+    NamingConvention,
 };
 use crate::render::{TypeConversion, TypeMappings};
 use askama::Template;
@@ -2541,7 +2542,14 @@ impl<'a> KotlinLowerer<'a> {
                 .library_name
                 .clone()
                 .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
-            desktop_loader: self.options.desktop_loader,
+            desktop_loader_bundled: matches!(
+                self.options.desktop_loader,
+                KotlinDesktopLoader::Bundled
+            ),
+            desktop_loader_system: matches!(
+                self.options.desktop_loader,
+                KotlinDesktopLoader::System
+            ),
             prefix: naming::ffi_prefix().to_string(),
             functions,
             wire_functions,

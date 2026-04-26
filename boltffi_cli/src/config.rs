@@ -224,6 +224,8 @@ pub struct AndroidKotlinConfig {
     pub module_name: Option<String>,
     pub library_name: Option<String>,
     #[serde(default)]
+    pub desktop_loader: KotlinDesktopLoader,
+    #[serde(default)]
     pub api_style: KotlinApiStyle,
     #[serde(default)]
     pub error_style: ErrorStyle,
@@ -239,6 +241,15 @@ pub enum KotlinApiStyle {
     #[default]
     TopLevel,
     ModuleObject,
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum KotlinDesktopLoader {
+    #[default]
+    Bundled,
+    System,
+    None,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -1043,6 +1054,10 @@ impl Config {
 
     pub fn android_kotlin_library_name(&self) -> Option<&str> {
         self.targets.android.kotlin.library_name.as_deref()
+    }
+
+    pub fn android_kotlin_desktop_loader(&self) -> KotlinDesktopLoader {
+        self.targets.android.kotlin.desktop_loader
     }
 
     pub fn android_kotlin_api_style(&self) -> KotlinApiStyle {
