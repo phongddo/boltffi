@@ -1,25 +1,17 @@
-//! Two-role module:
-//!
-//! 1. **Orchestrator**: `CSharpEmitter::emit` runs the lowerer, then
-//!    renders each plan entry through its Askama template, assembling
-//!    the `CSharpOutput`.
-//!
-//! 2. **Syntax helpers**: a library of "ABI op → C# source snippet"
-//!    functions (`render_value`, `emit_reader_read`, `emit_write_expr`,
-//!    `emit_size_expr`, etc.). The lowerer calls these to pre-render
-//!    wire expressions as strings into the plan.
+//! Orchestrator: [`CSharpEmitter::emit`] runs the lowerer, then renders
+//! each plan entry through its Askama template, assembling the
+//! [`CSharpOutput`]. All "ABI op → C# syntax" translation lives in
+//! [`super::lower`](super::lower) (the size, encode, and decode
+//! sub-modules); this module contains no syntax helpers of its own.
 
 use askama::Template as _;
 
-use crate::ir::codec::{EnumLayout, VecLayout};
-use crate::ir::ops::{ReadOp, ReadSeq, SizeExpr, ValueExpr, WriteOp, WriteSeq};
-use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::ir::{AbiContract, FfiContract};
 
 use super::{
-    CSharpOptions, NamingConvention,
+    CSharpOptions,
     lower::CSharpLowerer,
-    plan::{CSharpEnumKind, CSharpRecord, CSharpType, ShadowScope},
+    plan::CSharpEnumKind,
     templates::{
         EnumCStyleTemplate, EnumDataTemplate, FunctionsTemplate, NativeTemplate, PreambleTemplate,
         RecordTemplate,
@@ -39,10 +31,6 @@ pub struct CSharpFile {
 #[derive(Debug, Clone)]
 pub struct CSharpOutput {
     pub files: Vec<CSharpFile>,
-    /// The top-level class name (used for the main file, e.g., `"MyApp"`).
-    pub class_name: String,
-    /// The C# namespace.
-    pub namespace: String,
 }
 
 impl CSharpOutput {
@@ -50,7 +38,7 @@ impl CSharpOutput {
     /// and spot-checks that only care about "did this snippet appear
     /// anywhere in the generated code?"
     #[cfg(test)]
-    pub fn combined_source(&self) -> String {
+    pub(crate) fn combined_source(&self) -> String {
         self.files
             .iter()
             .map(|f| f.source.as_str())
@@ -120,570 +108,22 @@ impl CSharpEmitter {
             source: main_source,
         });
 
-        CSharpOutput {
-            files,
-            class_name: module.class_name,
-            namespace: module.namespace,
-        }
+        CSharpOutput { files }
     }
 }
-
-// ---------------------------------------------------------------------------
-// Render helpers: ABI ops -> C# syntax snippets.
-//
-// These are the C# counterparts of the functions in render/java/emit.rs.
-// Each takes a [`ReadSeq`] / [`WriteSeq`] / [`SizeExpr`] / [`ValueExpr`]
-// node from the ABI and produces the C# source that implements it.
-//
-// Scope: supports the subset of ops we need for records with primitive,
-// string, and nested-record fields. Vec / Option / Enum / Builtin / Custom
-// etc. will be added in follow-up PRs. Today they panic so the gap is
-// surfaced loudly rather than silently producing broken output.
-// ---------------------------------------------------------------------------
-
-/// Render a [`ValueExpr`] as a C# value access path.
-///
-/// [`Instance`](ValueExpr::Instance) becomes `this.` (trailing dot joined
-/// by the field walk). A [`Field`](ValueExpr::Field) chain walks outward
-/// producing e.g. `this.Origin.X`. Parameter references keep their
-/// camelCase name; field references convert to PascalCase property names
-/// to match the record struct definition.
-pub fn render_value(expr: &ValueExpr) -> String {
-    match expr {
-        ValueExpr::Instance => "this".to_string(),
-        ValueExpr::Var(name) => name.clone(),
-        ValueExpr::Named(name) => NamingConvention::field_name(name),
-        ValueExpr::Field(parent, field) => {
-            let parent_str = render_value(parent);
-            let field_str = NamingConvention::property_name(field.as_str());
-            format!("{}.{}", parent_str, field_str)
-        }
-    }
-}
-
-pub fn primitive_read_method(primitive: PrimitiveType) -> &'static str {
-    match primitive {
-        PrimitiveType::Bool => "ReadBool",
-        PrimitiveType::I8 => "ReadI8",
-        PrimitiveType::U8 => "ReadU8",
-        PrimitiveType::I16 => "ReadI16",
-        PrimitiveType::U16 => "ReadU16",
-        PrimitiveType::I32 => "ReadI32",
-        PrimitiveType::U32 => "ReadU32",
-        PrimitiveType::I64 => "ReadI64",
-        PrimitiveType::U64 => "ReadU64",
-        PrimitiveType::ISize => "ReadNInt",
-        PrimitiveType::USize => "ReadNUInt",
-        PrimitiveType::F32 => "ReadF32",
-        PrimitiveType::F64 => "ReadF64",
-    }
-}
-
-pub fn primitive_write_method(primitive: PrimitiveType) -> &'static str {
-    match primitive {
-        PrimitiveType::Bool => "WriteBool",
-        PrimitiveType::I8 => "WriteI8",
-        PrimitiveType::U8 => "WriteU8",
-        PrimitiveType::I16 => "WriteI16",
-        PrimitiveType::U16 => "WriteU16",
-        PrimitiveType::I32 => "WriteI32",
-        PrimitiveType::U32 => "WriteU32",
-        PrimitiveType::I64 => "WriteI64",
-        PrimitiveType::U64 => "WriteU64",
-        PrimitiveType::ISize => "WriteNInt",
-        PrimitiveType::USize => "WriteNUInt",
-        PrimitiveType::F32 => "WriteF32",
-        PrimitiveType::F64 => "WriteF64",
-    }
-}
-
-/// The WireReader method invocation for a top-level blittable primitive
-/// `Vec<T>` return, without the receiver. Top-level vec returns carry no
-/// length prefix: the count comes from `FfiBuf.len`. Bool, isize, and
-/// usize have dedicated methods because C# `bool` is not `unmanaged`-cast-
-/// safe against the 1-byte wire form, and the wire form of isize/usize is
-/// a fixed 8 bytes while C# `nint`/`nuint` are pointer-sized. Every other
-/// primitive flows through a generic `ReadBlittableArray<T>()` that bulk-
-/// casts via `MemoryMarshal`.
-pub fn primitive_vec_reader_call(primitive: PrimitiveType) -> String {
-    match primitive {
-        PrimitiveType::Bool => "ReadBoolArray()".to_string(),
-        PrimitiveType::ISize => "ReadNIntArray()".to_string(),
-        PrimitiveType::USize => "ReadNUIntArray()".to_string(),
-        other => format!("ReadBlittableArray<{}>()", CSharpType::from(other)),
-    }
-}
-
-/// The WireReader method invocation for a nested blittable primitive
-/// `Vec<T>`, without the receiver. Nested reads carry a 4-byte length
-/// prefix because the outer encoded container needs to know how far to
-/// advance the cursor before decoding the next element.
-fn primitive_vec_nested_reader_call(primitive: PrimitiveType) -> String {
-    match primitive {
-        PrimitiveType::Bool => "ReadLengthPrefixedBoolArray()".to_string(),
-        PrimitiveType::ISize => "ReadLengthPrefixedNIntArray()".to_string(),
-        PrimitiveType::USize => "ReadLengthPrefixedNUIntArray()".to_string(),
-        other => format!(
-            "ReadLengthPrefixedBlittableArray<{}>()",
-            CSharpType::from(other)
-        ),
-    }
-}
-
-/// The WireWriter method invocation for a blittable primitive `Vec<T>`,
-/// formatted as `"{method}({value})"` without the receiver. The writer
-/// always prepends a 4-byte length prefix, which serves the nested
-/// position (inside an encoded outer vec) and the future record-field
-/// position. Top-level vec params go through `DirectArray` and never
-/// touch this code path.
-pub fn primitive_vec_writer_call(primitive: PrimitiveType, value: &str) -> String {
-    match primitive {
-        PrimitiveType::Bool => format!("WriteBoolArray({value})"),
-        PrimitiveType::ISize => format!("WriteNIntArray({value})"),
-        PrimitiveType::USize => format!("WriteNUIntArray({value})"),
-        _ => format!("WriteBlittableArray({value})"),
-    }
-}
-
-/// Per-function rendering scratchpad. Hands out unique loop-variable and
-/// closure-argument names so nested `Vec<Vec<_>>` expressions don't
-/// shadow each other. One instance per top-level emit call; counters are
-/// consumed in the order read / write / size helpers encounter nested
-/// vecs, which is stable across renders of the same seq.
-#[derive(Default)]
-pub struct CSharpEmitContext {
-    write_loop_index: usize,
-    read_closure_index: usize,
-    size_loop_index: usize,
-    write_option_bind_index: usize,
-    size_option_bind_index: usize,
-}
-
-impl CSharpEmitContext {
-    fn next_write_loop_var(&mut self) -> String {
-        let i = self.write_loop_index;
-        self.write_loop_index += 1;
-        format!("item{}", i)
-    }
-
-    fn next_read_closure_var(&mut self) -> String {
-        let i = self.read_closure_index;
-        self.read_closure_index += 1;
-        format!("r{}", i)
-    }
-
-    fn next_size_loop_var(&mut self) -> String {
-        let i = self.size_loop_index;
-        self.size_loop_index += 1;
-        format!("sizeItem{}", i)
-    }
-
-    /// Fresh pattern-variable name for the non-null binding inside a
-    /// `WriteOp::Option` encode statement. Write and size use different
-    /// name prefixes because pattern variables declared in `is { } v`
-    /// leak into the enclosing method scope. A shared `opt0` between
-    /// the WireWriter-size ternary and the encode `if` statement would
-    /// redeclare the same local in one scope.
-    fn next_write_option_bind_var(&mut self) -> String {
-        let i = self.write_option_bind_index;
-        self.write_option_bind_index += 1;
-        format!("opt{}", i)
-    }
-
-    /// Fresh pattern-variable name for the non-null binding inside a
-    /// `SizeExpr::OptionSize` size expression. Distinct from the write
-    /// prefix so the two emissions can coexist in one function body
-    /// without colliding. See [`Self::next_write_option_bind_var`].
-    fn next_size_option_bind_var(&mut self) -> String {
-        let i = self.size_option_bind_index;
-        self.size_option_bind_index += 1;
-        format!("sizeOpt{}", i)
-    }
-}
-
-/// Replace every word-boundary occurrence of `identifier` in `expression`
-/// with `replacement`. A token inside another identifier (e.g. `item`
-/// inside `item0`) is left alone. Used to rename the ABI-provided loop
-/// variable `"item"` and closure receiver `"reader"` to per-nesting-level
-/// unique names without running a real parser.
-fn replace_identifier_occurrences(expression: &str, identifier: &str, replacement: &str) -> String {
-    if identifier.is_empty() {
-        return expression.to_string();
-    }
-    let mut result = String::with_capacity(expression.len());
-    let mut cursor = 0;
-    while let Some(rel) = expression[cursor..].find(identifier) {
-        let start = cursor + rel;
-        let end = start + identifier.len();
-        let prev = expression[..start].chars().next_back();
-        let next = expression[end..].chars().next();
-        let prev_is_id = prev.map(is_identifier_char).unwrap_or(false);
-        let next_is_id = next.map(is_identifier_char).unwrap_or(false);
-        if prev_is_id || next_is_id {
-            result.push_str(&expression[cursor..end]);
-        } else {
-            result.push_str(&expression[cursor..start]);
-            result.push_str(replacement);
-        }
-        cursor = end;
-    }
-    result.push_str(&expression[cursor..]);
-    result
-}
-
-fn is_identifier_char(c: char) -> bool {
-    c.is_ascii_alphanumeric() || c == '_'
-}
-
-/// Render the `reader_call` portion (without the leading `new WireReader
-/// (_buf).` receiver) for a top-level `Vec<inner>` return. Primitive
-/// element vecs use the no-prefix fast path keyed off `FfiBuf.len`;
-/// encoded element vecs (strings, nested vecs) wrap `ReadEncodedArray<T>`
-/// around a closure that decodes one element.
-pub fn vec_return_reader_call(inner: &TypeExpr, element_seq: &ReadSeq) -> String {
-    match inner {
-        TypeExpr::Primitive(p) => primitive_vec_reader_call(*p),
-        _ => {
-            let mut ctx = CSharpEmitContext::default();
-            let inner_reader = emit_reader_read_with_context(element_seq, None, &mut ctx);
-            let closure_var = ctx.next_read_closure_var();
-            let remapped = replace_identifier_occurrences(&inner_reader, "reader", &closure_var);
-            let element_ty = CSharpType::from_type_expr(inner);
-            format!("ReadEncodedArray<{element_ty}>({closure_var} => {remapped})")
-        }
-    }
-}
-
-/// Render the first op of a [`ReadSeq`] as a decode expression.
-///
-/// `scope` is `None` when rendering in a context where no name shadowing
-/// can happen (record bodies, top-level function returns) and `Some` when
-/// rendering inside a data enum body whose nested variants may shadow
-/// module-level types.
-///
-/// Today each [`ReadSeq`] we handle has exactly one top-level op: either
-/// a primitive, a string, or a nested record/enum. Container ops (Option,
-/// Vec, Result) will land in follow-up PRs.
-pub fn emit_reader_read(seq: &ReadSeq, scope: Option<&ShadowScope>) -> String {
-    let mut ctx = CSharpEmitContext::default();
-    emit_reader_read_with_context(seq, scope, &mut ctx)
-}
-
-/// Same as [`emit_reader_read`] but lets the caller thread a shared
-/// [`CSharpEmitContext`] across multiple emissions (e.g. all fields of
-/// one record) so pattern-binding names do not collide in the enclosing
-/// method scope.
-pub fn emit_reader_read_shared(
-    seq: &ReadSeq,
-    scope: Option<&ShadowScope>,
-    ctx: &mut CSharpEmitContext,
-) -> String {
-    emit_reader_read_with_context(seq, scope, ctx)
-}
-
-fn emit_reader_read_with_context(
-    seq: &ReadSeq,
-    scope: Option<&ShadowScope>,
-    ctx: &mut CSharpEmitContext,
-) -> String {
-    let op = seq.ops.first().expect("read ops");
-    match op {
-        ReadOp::Primitive { primitive, .. } => {
-            format!("reader.{}()", primitive_read_method(*primitive))
-        }
-        ReadOp::String { .. } => "reader.ReadString()".to_string(),
-        ReadOp::Bytes { .. } => "reader.ReadBytes()".to_string(),
-        ReadOp::Record { .. } => {
-            let ty = CSharpType::from_read_op(op).qualify_if_shadowed_opt(scope);
-            format!("{ty}.Decode(reader)")
-        }
-        ReadOp::Enum {
-            id,
-            layout: EnumLayout::CStyle { .. },
-            ..
-        } => {
-            // The generated helper is `{Name}Wire`, not `{Name}`, so the
-            // `Wire` suffix is already unambiguous against variant names
-            // that match `{Name}` alone; no shadowing fix needed here.
-            format!(
-                "{}Wire.Decode(reader)",
-                NamingConvention::class_name(id.as_str())
-            )
-        }
-        ReadOp::Enum {
-            layout: EnumLayout::Data { .. },
-            ..
-        } => {
-            let ty = CSharpType::from_read_op(op).qualify_if_shadowed_opt(scope);
-            format!("{ty}.Decode(reader)")
-        }
-        ReadOp::Option { some, .. } => {
-            let inner = emit_reader_read_with_context(some, scope, ctx);
-            let inner_ty =
-                CSharpType::from_read_op(some.ops.first().expect("option inner read op"))
-                    .qualify_if_shadowed_opt(scope);
-            format!("reader.ReadU8() == 0 ? ({inner_ty}?)null : {inner}")
-        }
-        ReadOp::Vec {
-            element_type: TypeExpr::Primitive(p),
-            layout: VecLayout::Blittable { .. },
-            ..
-        } => {
-            // A Vec op reached through emit_reader_read is always nested
-            // (top-level vec returns go through vec_return_reader_call).
-            // Nested position means the wire shape is length-prefixed.
-            format!("reader.{}", primitive_vec_nested_reader_call(*p))
-        }
-        ReadOp::Vec {
-            element_type,
-            layout: VecLayout::Blittable { .. },
-            ..
-        } => {
-            // Reached when a record field or enum-variant field carries
-            // a `Vec<BlittableRecord>`. Nested position so the wire shape
-            // is length-prefixed, same as nested primitive vecs. The C#
-            // struct generated for a blittable record is `unmanaged`, so
-            // it satisfies the generic helper's constraint.
-            let element_ty =
-                CSharpType::from_type_expr(element_type).qualify_if_shadowed_opt(scope);
-            format!("reader.ReadLengthPrefixedBlittableArray<{element_ty}>()")
-        }
-        ReadOp::Vec {
-            element_type,
-            element,
-            layout: VecLayout::Encoded,
-            ..
-        } => {
-            let inner_reader = emit_reader_read_with_context(element, scope, ctx);
-            let closure_var = ctx.next_read_closure_var();
-            let remapped = replace_identifier_occurrences(&inner_reader, "reader", &closure_var);
-            let element_ty =
-                CSharpType::from_type_expr(element_type).qualify_if_shadowed_opt(scope);
-            format!("reader.ReadEncodedArray<{element_ty}>({closure_var} => {remapped})")
-        }
-        other => todo!(
-            "C# backend has not yet implemented read support for {:?}",
-            other
-        ),
-    }
-}
-
-/// Render the first op of a [`WriteSeq`] as a statement that writes its
-/// value into the `WireWriter` named by `writer_name`.
-pub fn emit_write_expr(seq: &WriteSeq, writer_name: &str) -> String {
-    let mut ctx = CSharpEmitContext::default();
-    emit_write_expr_with_context(seq, writer_name, &mut ctx)
-}
-
-/// Same as [`emit_write_expr`] but shares a [`CSharpEmitContext`] across
-/// calls. Used when emitting multiple fields of one record / variant so
-/// their `is { } opt{n}` pattern bindings get fresh names and do not
-/// collide in the enclosing method scope.
-pub fn emit_write_expr_shared(
-    seq: &WriteSeq,
-    writer_name: &str,
-    ctx: &mut CSharpEmitContext,
-) -> String {
-    emit_write_expr_with_context(seq, writer_name, ctx)
-}
-
-fn emit_write_expr_with_context(
-    seq: &WriteSeq,
-    writer_name: &str,
-    ctx: &mut CSharpEmitContext,
-) -> String {
-    let op = seq.ops.first().expect("write ops");
-    match op {
-        WriteOp::Primitive { primitive, value } => {
-            format!(
-                "{}.{}({})",
-                writer_name,
-                primitive_write_method(*primitive),
-                render_value(value)
-            )
-        }
-        WriteOp::String { value } => {
-            format!("{}.WriteString({})", writer_name, render_value(value))
-        }
-        WriteOp::Bytes { value } => {
-            format!("{}.WriteBytes({})", writer_name, render_value(value))
-        }
-        WriteOp::Record { value, .. } => {
-            format!("{}.WireEncodeTo({})", render_value(value), writer_name)
-        }
-        WriteOp::Enum {
-            value,
-            layout: EnumLayout::CStyle { .. } | EnumLayout::Data { .. },
-            ..
-        } => format!("{}.WireEncodeTo({})", render_value(value), writer_name),
-        WriteOp::Option { value, some } => {
-            let option_expr = render_value(value);
-            let inner = emit_write_expr_with_context(some, writer_name, ctx);
-            let bind = ctx.next_write_option_bind_var();
-            let remapped_inner = replace_identifier_occurrences(&inner, "v", &bind);
-            format!(
-                "if ({option_expr} is {{ }} {bind}) {{ {writer}.WriteU8((byte)1); {remapped_inner}; }} else {{ {writer}.WriteU8((byte)0); }}",
-                option_expr = option_expr,
-                bind = bind,
-                writer = writer_name,
-                remapped_inner = remapped_inner,
-            )
-        }
-        WriteOp::Vec {
-            value,
-            element_type: TypeExpr::Primitive(p),
-            layout: VecLayout::Blittable { .. },
-            ..
-        } => format!(
-            "{}.{}",
-            writer_name,
-            primitive_vec_writer_call(*p, &render_value(value))
-        ),
-        WriteOp::Vec {
-            value,
-            layout: VecLayout::Blittable { .. },
-            ..
-        } => {
-            // Reached when a record field or enum-variant field carries
-            // a `Vec<BlittableRecord>`. `WriteBlittableArray<T>` already
-            // emits the 4-byte length prefix followed by the raw element
-            // bytes, which is the nested wire shape Rust expects. The
-            // unmanaged constraint is satisfied by the generated struct.
-            format!(
-                "{}.WriteBlittableArray({})",
-                writer_name,
-                render_value(value),
-            )
-        }
-        WriteOp::Vec {
-            value,
-            element_type,
-            element,
-            layout: VecLayout::Encoded,
-        } => {
-            let inner_write = emit_write_expr_with_context(element, writer_name, ctx);
-            let loop_var = ctx.next_write_loop_var();
-            let remapped = replace_identifier_occurrences(&inner_write, "item", &loop_var);
-            let iter_ty = CSharpType::from_type_expr(element_type);
-            format!(
-                "{}.WriteI32({}.Length); foreach ({} {} in {}) {{ {}; }}",
-                writer_name,
-                render_value(value),
-                iter_ty,
-                loop_var,
-                render_value(value),
-                remapped,
-            )
-        }
-        other => todo!(
-            "C# backend has not yet implemented write support for {:?}",
-            other
-        ),
-    }
-}
-
-/// Render a [`SizeExpr`] as a C# expression that evaluates to the
-/// wire-encoded byte size.
-///
-/// The IR's convention for variable-length types is a
-/// `Sum([Fixed(4), StringLen(v)])` or `Sum([Fixed(4), BytesLen(v)])`:
-/// the outer `Sum` already accounts for the 4-byte length prefix, so
-/// `StringLen` and `BytesLen` must render as just the payload byte
-/// count. Doubling up (e.g. rendering `StringLen` as `4 + byte_count`)
-/// would over-count by 4 bytes per string.
-pub fn emit_size_expr(size: &SizeExpr) -> String {
-    let mut ctx = CSharpEmitContext::default();
-    emit_size_expr_with_context(size, &mut ctx)
-}
-
-/// Same as [`emit_size_expr`] but threads a shared
-/// [`CSharpEmitContext`] so sibling size contributions (e.g. record
-/// fields summed into one `WireEncodedSize`) get distinct `sizeOpt{n}`
-/// pattern-binding names instead of all redeclaring `sizeOpt0`.
-pub fn emit_size_expr_shared(size: &SizeExpr, ctx: &mut CSharpEmitContext) -> String {
-    emit_size_expr_with_context(size, ctx)
-}
-
-fn emit_size_expr_with_context(size: &SizeExpr, ctx: &mut CSharpEmitContext) -> String {
-    match size {
-        SizeExpr::Fixed(value) => value.to_string(),
-        SizeExpr::StringLen(value) => {
-            format!("Encoding.UTF8.GetByteCount({})", render_value(value))
-        }
-        SizeExpr::BytesLen(value) => format!("{}.Length", render_value(value)),
-        SizeExpr::WireSize { value, .. } => {
-            format!("{}.WireEncodedSize()", render_value(value))
-        }
-        SizeExpr::Sum(parts) => {
-            let rendered = parts
-                .iter()
-                .map(|p| emit_size_expr_with_context(p, ctx))
-                .collect::<Vec<_>>()
-                .join(" + ");
-            format!("({})", rendered)
-        }
-        SizeExpr::OptionSize { value, inner } => {
-            let option_expr = render_value(value);
-            let inner_expr = emit_size_expr_with_context(inner, ctx);
-            let bind = ctx.next_size_option_bind_var();
-            let remapped_inner = replace_identifier_occurrences(&inner_expr, "v", &bind);
-            format!(
-                "(1 + ({option_expr} is {{ }} {bind} ? {remapped_inner} : 0))",
-                option_expr = option_expr,
-                bind = bind,
-                remapped_inner = remapped_inner,
-            )
-        }
-        SizeExpr::VecSize {
-            value,
-            layout: VecLayout::Blittable { element_size },
-            ..
-        } => format!("(4 + {}.Length * {})", render_value(value), element_size),
-        SizeExpr::VecSize {
-            value,
-            inner,
-            layout: VecLayout::Encoded,
-        } => {
-            let inner_expr = emit_size_expr_with_context(inner, ctx);
-            let loop_var = ctx.next_size_loop_var();
-            let remapped = replace_identifier_occurrences(&inner_expr, "item", &loop_var);
-            format!(
-                "WireWriter.EncodedArraySize({}, {} => {})",
-                render_value(value),
-                loop_var,
-                remapped,
-            )
-        }
-        other => todo!(
-            "C# backend has not yet implemented size expression support for {:?}",
-            other
-        ),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Ignore unused-import warnings for CSharpRecord in emit.rs while the
-// record template type is defined in templates.rs.
-// ---------------------------------------------------------------------------
-#[allow(dead_code)]
-const _: fn(&CSharpRecord) = |_| {};
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::ir::Lowerer as IrLowerer;
-    use crate::ir::codec::EnumLayout;
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
         CStyleVariant, DataVariant, EnumDef, EnumRepr, FieldDef, FunctionDef, MethodDef, ParamDef,
         ParamPassing, Receiver, RecordDef, ReturnDef, VariantPayload,
     };
     use crate::ir::ids::{EnumId, FieldName, FunctionId, MethodId, ParamName, RecordId};
-    use crate::ir::ops::{OffsetExpr, SizeExpr, ValueExpr, WireShape};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use boltffi_ffi_rules::callable::ExecutionKind;
-    use boltffi_ffi_rules::transport::EnumTagStrategy;
-    use std::collections::HashSet;
 
     fn empty_contract() -> FfiContract {
         FfiContract {
@@ -793,8 +233,6 @@ mod tests {
         let contract = empty_contract();
         let output = emit_contract(&contract);
 
-        assert_eq!(output.namespace, "DemoLib");
-        assert_eq!(output.class_name, "DemoLib");
         assert!(output.combined_source().contains("namespace DemoLib"));
     }
 
@@ -1093,125 +531,6 @@ mod tests {
             &src,
             "if (n < 0 || n > _length - _pos) throw new InvalidOperationException(\"corrupt wire: truncated \" + kind);",
             "WireReader.Require must compare against remaining bytes instead of overflowing `_pos + n`",
-        );
-    }
-
-    /// Regression: the IR wraps variable-length sizes in
-    /// `Sum([Fixed(4), StringLen(v)])`; `StringLen` must render as the
-    /// payload byte count alone, not `4 + byte_count`, otherwise a string
-    /// field's wire size is over-counted by 4 bytes.
-    #[test]
-    fn emit_size_expr_for_string_len_renders_payload_only() {
-        let size = SizeExpr::Sum(vec![
-            SizeExpr::Fixed(4),
-            SizeExpr::StringLen(ValueExpr::Named(
-                ParamName::new("name").as_str().to_string(),
-            )),
-        ]);
-        assert_eq!(
-            emit_size_expr(&size),
-            "(4 + Encoding.UTF8.GetByteCount(name))"
-        );
-    }
-
-    /// A `ReadOp::Enum` with a C-style layout routes to the generated
-    /// `{Name}Wire.Decode(reader)` helper rather than inlining the cast.
-    /// Keeps the tag-width choice in one place (the enum's wire helper)
-    /// so field-level emit code stays oblivious to i32-vs-i16 changes.
-    #[test]
-    fn emit_reader_read_c_style_enum_calls_wire_helper() {
-        let seq = ReadSeq {
-            size: SizeExpr::Fixed(4),
-            ops: vec![ReadOp::Enum {
-                id: EnumId::new("status"),
-                offset: OffsetExpr::Fixed(0),
-                layout: EnumLayout::CStyle {
-                    tag_type: PrimitiveType::I32,
-                    tag_strategy: EnumTagStrategy::OrdinalIndex,
-                    is_error: false,
-                },
-            }],
-            shape: WireShape::Value,
-        };
-
-        assert_eq!(emit_reader_read(&seq, None), "StatusWire.Decode(reader)");
-    }
-
-    /// A record decode inside a data-enum body must name-qualify to the
-    /// module namespace when the outer type collides with a sibling
-    /// variant name. Without the fix, `Point.Decode(reader)` would
-    /// resolve to the nested `sealed record Point()` (no Decode method),
-    /// breaking compilation.
-    #[test]
-    fn emit_reader_read_qualifies_record_when_shadowed_by_sibling_variant() {
-        let seq = ReadSeq {
-            size: SizeExpr::Fixed(16),
-            ops: vec![ReadOp::Record {
-                id: RecordId::new("point"),
-                offset: OffsetExpr::Fixed(0),
-                fields: vec![],
-            }],
-            shape: WireShape::Value,
-        };
-        let shadowed: HashSet<String> = ["Point".to_string()].into_iter().collect();
-        let scope = ShadowScope {
-            shadowed: &shadowed,
-            namespace: "Demo",
-        };
-
-        assert_eq!(
-            emit_reader_read(&seq, Some(&scope)),
-            "global::Demo.Point.Decode(reader)"
-        );
-    }
-
-    /// The shadowing pass is inert when the referenced class name is not
-    /// in the shadow set. Record decodes stay unqualified so we don't
-    /// pollute call sites that don't need the namespace prefix.
-    #[test]
-    fn emit_reader_read_leaves_record_unqualified_when_not_shadowed() {
-        let seq = ReadSeq {
-            size: SizeExpr::Fixed(16),
-            ops: vec![ReadOp::Record {
-                id: RecordId::new("point"),
-                offset: OffsetExpr::Fixed(0),
-                fields: vec![],
-            }],
-            shape: WireShape::Value,
-        };
-        let shadowed: HashSet<String> = ["Circle".to_string()].into_iter().collect();
-        let scope = ShadowScope {
-            shadowed: &shadowed,
-            namespace: "Demo",
-        };
-
-        assert_eq!(emit_reader_read(&seq, Some(&scope)), "Point.Decode(reader)");
-    }
-
-    /// A `WriteOp::Enum` with a C-style layout emits the same call shape
-    /// as a record field: `{value}.WireEncodeTo(wire)`. The extension
-    /// method on the generated `{Name}Wire` class lets the enum slot into
-    /// that uniform shape at no runtime cost.
-    #[test]
-    fn emit_write_expr_c_style_enum_field_matches_record_call_shape() {
-        let value = ValueExpr::Field(Box::new(ValueExpr::Instance), FieldName::new("status"));
-        let seq = WriteSeq {
-            size: SizeExpr::Fixed(4),
-            ops: vec![WriteOp::Enum {
-                id: EnumId::new("status"),
-                value,
-                layout: EnumLayout::CStyle {
-                    tag_type: PrimitiveType::I32,
-                    tag_strategy: EnumTagStrategy::OrdinalIndex,
-                    is_error: false,
-                },
-            }],
-            shape: WireShape::Value,
-        };
-
-        assert_eq!(
-            emit_write_expr(&seq, "wire"),
-            "this.Status.WireEncodeTo(wire)"
         );
     }
 
@@ -2023,8 +1342,13 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "_wire_v.WriteI32(v.Length); foreach (string item0 in v) { _wire_v.WriteString(item0); }",
-            "the encode body writes the 4-byte count then loops WriteString over each element",
+            "_wire_v.WriteI32(v.Length);",
+            "the encode body writes the 4-byte count first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (string item0 in v) { _wire_v.WriteString(item0); }",
+            "the encode body then loops WriteString over each element",
         );
         assert_source_contains(
             &src,
@@ -2036,8 +1360,8 @@ mod tests {
     /// `Vec<Vec<i32>>` exercises the nested-encoded-over-blittable path:
     /// outer layer is wire-encoded (count prefix + per-element bytes),
     /// inner layer is length-prefixed blittable. Loop variables must be
-    /// unique across nesting (`item0` for the inner write, `item1` for the
-    /// outer) so inner references don't shadow the outer.
+    /// unique across nesting (`item0` for the outer write, `item1` for
+    /// the inner) so inner references don't shadow the outer.
     #[test]
     fn emit_vec_vec_i32_nests_blittable_inside_encoded() {
         let mut contract = empty_contract();
@@ -2063,8 +1387,13 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "_wire_v.WriteI32(v.Length); foreach (int[] item0 in v) { _wire_v.WriteBlittableArray(item0); }",
-            "the outer write emits the count then loops WriteBlittableArray (which writes its own length prefix) over each inner array",
+            "_wire_v.WriteI32(v.Length);",
+            "the outer write emits the count first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (int[] item0 in v) { _wire_v.WriteBlittableArray(item0); }",
+            "then loops WriteBlittableArray (which writes its own length prefix) over each inner array",
         );
         assert_source_contains(
             &src,
@@ -2077,7 +1406,7 @@ mod tests {
     /// 4-byte count prefix, and the inner element is itself variable-width.
     /// The decode closure name (`r1`) and inner closure (`r0`) must differ
     /// so scopes don't shadow; the same property holds for write loop vars
-    /// (`item0` innermost, `item1` outer).
+    /// (`item0` outer, `item1` inner).
     #[test]
     fn emit_vec_vec_string_doubles_the_encoded_array_path() {
         let mut contract = empty_contract();
@@ -2101,13 +1430,18 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "return new WireReader(_buf).ReadEncodedArray<string[]>(r1 => r1.ReadEncodedArray<string>(r0 => r0.ReadString()));",
-            "the return decodes through two nested ReadEncodedArray closures with distinct receiver names",
+            "return new WireReader(_buf).ReadEncodedArray<string[]>(r0 => r0.ReadEncodedArray<string>(r1 => r1.ReadString()));",
+            "the return decodes through two nested ReadEncodedArray closures, outer-first numbering",
         );
         assert_source_contains(
             &src,
-            "_wire_v.WriteI32(v.Length); foreach (string[] item1 in v) { _wire_v.WriteI32(item1.Length); foreach (string item0 in item1) { _wire_v.WriteString(item0); }; }",
-            "the encode body nests two foreach loops with distinct loop variables",
+            "_wire_v.WriteI32(v.Length);",
+            "the outer encode writes the outer length first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (string[] item0 in v) { _wire_v.WriteI32(item0.Length); foreach (string item1 in item0) { _wire_v.WriteString(item1); }; }",
+            "then nests two foreach loops with distinct loop variables",
         );
     }
 
@@ -2143,13 +1477,18 @@ mod tests {
 
         assert_source_contains(
             enum_src,
-            "ByGroups _v => WireWriter.EncodedArraySize(_v.Groups, sizeItem1 => WireWriter.EncodedArraySize(sizeItem1, sizeItem0 => (4 + Encoding.UTF8.GetByteCount(sizeItem0))))",
+            "ByGroups _v => WireWriter.EncodedArraySize(_v.Groups, sizeItem0 => WireWriter.EncodedArraySize(sizeItem0, sizeItem1 => (4 + Encoding.UTF8.GetByteCount(sizeItem1))))",
             "the size expression to prefix only the outer field access and keep distinct nested lambda variables",
         );
         assert_source_contains(
             enum_src,
-            "wire.WriteI32(_v.Groups.Length); foreach (string[] item1 in _v.Groups) { wire.WriteI32(item1.Length); foreach (string item0 in item1) { wire.WriteString(item0); }; }",
-            "the encode body to prefix only the outer field access and keep the nested foreach bindings untouched",
+            "wire.WriteI32(_v.Groups.Length);",
+            "the outer encode writes the count using the variant-bound `_v` access",
+        );
+        assert_source_contains(
+            enum_src,
+            "foreach (string[] item0 in _v.Groups) { wire.WriteI32(item0.Length); foreach (string item1 in item0) { wire.WriteString(item1); }; }",
+            "then nests two foreach loops with distinct loop variables",
         );
         assert_source_lacks(
             enum_src,
@@ -2244,8 +1583,13 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "_wire_values.WriteI32(values.Length); foreach (Status item0 in values) { item0.WireEncodeTo(_wire_values); }",
-            "the encode body writes the 4-byte count then loops WireEncodeTo over each enum value",
+            "_wire_values.WriteI32(values.Length);",
+            "the encode body writes the 4-byte count first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (Status item0 in values) { item0.WireEncodeTo(_wire_values); }",
+            "then loops WireEncodeTo over each enum value",
         );
         assert_source_contains(
             &src,
@@ -2293,8 +1637,13 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "_wire_values.WriteI32(values.Length); foreach (Shape item0 in values) { item0.WireEncodeTo(_wire_values); }",
-            "the encode body writes the count and loops the data enum's WireEncodeTo over each element",
+            "_wire_values.WriteI32(values.Length);",
+            "the encode body writes the count first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (Shape item0 in values) { item0.WireEncodeTo(_wire_values); }",
+            "then loops the data enum's WireEncodeTo over each element",
         );
         assert_source_contains(
             &src,
@@ -2345,8 +1694,13 @@ mod tests {
         );
         assert_source_contains(
             &src,
-            "_wire_people.WriteI32(people.Length); foreach (Person item0 in people) { item0.WireEncodeTo(_wire_people); }",
-            "the encode body writes the count and loops the record's WireEncodeTo over each element",
+            "_wire_people.WriteI32(people.Length);",
+            "the encode body writes the count first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (Person item0 in people) { item0.WireEncodeTo(_wire_people); }",
+            "then loops the record's WireEncodeTo over each element",
         );
         assert_source_contains(
             &src,
@@ -2952,8 +2306,13 @@ mod tests {
         // per-element Option encoding.
         assert_source_contains(
             &src,
-            "_wire_v.WriteI32(v.Length); foreach (int? item0 in v) { if (item0 is { } opt0) { _wire_v.WriteU8((byte)1); _wire_v.WriteI32(opt0); } else { _wire_v.WriteU8((byte)0); }; }",
-            "encode writes the i32 length then loops each element through its own tag + payload",
+            "_wire_v.WriteI32(v.Length);",
+            "encode writes the i32 length first",
+        );
+        assert_source_contains(
+            &src,
+            "foreach (int? item0 in v) { if (item0 is { } opt0) { _wire_v.WriteU8((byte)1); _wire_v.WriteI32(opt0); } else { _wire_v.WriteU8((byte)0); }; }",
+            "then loops each element through its own tag + payload",
         );
         // Decode path: ReadEncodedArray with a per-element closure
         // that reads the tag and either returns (int?)null or the

@@ -10,7 +10,7 @@
 //! FfiContract + AbiContract
 //!         │
 //!         ▼  lower: walk the IR, decide supported + blittable paths
-//! CSharpModule (plan: data shapes the templates consume)
+//! CSharpModulePlan (plan: data shapes the templates consume)
 //!         │
 //!         ▼  emit: orchestrate + render templates
 //! Vec<CSharpFile>
@@ -18,33 +18,34 @@
 //!
 //! Core modules:
 //!
-//! - `plan`: view model. `CSharpType` is the central vocabulary; all
-//!   wire expressions are pre-rendered strings so templates stay dumb.
-//! - `lower`: decision layer. Produces the plan from the IR.
-//! - `emit`: orchestrator plus ABI-op → C# syntax helpers.
+//! - `ast`: pure C# AST. Self-contained nodes whose Display produces
+//!   standalone C# source. Knows the IR (lifts from it) but nothing
+//!   downstream.
+//! - `plan`: FFI-shaped view model built on `ast` payloads. Models
+//!   records, enums, functions, methods, params: what crosses the ABI.
+//! - `lower`: decision layer. Walks the IR and produces a plan,
+//!   including the typed AST sub-trees for the size, encode, and
+//!   decode wire phases.
+//! - `emit`: orchestrator. Drives the lowerer and renders each plan
+//!   entry through its Askama template.
 //!
-//! Supporting modules:
+//! Supporting module:
 //!
-//! - `names`: how elements get named in C#. Used by `plan`, `lower`,
-//!   and `emit`.
 //! - `templates`: Askama bindings over `plan`, rendered by `emit`.
 //!   Snapshot tests live alongside.
 //!
-//! Module dependencies: `names` is a leaf. `plan` builds on `names`
-//! plus the IR. `templates`, `lower`, and `emit` all build on `plan`.
-//! `lower` and `emit` cooperate: `lower` calls `emit`'s syntax
-//! helpers to pre-render wire expressions into the plan; `emit`'s
-//! orchestrator calls `lower` to produce that plan.
+//! Module dependencies: `ast` builds on the IR. `plan` builds on
+//! `ast`. `templates`, `lower`, and `emit` all build on `plan` and
+//! `ast`. `emit` calls `lower` to produce the plan; everything else
+//! flows downstream from there.
 
+mod ast;
 mod emit;
 mod lower;
-mod names;
 mod plan;
 mod templates;
 
-pub use emit::{CSharpEmitter, CSharpOutput};
-pub use names::NamingConvention;
-pub use plan::*;
+pub use emit::CSharpEmitter;
 
 use boltffi_ffi_rules::naming::{LibraryName, Name};
 

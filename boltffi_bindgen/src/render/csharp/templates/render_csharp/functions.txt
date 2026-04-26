@@ -2,44 +2,70 @@
     public static class {{ module.class_name }}
     {
 {%- for func in module.functions %}
-        public static {{ func.return_type }} {{ func.name }}({{ func.wrapper_param_list() }})
+        public static {{ func.return_type }} {{ func.name }}({% for p in func.params %}{{ p.csharp_type }} {{ p.name }}{% if !loop.last %}, {% endif %}{% endfor %})
         {
 {%- for param in func.params %}
-{%- if let Some(stmt) = param.setup_statement() %}
-            {{ stmt }}
+{%- if let Some(decl) = param.setup_declaration() %}
+            {{ decl }}
 {%- endif %}
 {%- endfor %}
 {%- for writer in func.wire_writers %}
             using var {{ writer.binding_name }} = new WireWriter({{ writer.size_expr }});
-            {{ writer.encode_expr }};
+{%- for stmt in writer.encode_stmts %}
+            {{ stmt }};
+{%- endfor %}
             byte[] {{ writer.bytes_binding_name }} = {{ writer.binding_name }}.ToArray();
 {%- endfor %}
 {%- if func.has_pinned_params() %}
             unsafe
             {
-{%- for fixed_arg in func.pinned_fixed_args() %}
-                fixed ({{ fixed_arg }})
+{%- for param in func.params %}
+{%- match param.kind %}
+{%- when CSharpParamKind::PinnedArray with { element_type, ptr_local } %}
+                fixed ({{ element_type }}* {{ ptr_local }} = {{ param.name }})
                 {
+{%- when _ %}
+{%- endmatch %}
 {%- endfor %}
 {%- endif %}
-{%- if let Some(body) = func.return_kind.wire_decode_return("_buf") %}
+{%- if func.return_kind.is_void() %}
+            NativeMethods.{{ func.name }}({{ func.native_call_args() }});
+{%- else if func.return_kind.is_direct() %}
+            return NativeMethods.{{ func.name }}({{ func.native_call_args() }});
+{%- else %}
             FfiBuf _buf = NativeMethods.{{ func.name }}({{ func.native_call_args() }});
             try
             {
-                {{ body }}
+                {%- match func.return_kind %}
+                {%- when CSharpReturnKind::WireDecodeString %}
+                return new WireReader(_buf).ReadString();
+                {%- when CSharpReturnKind::WireDecodeObject with { class_name } %}
+                return {{ class_name }}.Decode(new WireReader(_buf));
+                {%- when CSharpReturnKind::WireDecodeBlittablePrimitiveArray with { method, type_arg } %}
+                {%- if let Some(t) = type_arg %}
+                return new WireReader(_buf).{{ method }}<{{ t }}>();
+                {%- else %}
+                return new WireReader(_buf).{{ method }}();
+                {%- endif %}
+                {%- when CSharpReturnKind::WireDecodeBlittableRecordArray with { element } %}
+                return new WireReader(_buf).ReadBlittableArray<{{ element }}>();
+                {%- when CSharpReturnKind::WireDecodeEncodedArray with { element_type, decode_lambda } %}
+                return new WireReader(_buf).ReadEncodedArray<{{ element_type }}>({{ decode_lambda }});
+                {%- when CSharpReturnKind::WireDecodeOption with { decode_expr } %}
+                var reader = new WireReader(_buf); return {{ decode_expr }};
+                {%- when _ %}
+                {%- endmatch %}
             }
             finally
             {
                 NativeMethods.FreeBuf(_buf);
             }
-{%- else if func.is_void() %}
-            NativeMethods.{{ func.name }}({{ func.native_call_args() }});
-{%- else %}
-            return NativeMethods.{{ func.name }}({{ func.native_call_args() }});
 {%- endif %}
 {%- if func.has_pinned_params() %}
-{%- for _fixed_arg in func.pinned_fixed_args() %}
+{%- for param in func.params %}
+{%- if param.is_pinned() %}
                 }
+{%- endif %}
 {%- endfor %}
             }
 {%- endif %}
