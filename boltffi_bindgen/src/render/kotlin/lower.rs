@@ -29,6 +29,8 @@ use crate::ir::plan::{AbiType, ScalarOrigin, SpanContent, Transport};
 use crate::ir::types::{PrimitiveType, TypeExpr};
 use crate::render::kotlin::emit;
 use crate::render::kotlin::plan::*;
+#[cfg(test)]
+use crate::render::kotlin::templates::KotlinEmitter;
 use crate::render::kotlin::templates::{AsyncMethodTemplate, WireMethodTemplate};
 use crate::render::kotlin::{
     FactoryStyle, KotlinApiStyle as KotlinInputApiStyle, KotlinDesktopLoader, KotlinOptions,
@@ -2537,10 +2539,16 @@ impl<'a> KotlinLowerer<'a> {
             )
             .1;
         KotlinNative {
-            lib_name: self
+            android_lib_name: self
                 .options
                 .library_name
                 .clone()
+                .unwrap_or_else(|| naming::load_library_name(&self.contract.package.name)),
+            desktop_lib_name: self
+                .options
+                .library_name
+                .as_ref()
+                .map(|name| naming::library_name(name.as_str()))
                 .unwrap_or_else(|| naming::library_name(&self.contract.package.name)),
             desktop_loader_bundled: matches!(
                 self.options.desktop_loader,
@@ -4989,6 +4997,64 @@ mod tests {
         }
     }
 
+    #[test]
+    fn native_library_name_preserves_hyphenated_package_name() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let module = lower_module(&contract);
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(module.native.android_lib_name.as_str(), "sample-library");
+        assert_eq!(module.native.desktop_lib_name.as_str(), "sample_library");
+        assert!(rendered.contains("val androidLibrary = \"sample-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"sample_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"sample_library\""));
+        assert!(rendered.contains("System.loadLibrary(androidLibrary)"));
+    }
+
+    #[test]
+    fn native_library_name_normalizes_configured_hyphenated_name_for_desktop() {
+        let contract = FfiContract {
+            package: PackageInfo {
+                name: "sample-library".to_string(),
+                version: None,
+            },
+            catalog: TypeCatalog::default(),
+            functions: vec![],
+        };
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let module = KotlinLowerer::new(
+            &contract,
+            &abi,
+            "com.example.demo".to_string(),
+            "demo".to_string(),
+            KotlinOptions {
+                library_name: Some(naming::load_library_name("configured-library")),
+                ..KotlinOptions::default()
+            },
+        )
+        .lower();
+        let rendered = KotlinEmitter::emit(&module);
+
+        assert_eq!(
+            module.native.android_lib_name.as_str(),
+            "configured-library"
+        );
+        assert_eq!(
+            module.native.desktop_lib_name.as_str(),
+            "configured_library"
+        );
+        assert!(rendered.contains("val androidLibrary = \"configured-library\""));
+        assert!(rendered.contains("val desktopPreferredLibrary = \"configured_library_jni\""));
+        assert!(rendered.contains("val desktopFallbackLibrary = \"configured_library\""));
+    }
+
     fn async_string_method_contract() -> FfiContract {
         let mut catalog = TypeCatalog::default();
         catalog.insert_class(ClassDef {
@@ -5195,7 +5261,7 @@ mod tests {
     fn sync_string_function_preserves_null_guard_on_direct_return() {
         let contract = sync_string_function_contract();
         let module = lower_module(&contract);
-        let rendered = crate::render::kotlin::templates::KotlinEmitter::emit(&module);
+        let rendered = KotlinEmitter::emit(&module);
         let function = module
             .functions
             .iter()

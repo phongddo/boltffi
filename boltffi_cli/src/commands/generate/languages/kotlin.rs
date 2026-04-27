@@ -33,7 +33,7 @@ impl KotlinGenerator {
             library_name: request
                 .config()
                 .android_kotlin_library_name()
-                .map(boltffi_bindgen::library_name),
+                .map(boltffi_bindgen::load_library_name),
             desktop_loader: match request.config().android_kotlin_desktop_loader() {
                 ConfigKotlinDesktopLoader::Bundled => BindgenKotlinDesktopLoader::Bundled,
                 ConfigKotlinDesktopLoader::System => BindgenKotlinDesktopLoader::System,

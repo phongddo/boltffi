@@ -1,21 +1,22 @@
 @Suppress("FunctionName")
 private object Native {
     init {
-        val preferredLibrary = "{{ lib_name }}_jni"
-        val fallbackLibrary = "{{ lib_name }}"
+        val androidLibrary = "{{ android_lib_name }}"
+        val desktopPreferredLibrary = "{{ desktop_lib_name }}_jni"
+        val desktopFallbackLibrary = "{{ desktop_lib_name }}"
         val vmName = System.getProperty("java.vm.name").orEmpty()
         val isAndroidRuntime =
             vmName.contains("dalvik", ignoreCase = true) ||
             vmName.contains("art", ignoreCase = true)
         if (isAndroidRuntime) {
-            System.loadLibrary(fallbackLibrary)
+            System.loadLibrary(androidLibrary)
 {%- if desktop_loader_bundled %}
         } else {
-            loadDesktopLibraries(preferredLibrary, fallbackLibrary)
+            loadDesktopLibraries(desktopPreferredLibrary, desktopFallbackLibrary)
         }
 {%- elif desktop_loader_system %}
         } else {
-            System.loadLibrary(fallbackLibrary)
+            System.loadLibrary(desktopFallbackLibrary)
         }
 {%- endif %}
     }

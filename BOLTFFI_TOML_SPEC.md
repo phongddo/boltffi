@@ -182,7 +182,8 @@ Companion archive output for Apple slice libraries collected by `boltffi pack ap
 - `module_name` (string, optional): Kotlin module/object name.
   - Default: `PascalCase(package.name)`
 - `library_name` (string, optional): Native library name for `System.loadLibrary`.
-  - Default: inferred from crate name
+  - Default: inferred from the configured package/crate name. The Android load name preserves
+    hyphens to match `jniLibs`; the desktop JVM loader uses Cargo-normalized artifact names.
 - `desktop_loader` (`bundled` | `system` | `none`): How generated Kotlin loads the native library on non-Android JVMs.
   - Default: `bundled`
   - `bundled`: extract bundled desktop natives when present, otherwise fall back to `System.loadLibrary`
