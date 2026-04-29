@@ -1,6 +1,6 @@
 plugins {
-    kotlin("jvm") version "2.3.20"
-    kotlin("plugin.allopen") version "2.3.20"
+    kotlin("jvm") version "2.3.21"
+    kotlin("plugin.allopen") version "2.3.21"
     id("me.champeau.jmh") version "0.7.3"
     application
 }
