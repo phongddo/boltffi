@@ -4,9 +4,15 @@
 #nullable enable
 
 using System;
+{%- if class.has_streams() %}
+using System.Collections.Generic;
+{%- endif %}
 using System.Threading;
-{%- if class.has_pinned_params() %}
+{%- if class.has_pinned_params() || class.has_streams() %}
 using System.Runtime.CompilerServices;
+{%- endif %}
+{%- if class.has_streams() %}
+using System.Threading.Tasks;
 {%- endif %}
 {%- if class.needs_system_text() %}
 using System.Text;
@@ -108,6 +114,73 @@ namespace {{ namespace }}
 {%- endfor %}
 {%- for method in class.methods %}
 {% include "render_csharp/class_method.txt" %}
+{%- endfor %}
+{%- for stream in class.streams %}
+
+{{ self::summary_doc_block(stream.summary_doc, "        ") }}        /// <remarks>
+        /// The returned <see cref="IAsyncEnumerable{T}"/> owns the underlying
+        /// subscription. Disposing the owning <see cref="{{ class.class_name }}"/>
+        /// instance does not, by itself, end iteration - the producer simply
+        /// stops emitting events. Callers must either cancel the supplied
+        /// <see cref="CancellationToken"/> or break out of <c>await foreach</c>
+        /// to release the subscription.
+        /// </remarks>
+        public async IAsyncEnumerable<{{ stream.item_type }}> {{ stream.name }}([EnumeratorCancellation] CancellationToken cancellationToken = default)
+        {
+            ThrowIfDisposed();
+            IntPtr subscription = NativeMethods.{{ stream.subscribe_method_name }}(_handle);
+            if (subscription == IntPtr.Zero) yield break;
+
+            global::System.Threading.Tasks.Task<int>? _pendingWait = null;
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+
+                    while (true)
+                    {
+                        {{ stream.item_type }}[] _items = new {{ stream.item_type }}[BoltFFIStream.DefaultBatchSize];
+                        int _itemCount;
+                        UIntPtr _count;
+                        unsafe
+                        {
+                            fixed ({{ stream.item_type }}* _itemsPtr = _items)
+                            {
+                                _count = NativeMethods.{{ stream.pop_batch_method_name }}(subscription, (IntPtr)_itemsPtr, (UIntPtr)_items.Length);
+                            }
+                        }
+                        _itemCount = checked((int)(nuint)_count);
+                        if (_itemCount == 0) break;
+
+                        for (int _i = 0; _i < _itemCount; _i++)
+                        {
+                            cancellationToken.ThrowIfCancellationRequested();
+                            yield return _items[_i];
+                        }
+
+                        if (_itemCount < BoltFFIStream.DefaultBatchSize) break;
+                    }
+
+                    _pendingWait = global::System.Threading.Tasks.Task.Run(
+                        () => NativeMethods.{{ stream.wait_method_name }}(subscription, BoltFFIStream.WaitTimeoutMilliseconds),
+                        cancellationToken);
+                    int _waitResult = await _pendingWait.ConfigureAwait(false);
+                    _pendingWait = null;
+                    if (_waitResult == BoltFFIStream.WaitResultUnsubscribed) yield break;
+                }
+            }
+            finally
+            {
+                NativeMethods.{{ stream.unsubscribe_method_name }}(subscription);
+                if (_pendingWait is not null)
+                {
+                    try { await _pendingWait.ConfigureAwait(false); }
+                    catch { /* wait may have observed cancellation; ignore */ }
+                }
+                NativeMethods.{{ stream.free_method_name }}(subscription);
+            }
+        }
 {%- endfor %}
 
         internal IntPtr RawHandle => _handle;

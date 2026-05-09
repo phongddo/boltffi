@@ -55,6 +55,10 @@ impl CSharpModulePlan {
         !self.classes.is_empty()
     }
 
+    pub fn has_streams(&self) -> bool {
+        self.classes.iter().any(CSharpClassPlan::has_streams)
+    }
+
     pub fn has_async(&self) -> bool {
         self.functions.iter().any(CSharpFunctionPlan::is_async)
             || self.classes.iter().any(CSharpClassPlan::has_async_methods)
@@ -272,6 +276,7 @@ mod tests {
             native_free_method_name: CSharpMethodName::from_source("CounterFree"),
             constructors: vec![],
             methods: vec![throwing_method()],
+            streams: vec![],
         }
     }
 

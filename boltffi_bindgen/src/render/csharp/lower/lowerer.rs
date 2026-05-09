@@ -124,9 +124,9 @@ mod tests {
     use crate::ir::contract::{FfiContract, PackageInfo};
     use crate::ir::definitions::{
         ClassDef, ConstructorDef, FieldDef, FunctionDef, MethodDef, ParamDef, ParamPassing,
-        Receiver, RecordDef, ReturnDef,
+        Receiver, RecordDef, ReturnDef, StreamDef, StreamMode,
     };
-    use crate::ir::ids::{ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId};
+    use crate::ir::ids::{ClassId, FieldName, FunctionId, MethodId, ParamName, RecordId, StreamId};
     use crate::ir::types::{PrimitiveType, TypeExpr};
     use boltffi_ffi_rules::callable::ExecutionKind;
 
@@ -247,5 +247,29 @@ mod tests {
                 .map(ToString::to_string),
             Some("Returns the current value.".to_string())
         );
+    }
+
+    #[test]
+    #[should_panic(expected = "non-blittable")]
+    fn lowerer_panics_for_non_blittable_stream_item() {
+        let mut contract = empty_contract();
+        contract.catalog.insert_class(ClassDef {
+            id: ClassId::new("event_bus"),
+            constructors: vec![],
+            methods: vec![],
+            streams: vec![StreamDef {
+                id: StreamId::new("subscribe_labels"),
+                item_type: TypeExpr::String,
+                mode: StreamMode::Async,
+                doc: None,
+                deprecated: None,
+            }],
+            doc: None,
+            deprecated: None,
+        });
+
+        let abi = IrLowerer::new(&contract).to_abi_contract();
+        let options = CSharpOptions::default();
+        let _ = CSharpLowerer::new(&contract, &abi, &options).lower();
     }
 }
