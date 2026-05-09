@@ -1,10 +1,10 @@
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    CallableDecl, CallbackId, CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeId, DeclId,
-    DeclMeta, DefaultValue, ElementMeta, EnumId, FunctionId, HandleRepr, InitializerId,
-    IntegerRepr, IntegerValue, MethodId, ReadPlan, RecordId, RecordLayout, ReturnTypeRef, StreamId,
-    TypeRef, WritePlan,
+    CallableDecl, CallbackId, CanonicalName, ClassId, CodecPlan, ConstantId, CustomTypeId,
+    DeclMeta, DeclarationId, DefaultValue, ElementMeta, EnumId, FunctionId, HandleRepr,
+    InitializerId, IntegerRepr, IntegerValue, MethodId, ReadPlan, RecordId, RecordLayout,
+    ReturnTypeRef, StreamId, TypeRef, WritePlan,
 };
 
 /// One classified declaration in a binding contract.
@@ -36,16 +36,16 @@ pub enum Decl {
 
 impl Decl {
     /// Returns the typed identity of this declaration.
-    pub fn id(&self) -> DeclId {
+    pub fn id(&self) -> DeclarationId {
         match self {
-            Self::Record(record) => DeclId::Record(record.id()),
-            Self::Enum(enum_decl) => DeclId::Enum(enum_decl.id()),
-            Self::Function(function) => DeclId::Function(function.id()),
-            Self::Class(class) => DeclId::Class(class.id()),
-            Self::Callback(callback) => DeclId::Callback(callback.id()),
-            Self::Stream(stream) => DeclId::Stream(stream.id()),
-            Self::Constant(constant) => DeclId::Constant(constant.id()),
-            Self::CustomType(custom) => DeclId::CustomType(custom.id()),
+            Self::Record(record) => DeclarationId::Record(record.id()),
+            Self::Enum(enum_decl) => DeclarationId::Enum(enum_decl.id()),
+            Self::Function(function) => DeclarationId::Function(function.id()),
+            Self::Class(class) => DeclarationId::Class(class.id()),
+            Self::Callback(callback) => DeclarationId::Callback(callback.id()),
+            Self::Stream(stream) => DeclarationId::Stream(stream.id()),
+            Self::Constant(constant) => DeclarationId::Constant(constant.id()),
+            Self::CustomType(custom) => DeclarationId::CustomType(custom.id()),
         }
     }
 }

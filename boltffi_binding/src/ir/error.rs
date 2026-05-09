@@ -1,6 +1,6 @@
 use std::{error::Error, fmt};
 
-use crate::{ContractVersion, DeclId, SymbolId};
+use crate::{ContractVersion, DeclarationId, SymbolId};
 
 /// A reason a binding contract could not be exposed.
 ///
@@ -35,7 +35,7 @@ impl fmt::Display for BindingError {
                 current.major(),
                 current.minor()
             ),
-            BindingErrorKind::DuplicateDeclId(id) => {
+            BindingErrorKind::DuplicateDeclarationId(id) => {
                 write!(formatter, "duplicate declaration id {id:?}")
             }
             BindingErrorKind::DuplicateSymbolId(id) => {
@@ -68,7 +68,7 @@ pub enum BindingErrorKind {
         current: ContractVersion,
     },
     /// Two top-level declarations share the same id.
-    DuplicateDeclId(DeclId),
+    DuplicateDeclarationId(DeclarationId),
     /// Two native symbols share the same id.
     DuplicateSymbolId(SymbolId),
     /// Two native symbols share the same exported name.

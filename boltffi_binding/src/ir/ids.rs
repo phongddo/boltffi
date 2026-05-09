@@ -83,19 +83,19 @@ binding_id! {
 
 /// Identity of any top-level declaration, regardless of family.
 ///
-/// A `DeclId` answers "which declaration in this contract" without losing
+/// A `DeclarationId` answers "which declaration in this contract" without losing
 /// track of which kind of declaration it is. Two values are equal only when
 /// both their family and their typed id match, so a record id and a function
 /// id with the same numeric value never collide.
 ///
 /// # Example
 ///
-/// `DeclId::Record(RecordId::from_raw(0))` and
-/// `DeclId::Function(FunctionId::from_raw(0))` share the same raw value but
-/// are distinct `DeclId`s; both can coexist in the same contract.
+/// `DeclarationId::Record(RecordId::from_raw(0))` and
+/// `DeclarationId::Function(FunctionId::from_raw(0))` share the same raw value but
+/// are distinct `DeclarationId`s; both can coexist in the same contract.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
 #[non_exhaustive]
-pub enum DeclId {
+pub enum DeclarationId {
     /// Record id.
     Record(RecordId),
     /// Enum id.

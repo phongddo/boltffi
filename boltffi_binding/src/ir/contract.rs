@@ -181,7 +181,7 @@ fn validate_unique_decl_ids(decls: &[Decl]) -> Result<(), BindingError> {
             if seen.insert(decl_id) {
                 Ok(seen)
             } else {
-                Err(BindingError::new(BindingErrorKind::DuplicateDeclId(
+                Err(BindingError::new(BindingErrorKind::DuplicateDeclarationId(
                     decl_id,
                 )))
             }

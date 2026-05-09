@@ -139,6 +139,13 @@ pub enum DefaultValue {
 /// preserves at declaration scope. Everything else (source spans,
 /// attributes, attribute arguments) is consumed by the classifier or
 /// dropped.
+///
+/// # Example
+///
+/// A Rust `#[deprecated(since = "0.24.0", note = "use open instead")]`
+/// attribute on an exported function becomes deprecation metadata here.
+/// The backend can render that as a target-language deprecation annotation
+/// without parsing Rust attributes.
 #[derive(Clone, Debug, Default, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct DeclMeta {
     doc: Option<DocComment>,

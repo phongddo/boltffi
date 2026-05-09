@@ -93,8 +93,8 @@ pub use decl::{
 };
 pub use error::{BindingError, BindingErrorKind};
 pub use ids::{
-    CallbackId, ClassId, ConstantId, CustomTypeId, DeclId, EnumId, FunctionId, InitializerId,
-    MethodId, RecordId, StreamId, SymbolId,
+    CallbackId, ClassId, ConstantId, CustomTypeId, DeclarationId, EnumId, FunctionId,
+    InitializerId, MethodId, RecordId, StreamId, SymbolId,
 };
 pub use layout::{AlignmentError, ByteAlignment, ByteOffset, ByteSize, FieldLayout, RecordLayout};
 pub use metadata::{
