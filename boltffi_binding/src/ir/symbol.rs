@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::{BindingError, BindingErrorKind, SymbolId};
+use crate::{BindingError, BindingErrorKind, Decl, Surface, SymbolId};
 
 /// A linker-visible name as it appears in the compiled Rust artifact.
 ///
@@ -96,6 +96,22 @@ impl NativeSymbolTable {
         Ok(table)
     }
 
+    /// Builds a table from the deduplicated union of every native
+    /// symbol the supplied declarations reference.
+    ///
+    /// Symbols are inserted in first-seen order so the table layout is
+    /// deterministic given a stable declaration order.
+    pub(crate) fn from_decls<S: Surface>(decls: &[Decl<S>]) -> Result<Self, BindingError> {
+        let mut seen: HashSet<&NativeSymbol> = HashSet::new();
+        let mut ordered: Vec<NativeSymbol> = Vec::new();
+        for symbol in decls.iter().flat_map(Decl::native_symbols) {
+            if seen.insert(symbol) {
+                ordered.push(symbol.clone());
+            }
+        }
+        Self::from_symbols(ordered)
+    }
+
     /// Returns the symbols in registration order.
     pub fn symbols(&self) -> &[NativeSymbol] {
         &self.symbols
@@ -165,4 +181,101 @@ fn is_valid_symbol_name(name: &str) -> bool {
         .next()
         .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
         && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+/// The name of a function-pointer field in a generated vtable struct.
+///
+/// Foreign code provides the function pointer; Rust calls through it.
+/// Distinct from [`NativeSymbol`] because a vtable slot is not a
+/// linker-visible symbol and validates as a Rust struct-field
+/// identifier rather than a C identifier.
+///
+/// # Example
+///
+/// A callback trait with a `fn handle(self, event: Event)` method
+/// produces a vtable struct whose corresponding field is named
+/// `handle`; that field name is held as a `VTableSlot`.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct VTableSlot(String);
+
+impl VTableSlot {
+    pub(crate) fn parse(name: impl Into<String>) -> Result<Self, BindingError> {
+        let name = name.into();
+
+        if is_valid_vtable_slot(&name) {
+            Ok(Self(name))
+        } else {
+            Err(BindingError::new(BindingErrorKind::InvalidVTableSlot(name)))
+        }
+    }
+
+    /// Returns the slot name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+fn is_valid_vtable_slot(name: &str) -> bool {
+    let mut characters = name.chars();
+    characters
+        .next()
+        .is_some_and(|character| character == '_' || character.is_ascii_alphabetic())
+        && characters.all(|character| character == '_' || character.is_ascii_alphanumeric())
+}
+
+/// The module name in a wasm module's import section.
+///
+/// Wasm imports are addressed as a `(module, name)` pair. For boltffi
+/// bindings the module is typically `"env"`, but the type captures it
+/// explicitly so the renderer never invents a module name.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ImportModule(String);
+
+impl ImportModule {
+    pub(crate) fn parse(name: impl Into<String>) -> Result<Self, BindingError> {
+        let name = name.into();
+        if name.is_empty() {
+            Err(BindingError::new(BindingErrorKind::InvalidImportModule(
+                name,
+            )))
+        } else {
+            Ok(Self(name))
+        }
+    }
+
+    /// Returns the module name.
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A function imported by a wasm module.
+///
+/// Pairs the wasm import module with the function name the host
+/// resolves at link time. Distinct from [`NativeSymbol`] because wasm
+/// imports are not linker symbols, and distinct from [`VTableSlot`]
+/// because they are not struct fields. The name is typically a
+/// generated identifier such as `__boltffi_callback_adder_add`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub struct ImportSymbol {
+    module: ImportModule,
+    name: SymbolName,
+}
+
+impl ImportSymbol {
+    pub(crate) fn new(module: ImportModule, name: SymbolName) -> Self {
+        Self { module, name }
+    }
+
+    /// Returns the import module.
+    pub fn module(&self) -> &ImportModule {
+        &self.module
+    }
+
+    /// Returns the imported function name.
+    pub fn name(&self) -> &SymbolName {
+        &self.name
+    }
 }

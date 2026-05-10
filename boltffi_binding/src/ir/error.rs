@@ -47,6 +47,26 @@ impl fmt::Display for BindingError {
             BindingErrorKind::InvalidSymbolName(name) => {
                 write!(formatter, "invalid native symbol name `{name}`")
             }
+            BindingErrorKind::InvalidVTableSlot(name) => {
+                write!(formatter, "invalid vtable slot name `{name}`")
+            }
+            BindingErrorKind::InvalidImportModule(name) => {
+                write!(formatter, "invalid wasm import module `{name}`")
+            }
+            BindingErrorKind::UnregisteredSymbol(name) => {
+                write!(
+                    formatter,
+                    "native symbol `{name}` referenced by a declaration but missing from the symbol table"
+                )
+            }
+            BindingErrorKind::ReturnSlotConflict => {
+                formatter.write_str("callable return and error both claim the native return slot")
+            }
+            BindingErrorKind::PackedInParamPosition => formatter
+                .write_str("BufferShape::Packed cannot appear on a parameter encoded crossing"),
+            BindingErrorKind::SliceInReturnPosition => formatter.write_str(
+                "BufferShape::Slice cannot appear on a return or error encoded crossing",
+            ),
         }
     }
 }
@@ -75,4 +95,21 @@ pub enum BindingErrorKind {
     DuplicateSymbolName(String),
     /// A native symbol name is empty or not a valid C identifier.
     InvalidSymbolName(String),
+    /// A vtable slot name is empty or not a valid Rust identifier.
+    InvalidVTableSlot(String),
+    /// A wasm import module name is empty.
+    InvalidImportModule(String),
+    /// A declaration references a native symbol that is not present in
+    /// the contract's [`crate::NativeSymbolTable`].
+    UnregisteredSymbol(String),
+    /// A callable's return shape and error channel both claim the native
+    /// return slot.
+    ReturnSlotConflict,
+    /// A parameter's encoded crossing was tagged `BufferShape::Packed`,
+    /// but packing is only meaningful in return position.
+    PackedInParamPosition,
+    /// A return or error's encoded crossing was tagged
+    /// `BufferShape::Slice`, but a borrowed slice cannot be returned to
+    /// foreign code with no owner to free it.
+    SliceInReturnPosition,
 }

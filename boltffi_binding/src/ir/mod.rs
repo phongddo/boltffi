@@ -1,14 +1,17 @@
-//! What is in `Bindings`, and how a consumer reads it.
+//! What is in `Bindings<S>`, and how a consumer reads it.
 //!
 //! When `#[data]` and `#[export]` see the user's source, they classify
-//! every exported item: this record is bytes that can cross by memcpy,
-//! that enum has a payload that needs encoding, this async function
-//! returns a poll handle. By the time a [`Bindings`] reaches a consumer,
-//! the decisions are over. Every declaration carries its boundary plan
-//! attached.
+//! every exported item against a target [`Surface`]: this record is
+//! bytes that can cross by memcpy, that enum has a payload that needs
+//! encoding, this async function returns a poll handle. By the time a
+//! [`Bindings`] reaches a consumer, the decisions are over. Every
+//! declaration carries its boundary plan attached, and the choices that
+//! diverge between targets (callback dispatch, buffer layout, handle
+//! carrier, async protocol) are picked once for the surface the
+//! contract is parameterized by.
 //!
-//! Generating Swift, Kotlin, Python, or any other target language is not
-//! in this module. The work here ends at the resolved facts.
+//! Generating Swift, Kotlin, Python, or any other target language is
+//! not in this module. The work here ends at the resolved facts.
 //!
 //! # The shape of a contract
 //!
@@ -32,16 +35,19 @@
 //! carrying a [`ReadPlan`] and a [`WritePlan`] for moving the bytes.
 //!
 //! `distance` becomes a [`FunctionDecl`]. Inside it, a [`CallableDecl`]
-//! holds the native symbol foreign code will call, two [`ParamDecl`]s
-//! that lower as direct `Point` values, and a primitive `f64` return.
-//! Synchronous. No error path.
+//! holds the receiver mode, two [`ParamDecl`]s that lower as direct
+//! `Point` values, and a primitive `f64` return. The native symbol
+//! foreign code calls (`demo_distance` on native, the same identifier
+//! at the wasm export on wasm32) lives on the surrounding
+//! `FunctionDecl`. Synchronous. No error path.
 //!
-//! Both refer back to a [`NativeSymbolTable`] hanging off the `Bindings`
-//! value, alongside a [`PackageInfo`] used in diagnostics.
+//! Both refer back to a [`NativeSymbolTable`] hanging off the
+//! `Bindings<S>` value, alongside a [`PackageInfo`] used in
+//! diagnostics.
 //!
 //! # Consuming a contract
 //!
-//! Pattern match on [`Decl`]:
+//! Pattern match on [`Decl<S>`]:
 //!
 //! ```ignore
 //! for decl in bindings.decls() {
@@ -61,7 +67,8 @@
 //!
 //! [`Decl`] is the front door. [`RecordDecl`], [`EnumDecl`],
 //! [`CallableDecl`], and [`CodecNode`] are where most of the real shape
-//! lives.
+//! lives. [`Surface`], [`Native`], and [`Wasm32`] gate the target
+//! divergence.
 
 #![allow(dead_code)]
 
@@ -76,20 +83,20 @@ mod metadata;
 mod name;
 mod op;
 mod primitive;
+mod surface;
 mod symbol;
 mod types;
 
 pub use callable::{
-    AsyncDecl, CallableDecl, ErrorDecl, ExecutionDecl, LiftPlan, LowerPlan, ParamDecl,
-    ReceiverDecl, ReturnDecl,
+    CallableDecl, ErrorDecl, ExecutionDecl, LiftPlan, LowerPlan, ParamDecl, Receive, ReturnDecl,
 };
 pub use codec::{CodecNode, CodecPlan, ReadPlan, WritePlan};
-pub use contract::{Bindings, ContractVersion, PackageInfo};
+pub use contract::{Bindings, ContractVersion, PackageInfo, SerializedBindings};
 pub use decl::{
     CStyleEnumDecl, CStyleVariantDecl, CallbackDecl, ClassDecl, ConstantDecl, ConstantValueDecl,
     CustomTypeDecl, DataEnumDecl, DataVariantDecl, DataVariantPayload, Decl, DirectFieldDecl,
     DirectRecordDecl, EncodedFieldDecl, EncodedRecordDecl, EnumDecl, FieldKey, FunctionDecl,
-    InitializerDecl, MethodDecl, RecordDecl, StreamDecl, VariantTag,
+    InitializerDecl, MethodDecl, RecordDecl, StreamDecl, StreamProtocol, VariantTag,
 };
 pub use error::{BindingError, BindingErrorKind};
 pub use ids::{
@@ -105,6 +112,12 @@ pub use op::{
     BinderId, ByteCount, ElementCount, IntrinsicOp, Op, OpNode, Scalar, ScalarTy, Truth, ValueRef,
     ValueRoot,
 };
-pub use primitive::{HandleRepr, IntegerRepr, Primitive};
-pub use symbol::{NativeSymbol, NativeSymbolTable, SymbolName};
-pub use types::{ClosureTypeRef, ReturnTypeRef, TypeRef};
+pub use primitive::{IntegerRepr, Primitive};
+pub use surface::{
+    AsyncProtocolIntrospect, BufferShapeRules, CallbackProtocolIntrospect, Native, Surface, Wasm32,
+    native, wasm32,
+};
+pub use symbol::{
+    ImportModule, ImportSymbol, NativeSymbol, NativeSymbolTable, SymbolName, VTableSlot,
+};
+pub use types::{ClosureTypeRef, HandleTarget, ReturnTypeRef, TypeRef};

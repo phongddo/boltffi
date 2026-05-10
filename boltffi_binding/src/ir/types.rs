@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{CallbackId, ClassId, CustomTypeId, EnumId, HandleRepr, Primitive, RecordId};
+use crate::{CallbackId, ClassId, CustomTypeId, EnumId, Primitive, RecordId, StreamId};
 
 /// The value a binding declaration accepts or returns.
 ///
@@ -70,33 +70,55 @@ pub enum ReturnTypeRef {
     Value(TypeRef),
 }
 
+/// What an opaque handle stands in for.
+///
+/// Handles cross the boundary as integer tokens; the variants name the
+/// kinds of declarations a token can refer to. Excludes value-shaped
+/// types like primitives, records, and enums, which never cross as
+/// opaque tokens. Narrower than [`TypeRef`] so the type system rejects
+/// "handle to `i32`" or "handle to `Point`" at the construction site.
+///
+/// # Example
+///
+/// A `Class` handle into a Rust-owned `Engine` instance is represented
+/// as `HandleTarget::Class(engine_id)`. A foreign-implemented callback
+/// trait is `HandleTarget::Callback(listener_id)`.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum HandleTarget {
+    /// Class instance owned by Rust.
+    Class(ClassId),
+    /// Callback object implemented on the foreign side.
+    Callback(CallbackId),
+    /// Inline closure crossing as a callable handle.
+    Closure(Box<ClosureTypeRef>),
+    /// Stream of values produced by Rust.
+    Stream(StreamId),
+}
+
 /// An inline closure crossing the boundary as a parameter value.
 ///
-/// Distinct from a callback trait: a callback trait is a named declaration
-/// with an id and a methods list, while a closure is an anonymous parameter
-/// type. Both eventually cross as a handle, but the closure's signature is
-/// recorded next to the parameter that accepts it instead of in a sibling
-/// declaration.
+/// Records only the closure's signature: the parameter types and the
+/// result type. The carrier that moves the closure handle across the
+/// boundary lives on the surrounding crossing plan (a `LowerPlan` or
+/// `LiftPlan`) where the closure appears, not on the type itself.
 ///
 /// # Example
 ///
 /// A Rust parameter typed `impl Fn(i32) -> String` produces a
-/// `ClosureTypeRef` with one `i32` parameter, a string return, and the
-/// handle representation chosen for callable objects on the target.
+/// `ClosureTypeRef` with one `i32` parameter and a string return.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct ClosureTypeRef {
     parameters: Vec<TypeRef>,
     returns: ReturnTypeRef,
-    handle: HandleRepr,
 }
 
 impl ClosureTypeRef {
     /// Builds a closure type reference.
-    pub fn new(parameters: Vec<TypeRef>, returns: ReturnTypeRef, handle: HandleRepr) -> Self {
+    pub fn new(parameters: Vec<TypeRef>, returns: ReturnTypeRef) -> Self {
         Self {
             parameters,
             returns,
-            handle,
         }
     }
 
@@ -108,10 +130,5 @@ impl ClosureTypeRef {
     /// Returns the result type.
     pub fn returns(&self) -> &ReturnTypeRef {
         &self.returns
-    }
-
-    /// Returns the handle carrier.
-    pub const fn handle(&self) -> HandleRepr {
-        self.handle
     }
 }

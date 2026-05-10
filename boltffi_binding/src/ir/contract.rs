@@ -1,15 +1,19 @@
-use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
-use crate::{BindingError, BindingErrorKind, CanonicalName, Decl, NativeSymbolTable};
+use serde::{Deserialize, Serialize};
+
+use crate::{
+    BindingError, BindingErrorKind, CallableDecl, CanonicalName, Decl, Native, NativeSymbol,
+    NativeSymbolTable, Surface, Wasm32,
+};
 
 /// Schema marker carried in every serialized binding contract.
 ///
-/// The major component changes when the schema becomes incompatible: code
-/// compiled against an older major cannot make sense of the new bytes. The
-/// minor component grows additively for fields older readers can safely
-/// ignore. [`readable`](Self::readable) is the rule both halves enforce
-/// together.
+/// The major component changes when the schema becomes incompatible:
+/// code compiled against an older major cannot make sense of the new
+/// bytes. The minor component grows additively for fields older readers
+/// can safely ignore. [`readable`](Self::readable) is the rule both
+/// halves enforce together.
 ///
 /// # Example
 ///
@@ -46,8 +50,8 @@ impl ContractVersion {
         self.minor
     }
 
-    /// Returns `true` when the major matches [`Self::CURRENT`] and the minor
-    /// is no greater than [`Self::CURRENT`].
+    /// Returns `true` when the major matches [`Self::CURRENT`] and the
+    /// minor is no greater than [`Self::CURRENT`].
     pub const fn readable(self) -> bool {
         self.major == Self::CURRENT.major && self.minor <= Self::CURRENT.minor
     }
@@ -55,16 +59,16 @@ impl ContractVersion {
 
 /// The Rust package whose API a [`Bindings`] describes.
 ///
-/// The name is the source-of-truth identifier that generated module names,
-/// diagnostics, and on-disk artifacts refer back to. The version is the
-/// `Cargo.toml` value when present and exists for human-readable messages;
-/// it is not part of contract identity.
+/// The name is the source-of-truth identifier that generated module
+/// names, diagnostics, and on-disk artifacts refer back to. The version
+/// is the `Cargo.toml` value when present and exists for human-readable
+/// messages; it is not part of contract identity.
 ///
 /// # Example
 ///
-/// A `Cargo.toml` with `name = "demo"` and `version = "0.2.1"` produces a
-/// `PackageInfo` whose name canonicalizes to `["demo"]` and whose version
-/// is `Some("0.2.1")`.
+/// A `Cargo.toml` with `name = "demo"` and `version = "0.2.1"` produces
+/// a `PackageInfo` whose name canonicalizes to `["demo"]` and whose
+/// version is `Some("0.2.1")`.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct PackageInfo {
     name: CanonicalName,
@@ -87,30 +91,38 @@ impl PackageInfo {
     }
 }
 
-/// The complete classified API of one Rust crate.
+/// The complete classified API of one Rust crate, parameterized by
+/// target call surface.
 ///
-/// Holds every record, enum, function, class, callback, stream, constant,
-/// and custom type the user exported, paired with the FFI decision the
-/// classifier made for it. The native symbol table lists every linker
-/// name the bindings will call. The schema version states which release of
-/// this crate produced the contract.
+/// Holds every record, enum, function, class, callback, stream,
+/// constant, and custom type the user exported, paired with the FFI
+/// decision the classifier made for it for surface `S`. The native
+/// symbol table lists every linker name the bindings will call. The
+/// schema version states which release of this crate produced the
+/// contract.
 ///
-/// A `Bindings` is always valid by construction. Pattern matching cannot
-/// witness duplicate ids, an unreadable schema version, or a symbol table
-/// with inconsistent entries; the crate exposes no fallible accessor that
-/// would hand back a partially constructed value.
+/// A `Bindings<S>` is always valid by construction. Pattern matching
+/// cannot witness duplicate ids, an unreadable schema version, or a
+/// symbol table with inconsistent entries; the crate exposes no
+/// fallible accessor that would hand back a partially constructed
+/// value. A backend typed against `Bindings<S>` cannot accidentally
+/// receive a `Bindings<S2>` for a different surface.
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
-pub struct Bindings {
+#[serde(bound(
+    serialize = "S::BufferShape: Serialize, S::HandleCarrier: Serialize, S::AsyncProtocol: Serialize, S::CallbackProtocol: Serialize",
+    deserialize = "S::BufferShape: serde::de::DeserializeOwned, S::HandleCarrier: serde::de::DeserializeOwned, S::AsyncProtocol: serde::de::DeserializeOwned, S::CallbackProtocol: serde::de::DeserializeOwned"
+))]
+pub struct Bindings<S: Surface> {
     version: ContractVersion,
     package: PackageInfo,
-    decls: Vec<Decl>,
+    decls: Vec<Decl<S>>,
     symbols: NativeSymbolTable,
 }
 
-impl Bindings {
+impl<S: Surface> Bindings<S> {
     pub(crate) fn new(
         package: PackageInfo,
-        decls: Vec<Decl>,
+        decls: Vec<Decl<S>>,
         symbols: NativeSymbolTable,
     ) -> Result<Self, BindingError> {
         let bindings = Self {
@@ -134,7 +146,7 @@ impl Bindings {
     }
 
     /// Returns the declarations.
-    pub fn decls(&self) -> &[Decl] {
+    pub fn decls(&self) -> &[Decl<S>] {
         &self.decls
     }
 
@@ -151,14 +163,105 @@ impl Bindings {
     /// Returns `Ok` when:
     ///
     /// - the contract version is readable by this crate;
-    /// - every native symbol has a callable spelling and a unique id and name;
-    /// - every declaration id is unique within its family.
+    /// - every native symbol has a callable spelling and a unique id and
+    ///   name;
+    /// - every declaration id is unique within its family;
+    /// - every callable inside every declaration satisfies its own
+    ///   invariants (return slot, buffer shape compatibility, and so
+    ///   on);
+    /// - every native symbol referenced by a declaration is registered
+    ///   in the symbol table.
     ///
     /// Returns the first failed invariant otherwise.
     pub fn validate(&self) -> Result<(), BindingError> {
         validate_contract_version(self.version)?;
         self.symbols.validate()?;
-        validate_unique_decl_ids(&self.decls)
+        self.validate_unique_decl_ids()?;
+        self.validate_callables()?;
+        self.validate_symbol_membership()
+    }
+
+    /// Builds a contract from declarations, deriving the symbol table
+    /// from every native symbol referenced by the declarations.
+    ///
+    /// The resulting table is the deduplicated union of every symbol
+    /// the decls reference. Membership validation in
+    /// [`Self::validate`] is therefore guaranteed to pass for the
+    /// returned value; constructing through this entry point is the
+    /// canonical way for the classifier to assemble a `Bindings<S>`
+    /// without keeping a parallel symbol list in sync by hand.
+    pub(crate) fn from_decls(
+        package: PackageInfo,
+        decls: Vec<Decl<S>>,
+    ) -> Result<Self, BindingError> {
+        let symbols = NativeSymbolTable::from_decls(&decls)?;
+        Self::new(package, decls, symbols)
+    }
+
+    fn validate_unique_decl_ids(&self) -> Result<(), BindingError> {
+        self.decls
+            .iter()
+            .map(Decl::id)
+            .try_fold(HashSet::new(), |mut seen, decl_id| {
+                if seen.insert(decl_id) {
+                    Ok(seen)
+                } else {
+                    Err(BindingError::new(BindingErrorKind::DuplicateDeclarationId(
+                        decl_id,
+                    )))
+                }
+            })
+            .map(|_| ())
+    }
+
+    fn validate_callables(&self) -> Result<(), BindingError> {
+        self.decls
+            .iter()
+            .flat_map(Decl::callables)
+            .try_for_each(CallableDecl::validate)
+    }
+
+    fn validate_symbol_membership(&self) -> Result<(), BindingError> {
+        let registered: HashSet<&NativeSymbol> = self.symbols.symbols().iter().collect();
+        self.decls
+            .iter()
+            .flat_map(Decl::native_symbols)
+            .try_for_each(|symbol| {
+                if registered.contains(symbol) {
+                    Ok(())
+                } else {
+                    Err(BindingError::new(BindingErrorKind::UnregisteredSymbol(
+                        symbol.name().as_str().to_owned(),
+                    )))
+                }
+            })
+    }
+}
+
+/// A binding contract paired with its target surface tag.
+///
+/// Used at the storage boundary: in-process the `Bindings<S>` types are
+/// generic, but a `.rlib` artifact (or any byte stream a tool consumes)
+/// needs to identify its surface at run time. The variant tag carries
+/// that identity; downstream tooling pattern-matches once and dispatches
+/// the inner value to a backend typed against the surface.
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
+pub enum SerializedBindings {
+    /// Bindings produced for the [`Native`] surface.
+    Native(Bindings<Native>),
+    /// Bindings produced for the [`Wasm32`] surface.
+    Wasm32(Bindings<Wasm32>),
+}
+
+impl SerializedBindings {
+    /// Wraps a native-surface bindings value.
+    pub fn native(bindings: Bindings<Native>) -> Self {
+        Self::Native(bindings)
+    }
+
+    /// Wraps a wasm32-surface bindings value.
+    pub fn wasm32(bindings: Bindings<Wasm32>) -> Self {
+        Self::Wasm32(bindings)
     }
 }
 
@@ -171,20 +274,4 @@ fn validate_contract_version(version: ContractVersion) -> Result<(), BindingErro
             current: ContractVersion::current(),
         }))
     }
-}
-
-fn validate_unique_decl_ids(decls: &[Decl]) -> Result<(), BindingError> {
-    decls
-        .iter()
-        .map(Decl::id)
-        .try_fold(HashSet::new(), |mut seen, decl_id| {
-            if seen.insert(decl_id) {
-                Ok(seen)
-            } else {
-                Err(BindingError::new(BindingErrorKind::DuplicateDeclarationId(
-                    decl_id,
-                )))
-            }
-        })
-        .map(|_| ())
 }

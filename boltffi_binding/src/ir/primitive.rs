@@ -100,33 +100,3 @@ impl From<IntegerRepr> for Primitive {
         repr.primitive()
     }
 }
-
-/// The integer-sized carrier used by an opaque handle.
-///
-/// Handles are not user integers. They are tokens that name a Rust-owned
-/// resource (a class instance, a callback object, an in-flight async task)
-/// for foreign code to hold and pass back. A separate type keeps
-/// handle-receiving code from accepting an arbitrary integer plan by
-/// mistake.
-///
-/// `U64` is the portable choice on platforms that mix 32-bit and 64-bit
-/// processes; `USize` matches the native pointer width and is convenient
-/// when the handle is really a tagged pointer.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum HandleRepr {
-    /// 64-bit unsigned handle.
-    U64,
-    /// Pointer-width unsigned handle.
-    USize,
-}
-
-impl HandleRepr {
-    /// Returns the matching [`Primitive`].
-    pub const fn primitive(self) -> Primitive {
-        match self {
-            Self::U64 => Primitive::U64,
-            Self::USize => Primitive::USize,
-        }
-    }
-}

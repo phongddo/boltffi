@@ -10,6 +10,7 @@ keywords = ["ffi", "binding", "metadata", "bindings"]
 categories = ["development-tools::ffi"]
 
 [dependencies]
+boltffi_ast.workspace = true
 serde.workspace = true
 
 [lints]
