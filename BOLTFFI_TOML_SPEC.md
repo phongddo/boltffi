@@ -38,7 +38,8 @@ experimental = ["typescript.async_streams"]
 - CLI `--experimental` flag includes experimental targets for that command
 
 Experimental targets:
-- none currently
+- `dart`
+- `python`
 
 Experimental features:
 - `typescript.async_streams`
