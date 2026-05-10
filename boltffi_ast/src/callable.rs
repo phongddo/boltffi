@@ -1,6 +1,9 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DeprecationInfo, DocComment, MethodId, Source, SourceSpan, TypeExpr, UserAttr};
+use crate::{
+    CanonicalName, DefaultValue, DeprecationInfo, DocComment, FunctionId, MethodId, Source,
+    SourceSpan, TypeExpr, UserAttr,
+};
 
 /// The place where a callable appears in the Rust API.
 ///
@@ -36,7 +39,7 @@ pub enum ExecutionKind {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct ParameterDef {
     /// Canonical parameter name.
-    pub name: crate::CanonicalName,
+    pub name: CanonicalName,
     /// Source type expression after known FFI names have been identified.
     pub type_expr: TypeExpr,
     /// How the parameter was accepted by the Rust callable.
@@ -44,7 +47,7 @@ pub struct ParameterDef {
     /// Documentation attached to the parameter when the source provides it.
     pub doc: Option<DocComment>,
     /// Default value written for bindings that expose default arguments.
-    pub default: Option<crate::DefaultValue>,
+    pub default: Option<DefaultValue>,
     /// User attributes preserved from the source parameter.
     pub user_attrs: Vec<UserAttr>,
     /// Visibility and source location for diagnostics.
@@ -58,7 +61,7 @@ impl ParameterDef {
     /// parameter is the scanned source type expression.
     ///
     /// Returns a parameter that was passed by value in Rust source.
-    pub fn value(name: crate::CanonicalName, type_expr: TypeExpr) -> Self {
+    pub fn value(name: CanonicalName, type_expr: TypeExpr) -> Self {
         Self {
             name,
             type_expr,
@@ -105,16 +108,6 @@ pub enum ReturnDef {
     /// String)` is `Value(TypeExpr::Tuple(_))`, and `fn maybe() -> Option<T>`
     /// is `Value(TypeExpr::Option(_))`.
     Value(TypeExpr),
-    /// The callable returns `Result<T, E>`.
-    ///
-    /// The success type may itself be any ordinary type expression, including a
-    /// tuple or option.
-    Result {
-        /// Success type written by the Rust callable.
-        ok: TypeExpr,
-        /// Error type written by the Rust callable.
-        err: TypeExpr,
-    },
 }
 
 impl ReturnDef {
@@ -167,9 +160,9 @@ impl Receiver {
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Serialize, Deserialize)]
 pub struct FunctionDef {
     /// Stable function identity derived from its canonical source path.
-    pub id: crate::FunctionId,
+    pub id: FunctionId,
     /// Canonical function name.
-    pub name: crate::CanonicalName,
+    pub name: CanonicalName,
     /// Source callable form. For free functions this is always `Function`.
     pub form: CallableForm,
     /// Whether the Rust source used `async`.
@@ -225,7 +218,7 @@ pub struct MethodDef {
     /// Stable method identity within the owning declaration.
     pub id: MethodId,
     /// Canonical method name.
-    pub name: crate::CanonicalName,
+    pub name: CanonicalName,
     /// Receiver written on the Rust method.
     pub receiver: Receiver,
     /// Whether the Rust source used `async`.
