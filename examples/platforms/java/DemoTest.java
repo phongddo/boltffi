@@ -39,6 +39,7 @@ public final class DemoTest {
         testAsyncClassMethods();
         testSingleThreadedStateHolder();
         testResultFunctions();
+        testBorrowedClassRef();
         testResultClassMethods();
         testResultEnumErrors();
         testStreams();
@@ -1398,6 +1399,16 @@ public final class DemoTest {
             Demo.resultOfVec(-1);
             assert false : "resultOfVec should throw on negative count";
         } catch (RuntimeException ignored) {}
+
+        System.out.println("  PASS\n");
+    }
+
+    private static void testBorrowedClassRef() {
+        System.out.println("Testing borrowed class ref...");
+
+        try (Counter counter = new Counter(42)) {
+            assert Demo.describeCounter(counter).equals("Counter(value=42)") : "describeCounter";
+        }
 
         System.out.println("  PASS\n");
     }

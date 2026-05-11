@@ -55,6 +55,10 @@ class DemoClassesAndStreamsTest {
             assertMessageContains(assertFailsWith<FfiException> { counter.tryGetPositive() }, "count is not positive")
         }
 
+        Counter(42).use { counter ->
+            assertEquals("Counter(value=42)", describeCounter(counter))
+        }
+
         MathUtils(2u).use { mathUtils ->
             assertDoubleEquals(3.14, mathUtils.round(3.14159), 1e-9)
         }
