@@ -1,14 +1,14 @@
 //! What is in `Bindings<S>`, and how a consumer reads it.
 //!
-//! When `#[data]` and `#[export]` see the user's source, they classify
-//! every exported item against a target [`Surface`]: this record is
-//! bytes that can cross by memcpy, that enum has a payload that needs
-//! encoding, this async function returns a poll handle. By the time a
-//! [`Bindings`] reaches a consumer, the decisions are over. Every
-//! declaration carries its boundary plan attached, and the choices that
-//! diverge between targets (callback dispatch, buffer layout, handle
-//! carrier, async protocol) are picked once for the surface the
-//! contract is parameterized by.
+//! When `#[data]` and `#[export]` see the user's source, the bind
+//! pass walks every exported item against a target [`Surface`]: this
+//! record is bytes that can cross by memcpy, that enum has a payload
+//! that needs encoding, this async function returns a poll handle. By
+//! the time a [`Bindings`] reaches a consumer, the decisions are over.
+//! Every declaration carries its boundary plan attached, and the
+//! choices that diverge between targets (callback dispatch, buffer
+//! layout, handle carrier, async protocol) are picked once for the
+//! surface the contract is parameterized by.
 //!
 //! Generating Swift, Kotlin, Python, or any other target language is
 //! not in this module. The work here ends at the resolved facts.
@@ -28,7 +28,7 @@
 //! ```
 //!
 //! `Point` becomes a [`RecordDecl::Direct`]. Both fields are primitives
-//! with predictable layout, so the classifier picks the direct path: 16
+//! with predictable layout, so the bind pass picks the direct path: 16
 //! bytes total, 8-byte alignment, `x` at offset 0, `y` at offset 8.
 //! Foreign code reads the struct by offset. With a `String` field, the
 //! same source would have produced a [`RecordDecl::Encoded`] instead,

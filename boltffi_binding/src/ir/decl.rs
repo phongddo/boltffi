@@ -417,6 +417,12 @@ pub enum FieldKey {
     Position(u32),
 }
 
+impl FieldKey {
+    pub(crate) fn position(index: usize) -> Option<Self> {
+        u32::try_from(index).ok().map(Self::Position)
+    }
+}
+
 /// One field of a direct record.
 ///
 /// Field offsets live on the parent record's [`RecordLayout`] rather
@@ -713,6 +719,10 @@ pub struct VariantTag(u32);
 impl VariantTag {
     pub(crate) fn new(tag: u32) -> Self {
         Self(tag)
+    }
+
+    pub(crate) fn from_index(index: usize) -> Option<Self> {
+        u32::try_from(index).ok().map(Self)
     }
 
     /// Returns the tag value.

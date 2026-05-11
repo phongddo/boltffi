@@ -13,7 +13,7 @@
 //!         ▼
 //!   boltffi_ast::SourceContract           ← what the user wrote
 //!         │
-//!         │  classify (this crate)
+//!         │  lower (this crate)
 //!         ▼
 //!   Bindings                              ← what crosses, in what shape
 //!         │
@@ -30,31 +30,29 @@
 //! that source means at the FFI boundary: a record is direct or encoded,
 //! an enum is C-style or data-bearing, a callable gets concrete lower
 //! and lift plans, a native symbol is picked and validated. The
-//! classifier runs once; nothing downstream re-classifies the same source.
+//! lowering pass runs once; nothing downstream re-runs it on the same
+//! source.
 //!
-//! # Three lanes
+//! # Public surfaces
 //!
-//! `classify` translates a `SourceContract` into a [`Bindings`]. It is
-//! the single classifier in the system. `boltffi_macros` invokes it while
-//! expanding the user's crate. `boltffi_bindgen` does not invoke it;
-//! bindgen reconstructs the same [`Bindings`] from the metadata embedded
-//! in the user's compiled artifact.
+//! Two public entry points sit alongside [`ir`]:
 //!
-//! `expand` is the lane the macros use to emit Rust glue. Each
-//! `#[data]` or `#[export]` item in the user's source needs an
-//! `extern "C"` wrapper, a `Passable` or `WirePassable` impl, and an
-//! entry in the serialized metadata. This lane pairs each AST item with
-//! its classified counterpart so the macros emit that glue without
-//! classifying anything themselves.
+//! - [`lower`] is the macro-facing API. Given a
+//!   [`boltffi_ast::SourceContract`] and a target [`SurfaceLower`]
+//!   (today [`Native`] or [`Wasm32`]) it produces a [`Bindings<S>`].
+//!   `boltffi_macros` invokes [`lower`] while expanding the user's
+//!   crate.
+//! - [`ir`] is the data-only surface every downstream consumer
+//!   imports. `boltffi_bindgen` reconstructs a [`Bindings<S>`] from
+//!   the serialized metadata embedded in the user's compiled
+//!   artifact and reads it through the [`ir`] types.
 //!
-//! [`ir`] is the public surface. Every type a downstream consumer
-//! touches lives there: [`Bindings`], the [`Decl`] enum and its
-//! per-family variants, codec and op plans, native symbol tables,
-//! layouts, metadata, and errors. `boltffi_bindgen` and the backend
-//! crates import [`ir`] and nothing else.
-//!
-//! `classify` and `expand` are private. [`ir`] is the entry point for
-//! anything outside this crate.
+//! `expand` is the macro-internal lane that emits Rust glue and is
+//! not part of the public surface. Each `#[data]` or `#[export]` item
+//! needs an `extern "C"` wrapper, a `Passable` or `WirePassable`
+//! impl, and an entry in the serialized metadata. The lane pairs
+//! each AST item with its binding-contract counterpart so the macros
+//! emit that glue without rebinding anything themselves.
 //!
 //! # What this crate does not do
 //!
@@ -66,8 +64,11 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-mod classify;
 mod expand;
 pub mod ir;
+mod lower;
 
 pub use ir::*;
+pub use lower::{
+    DeclarationFamily, LowerError, LowerErrorKind, SurfaceLower, UnsupportedType, lower,
+};
