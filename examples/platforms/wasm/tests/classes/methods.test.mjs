@@ -16,6 +16,10 @@ export async function run() {
   assertThrowsWithMessage(() => counter.tryGetPositive(), "count is not positive");
   counter.dispose();
 
+  const borrowedCounter = demo.Counter.new(42);
+  assert.equal(demo.describeCounter(borrowedCounter), "Counter(value=42)");
+  borrowedCounter.dispose();
+
   const service = demo.MixedRecordService.new("records");
   const record = sampleMixedRecord();
   assert.equal(service.getLabel(), "records");
